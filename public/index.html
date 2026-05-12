@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Omega Quiz — Player</title>
+<style>
+:root{
+  --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
+  --gold:#f4c430; --gold-bright:#ffd700; --gold-dim:#8a6d10;
+  --red:#c41e3a; --green:#1ea14a; --white:#f5f3e8;
+}
+/* A11Y: honour user motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* A11Y: real outline for keyboard users (survives Windows High Contrast Mode). */
+:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  font-family:'Georgia','Times New Roman',serif;
+  background:radial-gradient(ellipse at center top, var(--navy-light) 0%, var(--navy-mid) 50%, var(--navy-deep) 100%);
+  color:var(--white);min-height:100vh;
+  display:flex;flex-direction:column;
+}
+
+.container{padding:20px;flex:1;display:flex;flex-direction:column;max-width:480px;margin:0 auto;width:100%}
+
+.title{
+  /* h1 reset + brand styling. */
+  text-align:center;font-size:18px;color:var(--gold);letter-spacing:.2em;text-transform:uppercase;
+  text-shadow:0 0 12px rgba(244,196,48,.5);margin:0 0 4px;font-weight:bold;line-height:1.2;
+}
+.subtitle{text-align:center;font-size:10px;letter-spacing:.3em;color:#9aa3d4;text-transform:uppercase;margin-bottom:24px}
+
+/* JOIN FORM */
+.join-card{
+  background:linear-gradient(180deg, rgba(13,26,110,.6), rgba(5,11,58,.6));
+  border:2px solid var(--gold);border-radius:16px;padding:24px;
+  box-shadow:0 0 20px rgba(244,196,48,.3);
+  margin-top:20px;
+}
+.join-card h2{color:var(--gold);font-size:16px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:18px;text-align:center}
+label{display:block;color:#bdc4eb;font-size:12px;letter-spacing:.15em;text-transform:uppercase;margin:14px 0 6px}
+input{
+  width:100%;padding:12px 14px;background:rgba(0,0,0,.4);
+  border:1px solid var(--gold-dim);border-radius:10px;color:var(--white);
+  font-family:'Georgia',serif;font-size:16px;
+}
+input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
+.code-input{font-family:'Courier New',monospace;font-size:32px;text-align:center;letter-spacing:.4em;font-weight:bold;color:var(--gold)}
+
+.btn{
+  width:100%;padding:14px;margin-top:18px;
+  background:linear-gradient(180deg,var(--gold-bright),var(--gold-dim));
+  color:var(--navy-deep);font-weight:bold;font-size:16px;letter-spacing:.2em;
+  text-transform:uppercase;border:none;border-radius:10px;cursor:pointer;
+  font-family:'Georgia',serif;box-shadow:0 0 20px rgba(244,196,48,.5);
+}
+/* A11Y: disabled state with readable contrast — dark navy text on solid dim
+   gold (~12:1) instead of light gold on dim gold (2.99:1). */
+.btn:disabled{cursor:not-allowed;background:var(--gold-dim);color:var(--navy-deep);box-shadow:none}
+.btn.secondary{background:linear-gradient(180deg,#16258a,#050b3a);color:var(--gold);border:1px solid var(--gold)}
+
+.error{color:#fca5a5;background:rgba(196,30,58,.2);border:1px solid var(--red);padding:10px;border-radius:8px;font-size:14px;margin-top:14px;text-align:center;display:none}
+.error.active{display:block}
+
+/* APP 5: privacy notice rendered above the Join button. Pre-wrap so authors
+   can use line breaks in the admin-edited text. */
+.consent-text{margin-top:16px;color:#9aa3d4;font-size:12px;line-height:1.5;white-space:pre-wrap}
+.consent-text .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;color:var(--gold-bright);font-size:.92em}
+
+/* WAITING/LOBBY */
+.lobby-state{
+  margin-top:30px;text-align:center;padding:30px 20px;
+  background:rgba(13,26,110,.4);border:1px solid var(--gold-dim);border-radius:16px;
+}
+.lobby-state .icon{font-size:48px;margin-bottom:14px}
+.lobby-state h3{color:var(--gold);font-size:16px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
+.lobby-state p{color:#bdc4eb;font-size:14px;line-height:1.5}
+.lobby-state .you{color:var(--gold);font-size:18px;margin-top:14px;font-weight:bold}
+
+/* STATUS BANNER */
+.status-banner{
+  text-align:center;padding:10px;border-radius:10px;margin-bottom:14px;
+  font-size:13px;letter-spacing:.1em;text-transform:uppercase;
+  color:#fff;  /* solid contrast — works regardless of bg theme overrides */
+}
+.status-banner.alive{background:#15803d;border:1px solid #86efac}  /* white on green700 → 5.5:1 */
+.status-banner.dead{background:#991b1b;border:1px solid #fca5a5}   /* white on red800   → 9.3:1 */
+.status-banner .score{font-weight:bold}
+
+/* QUESTION */
+.question-counter{text-align:center;color:var(--gold);font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
+.question-card{
+  background:linear-gradient(180deg, rgba(13,26,110,.7), rgba(5,11,58,.7));
+  border:2px solid var(--gold);border-radius:16px;padding:20px;
+  font-size:15px;line-height:1.5;
+  box-shadow:0 0 15px rgba(244,196,48,.3);
+}
+.question-card .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:2px 6px;border-radius:4px;color:var(--gold-bright);font-size:.92em}
+
+.answers-stack{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+.answer-btn{
+  width:100%;padding:14px 16px;
+  background:linear-gradient(180deg,#16258a,#0a116e);
+  border:2px solid var(--gold);border-radius:12px;
+  color:var(--white);text-align:left;font-family:'Georgia',serif;font-size:15px;
+  cursor:pointer;display:flex;align-items:center;gap:12px;
+  transition:all .15s;line-height:1.4;
+}
+.answer-btn .letter{color:var(--gold);font-weight:bold;min-width:22px}
+.answer-btn:active:not(:disabled){transform:scale(.98)}
+.answer-btn.selected{background:linear-gradient(180deg,#d97706,#b45309);border-color:var(--gold-bright);box-shadow:0 0 20px rgba(255,165,0,.6)}
+.answer-btn.correct{background:linear-gradient(180deg,#16a34a,#0f7a36);border-color:#4ade80}
+.answer-btn.wrong{background:linear-gradient(180deg,#dc2626,#991b1b);border-color:#f87171;opacity:.7}
+.answer-btn.eliminated{opacity:.3;pointer-events:none}
+.answer-btn:disabled{cursor:default}
+/* Pending state — option selected in confirm mode, not yet locked. */
+.answer-btn.pending{
+  background:linear-gradient(180deg,#d97706,#b45309);
+  border-style:dashed;border-color:var(--gold-bright);
+  animation:pendingPulse 1.4s ease-in-out infinite;
+}
+@keyframes pendingPulse{
+  0%,100%{box-shadow:0 0 18px rgba(244,196,48,.55)}
+  50%{box-shadow:0 0 32px rgba(255,215,0,.95)}
+}
+.lock-in-btn{
+  width:100%;padding:14px;margin-top:14px;
+  background:linear-gradient(180deg,#22c55e,#0f7a36);
+  color:#fff;font-weight:bold;font-size:15px;letter-spacing:.2em;
+  text-transform:uppercase;border:2px solid #4ade80;border-radius:10px;
+  cursor:pointer;font-family:'Georgia',serif;
+  box-shadow:0 0 20px rgba(34,197,94,.45);
+  transition:all .15s;
+}
+.lock-in-btn:active{transform:scale(.98)}
+.lock-in-btn:disabled{
+  background:linear-gradient(180deg,#16258a,#0a116e);
+  color:var(--gold-dim);border-color:var(--gold-dim);
+  box-shadow:none;cursor:not-allowed;opacity:.7;
+}
+
+/* AUDIENCE TALLY BARS - shown at reveal */
+.audience-row{display:flex;align-items:center;gap:6px;margin-top:5px;font-size:10px;width:100%}
+.audience-row .grp-label{min-width:38px;letter-spacing:.05em;text-transform:uppercase;font-size:9px}
+.audience-row .grp-label.alive{color:#86efac}
+.audience-row .grp-label.elim{color:#fca5a5}
+.audience-row .bar-bg{flex:1;height:7px;background:rgba(0,0,0,.4);border-radius:4px;overflow:hidden;border:1px solid rgba(244,196,48,.15)}
+.audience-row .bar{height:100%;border-radius:4px;transition:width .9s ease-out}
+.audience-row .bar.alive{background:linear-gradient(90deg,#22c55e,#16a34a)}
+.audience-row .bar.elim{background:linear-gradient(90deg,#ef4444,#991b1b)}
+.audience-row .pct{min-width:30px;text-align:right;font-weight:bold;color:var(--gold);font-size:11px}
+.audience-row .pct.zero{opacity:.4}
+.answer-btn.correct .audience-row .grp-label,
+.answer-btn.correct .audience-row .pct{color:#fff}
+.answer-btn .answer-body{display:flex;flex-direction:column;gap:0;width:100%}
+.answer-btn .answer-body .answer-top{display:flex;align-items:center;gap:12px}
+
+.waiting-msg{text-align:center;color:#bdc4eb;padding:14px;font-size:14px;font-style:italic;margin-top:10px}
+
+/* LIFELINE VOTE */
+.lifeline-vote{
+  background:rgba(244,196,48,.1);border:2px dashed var(--gold);border-radius:14px;
+  padding:18px;margin:14px 0;
+}
+.lifeline-vote h3{color:var(--gold);text-align:center;font-size:14px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:14px}
+.vote-options{display:flex;flex-direction:column;gap:10px}
+.vote-btn{
+  padding:12px;background:linear-gradient(180deg,#16258a,#0a116e);
+  border:1px solid var(--gold);border-radius:10px;color:var(--white);
+  font-family:'Georgia',serif;font-size:14px;cursor:pointer;text-align:left;
+}
+.vote-btn.voted{background:linear-gradient(180deg,#d97706,#b45309);border-color:var(--gold-bright)}
+.vote-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* RESULTS REVIEW */
+.results-header{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:18px;gap:10px;
+}
+.results-title{color:var(--gold);font-size:18px;letter-spacing:.15em;text-transform:uppercase;text-shadow:0 0 12px rgba(244,196,48,.4)}
+.results-meta{font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-top:2px}
+.result-row{
+  background:linear-gradient(180deg, rgba(13,26,110,.55), rgba(5,11,58,.55));
+  border:1px solid var(--gold-dim);border-radius:12px;
+  padding:14px 16px;margin-bottom:10px;
+}
+.result-row.correct{border-color:#4ade80;background:linear-gradient(180deg, rgba(34,197,94,.18), rgba(13,26,110,.55))}
+.result-row.wrong{border-color:#f87171;background:linear-gradient(180deg, rgba(196,30,58,.18), rgba(13,26,110,.55))}
+.result-row.timeout{border-color:#fbbf24;background:linear-gradient(180deg, rgba(245,158,11,.15), rgba(13,26,110,.55))}
+.result-row .rlabel{color:var(--gold);font-size:11px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center}
+.result-row .rlabel .badge{font-size:11px;padding:2px 8px;border-radius:10px;letter-spacing:.1em}
+.result-row .rlabel .badge.ok{background:rgba(34,197,94,.25);color:#86efac}
+.result-row .rlabel .badge.no{background:rgba(196,30,58,.25);color:#fca5a5}
+.result-row .rlabel .badge.skip{background:rgba(245,158,11,.25);color:#fbbf24}
+.result-row .rq{color:#f5f3e8;font-size:14px;line-height:1.45;margin-bottom:10px}
+.result-row .rq .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;color:var(--gold-bright);font-size:.92em}
+.result-row .ropt{padding:6px 10px;border-radius:8px;margin:3px 0;font-size:13px;background:rgba(0,0,0,.2)}
+.result-row .ropt.is-correct{background:rgba(34,197,94,.2);color:#86efac;border-left:3px solid #4ade80}
+.result-row .ropt.is-yours{background:rgba(244,196,48,.18);border-left:3px solid var(--gold)}
+.result-row .ropt.is-yours.is-wrong{background:rgba(196,30,58,.2);color:#fca5a5;border-left:3px solid var(--red)}
+.result-row .ropt.is-yours.is-correct{background:rgba(34,197,94,.3);color:#86efac;border-left:3px solid #4ade80}
+.result-row .ropt .letter{color:var(--gold);font-weight:bold;margin-right:8px}
+.result-row .rlesson{color:#bdc4eb;font-style:italic;font-size:12px;line-height:1.5;margin-top:10px;padding-top:10px;border-top:1px solid rgba(244,196,48,.15)}
+
+/* END SCREEN */
+.end-card{
+  margin-top:30px;background:rgba(13,26,110,.4);border:2px solid var(--gold);border-radius:16px;padding:30px 20px;text-align:center;
+}
+.end-card .emoji{font-size:64px;margin-bottom:14px}
+.end-card h2{color:var(--gold);font-size:22px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px}
+.end-card p{color:#bdc4eb;font-size:14px;line-height:1.6}
+.end-card .score{font-size:36px;color:var(--gold);font-weight:bold;margin:14px 0}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1 class="title" id="brandTitle">Omega Quiz</h1>
+  <div class="subtitle" id="brandSubtitle">Phishing Edition</div>
+
+  <!-- JOIN VIEW -->
+  <div id="joinView">
+    <div class="join-card">
+      <h2>Join the Game</h2>
+      <label for="joinCodeInput">Join Code</label>
+      <input id="joinCodeInput" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000">
+      <label for="nameInput">Your Name</label>
+      <input id="nameInput" type="text" placeholder="e.g. Alex Chen" autocomplete="name">
+      <label for="emailInput">Work Email</label>
+      <input id="emailInput" type="email" placeholder="alex@company.com" autocomplete="email">
+      <p class="consent-text" id="consentText" style="display:none"></p>
+      <button class="btn" id="joinBtn">Join</button>
+      <div class="error" id="errorMsg" role="alert"></div>
+    </div>
+  </div>
+
+  <!-- LOBBY -->
+  <div id="lobbyView" style="display:none">
+    <div class="lobby-state">
+      <div class="icon">⏳</div>
+      <h3>You're In</h3>
+      <p>Waiting for the host to start the game…</p>
+      <div class="you" id="lobbyName"></div>
+    </div>
+  </div>
+
+  <!-- GAME -->
+  <div id="gameView" style="display:none">
+    <div class="status-banner" id="statusBanner" aria-live="polite" aria-atomic="true"></div>
+    <div class="question-counter" id="qCounter"></div>
+    <div class="question-card">
+      <img id="qImage" alt="" style="display:none;width:100%;max-height:200px;object-fit:contain;border-radius:8px;background:rgba(0,0,0,.2);margin-bottom:10px">
+      <div id="qText"></div>
+      <div class="answers-stack" id="answersStack"></div>
+      <button class="lock-in-btn" id="lockInBtn" style="display:none" disabled>Lock In Answer</button>
+    </div>
+    <div id="lifelineVote" class="lifeline-vote" style="display:none">
+      <h3>🎯 Room Lifeline Vote</h3>
+      <div class="vote-options" id="voteOptions"></div>
+    </div>
+    <div class="waiting-msg" id="waitingMsg" aria-live="polite" style="display:none"></div>
+  </div>
+
+  <!-- END -->
+  <div id="endView" style="display:none">
+    <div class="end-card">
+      <div class="emoji" id="endEmoji">🎉</div>
+      <h2 id="endTitle"></h2>
+      <p id="endMessage"></p>
+      <div class="score" id="endScore"></div>
+      <div id="endTotals" class="muted" style="margin-top:8px;font-size:13px;color:#bdc4eb"></div>
+      <button class="btn secondary" id="viewResultsBtn" style="margin-top:14px">View My Results</button>
+      <p style="margin-top:14px;font-size:13px;opacity:.8">Check the big screen for the full results and lesson recap.</p>
+    </div>
+  </div>
+
+  <!-- MY RESULTS REVIEW (overlay over the end screen) -->
+  <div id="resultsView" style="display:none">
+    <div class="results-header">
+      <button class="btn secondary" id="backToEndBtn" style="width:auto;padding:8px 16px;margin:0">← Back</button>
+      <div style="text-align:right">
+        <div class="results-title">My Results</div>
+        <div class="results-meta muted" id="resultsMeta"></div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-bottom:14px">
+      <button class="btn" id="emailResultsBtn" style="width:auto;padding:10px 20px;display:inline-block">📧 Email me these results</button>
+    </div>
+    <div id="resultsList"></div>
+  </div>
+</div>
+
+<script nonce="__CSP_NONCE__">
+/* =====================
+   STATE
+   ===================== */
+let ws = null;
+// Pinned by `server:shutdown { final:true }` — stops the auto-reconnect loop
+// and the closed banner stays visible until the operator reloads.
+let finalShutdown = false;
+let playerId = localStorage.getItem('omegaquiz_pid') || null;
+let savedName = localStorage.getItem('omegaquiz_name') || '';
+let savedEmail = localStorage.getItem('omegaquiz_email') || '';
+let savedJoinCode = localStorage.getItem('omegaquiz_join_code') || '';
+let myState = null;
+let pendingAnswer = null;         // confirm-mode local selection (not sent until Lock In)
+let lastQuestionIndex = -1;       // resets pendingAnswer between questions
+let answerLockMode = 'quick';     // 'quick' = tap-to-commit, 'confirm' = tap-then-lock
+let eliminatedCanAnswer = false;  // toggle: let eliminated players keep tapping (no scoring)
+let reviewData = null;            // populated when server pushes review at game end
+let brandingCompanyName = '';     // captured from /branding.json, used in email subject
+let brandingQuizTitle = 'Omega Quiz';
+
+// Pre-fill from URL code or storage
+const urlCode = new URLSearchParams(location.search).get('code');
+const initialCode = urlCode || savedJoinCode;
+if (initialCode) document.getElementById('joinCodeInput').value = initialCode;
+document.getElementById('nameInput').value = savedName;
+document.getElementById('emailInput').value = savedEmail;
+
+// Branding: fetch /branding.json on load (and on `branding:updated` push) and apply.
+const THEME_KEY_TO_VAR = {
+  navyDeep:'navy-deep', navyMid:'navy-mid', navyLight:'navy-light',
+  gold:'gold', goldBright:'gold-bright', goldDim:'gold-dim',
+  red:'red', green:'green', white:'white'
+};
+function applyTheme(theme){
+  if (!theme || typeof theme !== 'object') return;
+  for (const [k, v] of Object.entries(theme)) {
+    const css = THEME_KEY_TO_VAR[k];
+    if (css && /^#[0-9a-f]{6}$/i.test(v)) {
+      document.documentElement.style.setProperty('--' + css, v);
+    }
+  }
+}
+async function applyBranding(){
+  try {
+    const r = await fetch('/branding.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const b = await r.json();
+    const titleEl = document.getElementById('brandTitle');
+    const subEl   = document.getElementById('brandSubtitle');
+    // Title cascade: companyName overrides quizTitle. quizTitle defaults to
+    // "Omega Quiz" but is replaced when a sample pack is loaded.
+    brandingQuizTitle = b.quizTitle || 'Omega Quiz';
+    brandingCompanyName = b.companyName || '';
+    if (brandingCompanyName) {
+      titleEl.textContent = brandingCompanyName;
+      subEl.textContent = b.tagline || brandingQuizTitle;
+    } else {
+      titleEl.textContent = brandingQuizTitle;
+      subEl.textContent = b.tagline || '';
+    }
+    // Dynamic document.title is set by updatePageTitle() on every render.
+    if (myState) updatePageTitle(myState); else document.title = (brandingCompanyName ? brandingCompanyName + ' — ' : '') + brandingQuizTitle;
+    const emailInput = document.getElementById('emailInput');
+    if (b.companyDomain) {
+      emailInput.placeholder = 'alex@' + b.companyDomain;
+    }
+    // Privacy notice (APP 5). Server sanitises through the same allowlist as
+    // question content, so the only HTML that can land here is <em>, <br>,
+    // and <span class="mono"> — safe to drop in with innerHTML.
+    const consentEl = document.getElementById('consentText');
+    if (consentEl) {
+      const text = typeof b.consentText === 'string' ? b.consentText : '';
+      if (text) {
+        consentEl.innerHTML = text;
+        consentEl.style.display = 'block';
+      } else {
+        consentEl.innerHTML = '';
+        consentEl.style.display = 'none';
+      }
+    }
+    applyTheme(b.theme);
+    answerLockMode = b.answerLockMode === 'confirm' ? 'confirm' : 'quick';
+    eliminatedCanAnswer = !!b.eliminatedCanAnswer;
+    // Session-closed handling: the admin has flipped the storefront to
+    // "closed". Show a friendly end-screen instead of the join form unless
+    // we already have a live game state (existing players keep their view).
+    sessionClosed = !!b.sessionClosed;
+    closedCtaLabel = b.closedSessionCtaLabel || '';
+    closedCtaUrl   = b.closedSessionCtaUrl || '';
+    applySessionClosedView();
+    // If branding changed mid-question, re-render so the lock button shows/hides.
+    if (myState) render();
+  } catch (e) { /* offline / fetch error — leave defaults */ }
+}
+
+// Render (or hide) the "session ended" panel. When the admin closes the
+// session, players who already joined still see their results — the live
+// state push wins over this view. Visitors with no playerId and no live
+// state see the friendly farewell + optional CTA.
+let sessionClosed = false;
+let closedCtaLabel = '';
+let closedCtaUrl = '';
+function applySessionClosedView() {
+  let panel = document.getElementById('sessionClosedPanel');
+  if (!sessionClosed) {
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+  // Existing player with live state? Let them keep their results view.
+  const hasLiveResults = myState && (myState.phase === 'end' || (myState.you && myState.you.history && myState.you.history.length));
+  if (hasLiveResults) {
+    if (panel) panel.style.display = 'none';
+    return;
+  }
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'sessionClosedPanel';
+    panel.setAttribute('role', 'status');
+    panel.style.cssText = 'position:fixed;inset:0;z-index:90;background:radial-gradient(ellipse at center, var(--navy-light), var(--navy-deep) 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;text-align:center;gap:18px';
+    document.body.appendChild(panel);
+  }
+  panel.style.display = 'flex';
+  // Build content. The CTA URL is server-validated to start with https://,
+  // http://, or mailto:, so it's safe to drop into an href. We still set
+  // rel="noopener noreferrer" so the new tab can't reach back.
+  let html = '<div style="font-size:48px">🎓</div>' +
+    '<h1 style="font-size:clamp(22px,5vw,32px);color:var(--gold);margin:0;letter-spacing:.05em">Session ended</h1>' +
+    '<p style="color:#bdc4eb;max-width:520px;line-height:1.5;margin:0">Thanks for playing. The facilitator has closed this session. If you played and want to review your results, ask your facilitator for an export.</p>';
+  if (closedCtaUrl && closedCtaLabel) {
+    const safeLabel = closedCtaLabel.replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+    html += '<a href="' + closedCtaUrl.replace(/"/g, '&quot;') + '" rel="noopener noreferrer" target="_blank" ' +
+            'style="display:inline-block;background:linear-gradient(180deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);font-weight:bold;letter-spacing:.15em;text-transform:uppercase;padding:12px 28px;border-radius:24px;text-decoration:none;margin-top:8px">' +
+            safeLabel + '</a>';
+  }
+  panel.innerHTML = html;
+}
+applyBranding();
+
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}`);
+  ws.onopen = () => {
+    // Try reconnect first if we have a playerId
+    if (playerId && savedName && savedEmail){
+      const code = document.getElementById('joinCodeInput').value || urlCode || savedJoinCode || '';
+      ws.send(JSON.stringify({
+        type: 'player:join',
+        name: savedName, email: savedEmail,
+        joinCode: code, reconnectId: playerId
+      }));
+    }
+  };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'player:joined'){
+      playerId = msg.playerId;
+      localStorage.setItem('omegaquiz_pid', playerId);
+      const code = document.getElementById('joinCodeInput').value.trim();
+      if (code) {
+        savedJoinCode = code;
+        localStorage.setItem('omegaquiz_join_code', code);
+      }
+    } else if (msg.type === 'player:state'){
+      myState = msg.state;
+      clearShutdownBanner();
+      applySessionClosedView();
+      render();
+    } else if (msg.type === 'error'){
+      showError(msg.error);
+    } else if (msg.type === 'kicked'){
+      localStorage.removeItem('omegaquiz_pid');
+      alert('You were removed from the game' + (msg.reason ? ': ' + msg.reason : '.'));
+      location.reload();
+    } else if (msg.type === 'branding:updated'){
+      applyBranding();
+    } else if (msg.type === 'server:shutdown'){
+      // Final shutdown (admin pressed Shutdown) = stop the reconnect loop and
+      // pin a "session ended" banner. Otherwise (rolling restart / PaaS
+      // SIGTERM), keep retrying — the process is coming back.
+      if (msg.final) {
+        finalShutdown = true;
+        showShutdownBanner(msg.message || 'Session ended.');
+      } else {
+        showShutdownBanner(msg.message || 'Server is restarting — reconnecting…');
+      }
+    }
+  };
+function showShutdownBanner(text){
+  let b = document.getElementById('shutdownBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'shutdownBanner';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:rgba(196,30,58,.95);color:#fff;padding:10px 16px;border-radius:10px;z-index:120;font-size:13px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.45)';
+    document.body.appendChild(b);
+  }
+  b.textContent = text;
+}
+function clearShutdownBanner(){ const b = document.getElementById('shutdownBanner'); if (b) b.remove(); }
+  ws.onclose = () => {
+    // Skip reconnect after a final admin shutdown — the operator explicitly
+    // ended the session, no point retrying.
+    if (finalShutdown) return;
+    setTimeout(connect, 1500);
+  };
+}
+connect();
+
+/* =====================
+   JOIN
+   ===================== */
+document.getElementById('joinBtn').onclick = () => {
+  const code = document.getElementById('joinCodeInput').value.trim();
+  const name = document.getElementById('nameInput').value.trim();
+  const email = document.getElementById('emailInput').value.trim();
+  if (!code || !name || !email){
+    showError('All fields required.');
+    return;
+  }
+  if (!email.includes('@')){
+    showError('Please enter a valid email.');
+    return;
+  }
+  localStorage.setItem('omegaquiz_name', name);
+  localStorage.setItem('omegaquiz_email', email);
+  savedJoinCode = code;
+  localStorage.setItem('omegaquiz_join_code', code);
+  ws.send(JSON.stringify({ type: 'player:join', name, email, joinCode: code }));
+};
+
+function showError(msg){
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.classList.add('active');
+  setTimeout(() => el.classList.remove('active'), 4000);
+}
+
+/* =====================
+   RENDER
+   ===================== */
+function setView(name){
+  ['joinView','lobbyView','gameView','endView','resultsView'].forEach(v => {
+    document.getElementById(v).style.display = (v === name) ? 'block' : 'none';
+  });
+}
+
+function truncate(s, n){ s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+// A11Y / UX: surface game state in the tab title so multi-tab operators can
+// see which tab is which and where each game is at.
+function updatePageTitle(s) {
+  const base = brandingCompanyName ? (brandingCompanyName + ' — ') : '';
+  const quiz = brandingQuizTitle || 'Omega Quiz';
+  let prefix = '';
+  if (!s) prefix = '';
+  else if (s.phase === 'lobby')   prefix = 'Waiting — ';
+  else if (s.phase === 'question') prefix = (s.inBonus ? `Tiebreaker ${(s.bonusIndex||0)+1} — ` : `Q${s.questionIndex+1} of ${s.totalQuestions} — `);
+  else if (s.phase === 'reveal')   prefix = (s.inBonus ? 'Reveal — ' : `Reveal Q${s.questionIndex+1} — `);
+  else if (s.phase === 'end')      prefix = (s.you && s.you.alive ? 'Finalist — ' : 'Game over — ');
+  document.title = prefix + base + quiz;
+}
+
+function render(){
+  if (!myState) return;
+  const s = myState;
+  updatePageTitle(s);
+
+  // Lobby
+  if (s.phase === 'lobby'){
+    setView('lobbyView');
+    document.getElementById('lobbyName').textContent = s.you.name;
+    return;
+  }
+
+  // End
+  if (s.phase === 'end'){
+    setView('endView');
+    const won = s.you.alive;
+    document.getElementById('endEmoji').textContent = won ? '🏆' : (s.you.score >= 7 ? '👏' : '🛡️');
+    document.getElementById('endTitle').textContent = won ? "You're a finalist!" : (s.you.score >= 7 ? 'Well played!' : 'Game Over');
+    document.getElementById('endScore').textContent = `${s.you.score} pts`;
+    document.getElementById('endMessage').textContent = won
+      ? "You made it to the end. The host will announce the winner!"
+      : (s.you.score >= 7 ? "Strong run. You'd spot most phishing attempts in the wild." : "Every phishing attempt you spot in real life keeps the company secure.");
+    // Totals breakdown — visible for everyone, especially useful for eliminated
+    // players who kept answering in engagement mode.
+    const totalsEl = document.getElementById('endTotals');
+    const correctTotal = s.you.correctCount || 0;
+    const answeredTotal = s.you.answeredCount || 0;
+    const afterElim = correctTotal - s.you.score;
+    let totalsHtml = `${correctTotal} correct of ${answeredTotal} answered`;
+    if (afterElim > 0) {
+      totalsHtml += ` &nbsp;·&nbsp; <span style="color:#86efac">${afterElim} after you were eliminated</span>`;
+    }
+    totalsEl.innerHTML = totalsHtml;
+    // Stash review payload so the results screen can use it.
+    if (s.review) reviewData = s.review;
+    return;
+  }
+
+  // Game in progress
+  setView('gameView');
+
+  // Status banner
+  const banner = document.getElementById('statusBanner');
+  if (s.you.alive){
+    banner.className = 'status-banner alive';
+    banner.innerHTML = `✓ Still in the running — <span class="score">${s.you.score} pts</span>`;
+  } else {
+    banner.className = 'status-banner dead';
+    const tail = eliminatedCanAnswer
+      ? 'Out of the prize race — but keep tapping along!'
+      : 'Out of the prize race — watch the host screen.';
+    // Show overall correct count when the player has earned more correct
+    // answers than they could score (i.e. they kept answering after eliminated).
+    const extra = (s.you.correctCount != null && s.you.correctCount > s.you.score)
+      ? ` <span class="score" style="opacity:.85;font-weight:normal">(${s.you.correctCount} correct overall)</span>`
+      : '';
+    banner.innerHTML = `${tail} <span class="score">${s.you.score} pts</span>${extra}`;
+  }
+
+  // Question counter
+  const counter = s.inBonus
+    ? `Tiebreaker Question`
+    : `Question ${s.questionIndex + 1} of ${s.totalQuestions}`;
+  document.getElementById('qCounter').textContent = counter;
+
+  if (s.question){
+    // Reset confirm-mode pending state on every new question.
+    if (s.questionIndex !== lastQuestionIndex) {
+      pendingAnswer = null;
+      lastQuestionIndex = s.questionIndex;
+    }
+    // If a 50:50 wiped the option the player had pending, clear it.
+    if (pendingAnswer !== null && s.question.eliminatedOptions.includes(pendingAnswer)) {
+      pendingAnswer = null;
+    }
+    document.getElementById('qText').innerHTML = s.question.q;
+    const qImg = document.getElementById('qImage');
+    if (s.question.image) {
+      qImg.src = s.question.image;
+      qImg.alt = s.question.imageAlt || ('Image for question ' + (s.questionIndex + 1));
+      qImg.style.display = 'block';
+    } else {
+      qImg.removeAttribute('src'); qImg.alt = ''; qImg.style.display = 'none';
+    }
+    const stack = document.getElementById('answersStack');
+    stack.innerHTML = '';
+    const letters = ['A','B','C','D'];
+    const tally = s.question.audienceTally;
+    s.question.options.forEach((opt, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'answer-btn';
+      // A11Y: clean accessible name — letter + plain option text.
+      const plainOpt = String(opt || '').replace(/<[^>]+>/g, '').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+      btn.setAttribute('aria-label', letters[i] + ': ' + plainOpt);
+      let label = `<div class="answer-body" aria-hidden="true"><div class="answer-top"><span class="letter">${letters[i]}</span><span>${opt}</span></div>`;
+      if (s.question.eliminatedOptions.includes(i)) btn.classList.add('eliminated');
+      if (s.you.answered && s.you.myAnswer === i) btn.classList.add('selected');
+      // Confirm mode: highlight the pending (not yet locked) selection.
+      if (!s.you.answered && answerLockMode === 'confirm' && pendingAnswer === i) {
+        btn.classList.add('selected', 'pending');
+      }
+      // Reveal coloring
+      if (s.phase === 'reveal'){
+        if (s.question.revealedCorrect === i) btn.classList.add('correct');
+        else if (s.you.myAnswer === i) btn.classList.add('wrong');
+        btn.disabled = true;
+      } else {
+        // Eliminated players are blocked unless the admin has enabled
+        // engagement mode (eliminatedCanAnswer). When on, they tap for
+        // participation only — server won't score them.
+        if (!s.you.alive && !eliminatedCanAnswer) btn.disabled = true;
+        // In confirm mode, Lock In is final — re-tapping is blocked.
+        // In quick mode, re-tapping is allowed (admin sees a "changed" tally).
+        if (s.you.answered && answerLockMode === 'confirm') btn.disabled = true;
+      }
+      // Audience tally bars (only at reveal)
+      if (s.phase === 'reveal' && tally && (tally.aliveTotal + tally.elimTotal) > 0) {
+        const aPct = tally.aliveTotal ? Math.round((tally.aliveBars[i] / tally.aliveTotal) * 100) : 0;
+        const ePct = tally.elimTotal ? Math.round((tally.elimBars[i] / tally.elimTotal) * 100) : 0;
+        label += `<div class="audience-row"><span class="grp-label alive">Alive</span><div class="bar-bg"><div class="bar alive" style="width:${aPct}%"></div></div><span class="pct ${aPct===0?'zero':''}">${aPct}%</span></div>`;
+        if (tally.elimTotal > 0) {
+          label += `<div class="audience-row"><span class="grp-label elim">Out</span><div class="bar-bg"><div class="bar elim" style="width:${ePct}%"></div></div><span class="pct ${ePct===0?'zero':''}">${ePct}%</span></div>`;
+        }
+      }
+      label += `</div>`;
+      btn.innerHTML = label;
+      btn.onclick = () => {
+        if (!s.you.alive && !eliminatedCanAnswer) return;
+        if (s.you.answered && answerLockMode === 'confirm') return;
+        if (s.question.eliminatedOptions.includes(i)) return;
+        if (answerLockMode === 'confirm') {
+          // Stage the choice locally — committed only when "Lock In" is tapped.
+          pendingAnswer = i;
+          render();
+        } else {
+          ws.send(JSON.stringify({ type: 'player:answer', answerIndex: i }));
+        }
+      };
+      stack.appendChild(btn);
+    });
+
+    // Lock-In button only relevant in confirm mode, before the answer locks,
+    // and only while you can still answer (alive, or eliminated + engagement on).
+    const lockBtn = document.getElementById('lockInBtn');
+    const canAnswerNow = s.you.alive || eliminatedCanAnswer;
+    if (answerLockMode === 'confirm' && s.phase === 'question' && canAnswerNow && !s.you.answered) {
+      lockBtn.style.display = 'block';
+      lockBtn.disabled = pendingAnswer === null;
+      lockBtn.textContent = pendingAnswer === null
+        ? 'Pick an answer first'
+        : `Lock In ${letters[pendingAnswer]}: ${truncate(s.question.options[pendingAnswer], 30)}`;
+      lockBtn.onclick = () => {
+        if (pendingAnswer === null) return;
+        ws.send(JSON.stringify({ type: 'player:answer', answerIndex: pendingAnswer }));
+        pendingAnswer = null;  // server will report answered=true; UI flips on next state push
+      };
+    } else {
+      lockBtn.style.display = 'none';
+    }
+  }
+
+  // Lifeline vote — only show options that haven't been used yet. If they're
+  // all spent, hide the vote panel entirely (server should already refuse a
+  // vote open in that case, but belt-and-braces on the client).
+  const lv = document.getElementById('lifelineVote');
+  const usedMap = s.lifelinesUsed || {};
+  if (s.lifelineActive && s.you.alive){
+    const options = [
+      { key: '5050', label: '½:½ 50:50 — remove two wrong answers' },
+      { key: 'askit', label: '📞 Ask IT — get a hint' },
+      { key: 'skip', label: '⏭️ Skip this question' }
+    ].filter(o => !usedMap[o.key]);
+    if (options.length === 0) {
+      lv.style.display = 'none';
+    } else {
+      lv.style.display = 'block';
+      const container = document.getElementById('voteOptions');
+      container.innerHTML = '';
+      options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = 'vote-btn';
+        if (s.lifelineActive.alreadyVoted) btn.disabled = true;
+        btn.textContent = opt.label;
+        btn.onclick = () => {
+          ws.send(JSON.stringify({ type: 'player:lifeline-vote', lifelineType: opt.key }));
+        };
+        container.appendChild(btn);
+      });
+    }
+  } else {
+    lv.style.display = 'none';
+  }
+
+  // Waiting message
+  const wm = document.getElementById('waitingMsg');
+  if (s.phase === 'question' && s.you.alive && s.you.answered){
+    wm.style.display = 'block';
+    wm.textContent = answerLockMode === 'confirm'
+      ? 'Locked in! Waiting for the host to reveal…'
+      : 'Answer in — tap another to change before the host reveals.';
+  } else if (s.phase === 'reveal'){
+    wm.style.display = 'block';
+    wm.textContent = 'Watch the big screen for the explanation.';
+  } else {
+    wm.style.display = 'none';
+  }
+}
+
+/* =====================
+   MY RESULTS REVIEW
+   ===================== */
+function escapeHtml(s){ if (s == null) return ''; return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function questionForLabel(label, review){
+  // history labels look like "Q1", "Q2"... or "B1", "B2"...
+  if (!label || !review) return null;
+  const m = label.match(/^([QB])(\d+)$/);
+  if (!m) return null;
+  const idx = parseInt(m[2], 10) - 1;
+  const bank = m[1] === 'B' ? review.bonus : review.main;
+  return bank && bank[idx] ? bank[idx] : null;
+}
+
+function renderResults(){
+  if (!myState || !myState.you) return;
+  const history = myState.you.history || [];
+  const review = reviewData || myState.review;
+  const list = document.getElementById('resultsList');
+  const meta = document.getElementById('resultsMeta');
+  const correctCount = myState.you.correctCount || 0;
+  const answeredCount = myState.you.answeredCount || 0;
+  meta.textContent = `${correctCount} correct  ·  ${answeredCount} answered`;
+  list.innerHTML = '';
+
+  if (history.length === 0) {
+    list.innerHTML = '<div class="result-row"><div class="rq">No questions played.</div></div>';
+    return;
+  }
+
+  const letters = ['A','B','C','D'];
+  history.forEach((h, i) => {
+    const q = questionForLabel(h.label, review);
+    const row = document.createElement('div');
+    let cls = 'result-row';
+    let badgeClass, badgeText;
+    if (h.answer == null)        { cls += ' timeout'; badgeClass = 'skip'; badgeText = 'No answer'; }
+    else if (h.correct)          { cls += ' correct'; badgeClass = 'ok';   badgeText = 'Correct'; }
+    else                         { cls += ' wrong';   badgeClass = 'no';   badgeText = 'Wrong'; }
+    row.className = cls;
+    const headerHtml = `<div class="rlabel">
+      <span>${escapeHtml(h.label)}${!h.wasAlive ? '  ·  after elimination' : ''}</span>
+      <span class="badge ${badgeClass}">${badgeText}</span>
+    </div>`;
+    if (!q) {
+      row.innerHTML = headerHtml + '<div class="rq" style="opacity:.7">(question text not available)</div>';
+      list.appendChild(row);
+      return;
+    }
+    const opts = q.options.map((opt, j) => {
+      const optClasses = ['ropt'];
+      if (j === q.correct) optClasses.push('is-correct');
+      if (j === h.answer)  optClasses.push('is-yours', (h.correct ? 'is-correct' : 'is-wrong'));
+      // opt is already server-sanitised — don't re-escape (would show literal &#39;).
+      return `<div class="${optClasses.join(' ')}"><span class="letter">${letters[j]}</span>${opt}${j === h.answer ? '  ← you' : ''}${j === q.correct && j !== h.answer ? '  ✓' : ''}</div>`;
+    }).join('');
+    row.innerHTML = `${headerHtml}
+      <div class="rq">${q.q}</div>
+      ${opts}
+      <div class="rlesson">${q.lesson || ''}</div>`;
+    list.appendChild(row);
+  });
+}
+
+document.getElementById('viewResultsBtn').addEventListener('click', () => {
+  renderResults();
+  setView('resultsView');
+});
+document.getElementById('backToEndBtn').addEventListener('click', () => {
+  setView('endView');
+});
+
+// Plain-text conversion for email body. Server-stored question text uses a
+// small allowlist of HTML (`<em>`, `<br>`, `<span class="mono">`) plus encoded
+// entities — convert each one to a readable equivalent.
+function toPlainText(s) {
+  return String(s == null ? '' : s)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<em>/gi, '*').replace(/<\/em>/gi, '*')
+    .replace(/<span class="mono">/gi, '`').replace(/<\/span>/gi, '`')
+    .replace(/<[^>]+>/g, '')           // strip anything else
+    .replace(/&#39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function buildEmailBody() {
+  if (!myState || !myState.you) return '';
+  const history = myState.you.history || [];
+  const review = reviewData || myState.review;
+  const letters = ['A', 'B', 'C', 'D'];
+  const lines = [];
+
+  const correct = myState.you.correctCount || 0;
+  const answered = myState.you.answeredCount || 0;
+  const score = myState.you.score || 0;
+  const afterElim = correct - score;
+
+  lines.push((brandingCompanyName ? brandingCompanyName + ' — ' : '') + 'My Omega Quiz results');
+  lines.push('Player: ' + (myState.you.name || ''));
+  lines.push('Score:  ' + score + ' pts  ·  ' + correct + ' correct of ' + answered + ' answered' + (afterElim > 0 ? '  (' + afterElim + ' after I was eliminated)' : ''));
+  lines.push('');
+  lines.push('────────────────────────────────────────');
+  lines.push('');
+
+  history.forEach(h => {
+    const q = questionForLabel(h.label, review);
+    const status = h.answer == null ? 'NO ANSWER' : (h.correct ? 'CORRECT ✓' : 'WRONG ✗');
+    const tag = h.wasAlive ? '' : '   [after I was eliminated]';
+    lines.push(h.label + '.  ' + (q ? toPlainText(q.q) : '(question unavailable)') + tag);
+    if (q) {
+      q.options.forEach((opt, i) => {
+        const markers = [];
+        if (i === q.correct) markers.push('✓ correct');
+        if (i === h.answer)  markers.push('← my answer');
+        const tail = markers.length ? '   (' + markers.join(', ') + ')' : '';
+        lines.push('   ' + letters[i] + '. ' + toPlainText(opt) + tail);
+      });
+    }
+    lines.push('   → ' + status);
+    if (q && q.lesson) {
+      lines.push('   Lesson: ' + toPlainText(q.lesson));
+    }
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+document.getElementById('emailResultsBtn').addEventListener('click', () => {
+  const body = buildEmailBody();
+  if (!body) { alert('No results to send yet.'); return; }
+  const subject = (brandingCompanyName ? brandingCompanyName + ' — ' : '') + 'My Omega Quiz results';
+  const to = savedEmail || '';  // pre-fill recipient with the player's own email
+  const url = 'mailto:' + encodeURIComponent(to)
+            + '?subject=' + encodeURIComponent(subject)
+            + '&body=' + encodeURIComponent(body);
+  // Mail clients vary, but most cope with ≤8 KB mailto URLs.
+  if (url.length > 8000) {
+    if (!confirm('These results are long — some mail clients may truncate the body. Open anyway?')) return;
+  }
+  // Navigate via a synthesized anchor so iOS opens Mail correctly.
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+});
+</script>
+</body>
+</html>

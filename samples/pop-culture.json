@@ -1,0 +1,51 @@
+{
+  "title": "Pop Culture Quiz",
+  "category": "pop-culture",
+  "tagline": "Movies, Music & TV",
+  "main": [
+    {
+      "q": "Which film won the first Best Picture Oscar (1929)?",
+      "options": ["Sunrise", "Wings", "Metropolis", "The Jazz Singer"],
+      "correct": 1,
+      "lesson": "Wings, a WWI aviation drama, won the first Best Picture statuette — back when the category was called 'Outstanding Picture'."
+    },
+    {
+      "q": "Which Beatles album was the last one the band recorded together?",
+      "options": ["Let It Be", "Abbey Road", "The White Album", "Sgt. Pepper's Lonely Hearts Club Band"],
+      "correct": 1,
+      "lesson": "Abbey Road (1969) was the final album they recorded as a group. Let It Be was released later but most of it was recorded earlier."
+    },
+    {
+      "q": "What's the name of the fictional kingdom in <em>Black Panther</em>?",
+      "options": ["Zamunda", "Wakanda", "Genosha", "Latveria"],
+      "correct": 1,
+      "lesson": "Wakanda first appeared in Fantastic Four #52 (1966), seven years before being introduced in Black Panther's own comic line."
+    },
+    {
+      "q": "Which TV show ended with the line <em>\"We were on a break!\"</em> as a long-running gag?",
+      "options": ["Seinfeld", "Friends", "How I Met Your Mother", "The Office"],
+      "correct": 1,
+      "lesson": "Ross's 'we were on a break' became one of the most-quoted lines in sitcom history — referenced repeatedly across all 10 seasons of Friends."
+    },
+    {
+      "q": "Which musician's album <em>Thriller</em> is the best-selling album of all time?",
+      "options": ["Madonna", "Elton John", "Michael Jackson", "The Eagles"],
+      "correct": 2,
+      "lesson": "Thriller (1982) has sold around 70 million copies — partly thanks to the 14-minute music video that effectively invented MTV's golden era."
+    }
+  ],
+  "bonus": [
+    {
+      "q": "Which of these video games sold over 300 million copies?",
+      "options": ["Tetris", "Minecraft", "Grand Theft Auto V", "All three"],
+      "correct": 3,
+      "lesson": "All three have crossed 300 million units sold — Tetris through its dozens of versions, Minecraft as the bestselling single game, GTA V across multiple console generations."
+    },
+    {
+      "q": "What's the name of the dragon in <em>The Hobbit</em>?",
+      "options": ["Drogon", "Smaug", "Glaurung", "Ancalagon"],
+      "correct": 1,
+      "lesson": "Smaug, the last great fire-drake of Middle-earth, hoards the dwarves' treasure under the Lonely Mountain."
+    }
+  ]
+}

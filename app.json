@@ -1,0 +1,44 @@
+{
+  "name": "Omega Quiz",
+  "description": "Open source realtime quiz for staff training. Self-hosted Node + WebSocket app.",
+  "keywords": ["quiz", "realtime", "training", "websocket", "express", "node"],
+  "logo": "https://nodejs.org/static/images/logo.svg",
+  "stack": "container",
+  "env": {
+    "NODE_ENV": {
+      "description": "Set to 'production' so the server enforces HTTPS redirect and HSTS.",
+      "value": "production"
+    },
+    "HOST_TOKEN": {
+      "description": "Recovery token for the host role (used by the form login when no magic link is available). Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+      "generator": "secret"
+    },
+    "ADMIN_TOKEN": {
+      "description": "Recovery token for the admin role. Use a different value from HOST_TOKEN.",
+      "generator": "secret"
+    },
+    "COOKIE_SECRET": {
+      "description": "HMAC key for session cookies. Generated automatically per boot if unset, but you want a stable value in production so sessions survive restarts.",
+      "generator": "secret"
+    },
+    "PUBLIC_BASE_URL": {
+      "description": "Public URL the QR code and magic links should use (e.g. https://omegaquiz.example.com). Optional — also settable from the Branding tab in the admin UI.",
+      "required": false
+    },
+    "DATA_DIR": {
+      "description": "Where config.json and questions.json are persisted. Point at a mounted volume so settings and questions survive restarts.",
+      "value": "/app/data",
+      "required": false
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "scripts": {
+    "postdeploy": "echo 'Deployed. Check the live logs for your magic-link sign-in URLs.'"
+  },
+  "image": "heroku/builds:web"
+}

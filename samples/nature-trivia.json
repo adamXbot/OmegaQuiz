@@ -1,0 +1,51 @@
+{
+  "title": "Nature Quiz",
+  "category": "nature",
+  "tagline": "Wildlife and Ecosystems",
+  "main": [
+    {
+      "q": "Which of these is the largest mammal that has ever lived?",
+      "options": ["African elephant", "Blue whale", "Tyrannosaurus rex (not a mammal — trick)", "Saltwater crocodile"],
+      "correct": 1,
+      "lesson": "Blue whales reach up to 30 m and 200 tonnes — larger than any dinosaur fossil ever recovered. They feed almost entirely on krill."
+    },
+    {
+      "q": "Honeybees communicate the direction and distance of nectar sources using…",
+      "options": ["Pheromone trails", "A 'waggle dance'", "High-pitched buzzing", "Wing colour patterns"],
+      "correct": 1,
+      "lesson": "Karl von Frisch decoded the waggle dance in the 1940s — the angle relative to gravity tells direction, the duration tells distance."
+    },
+    {
+      "q": "Which of these biomes has the highest biodiversity per hectare?",
+      "options": ["Boreal forest", "Tropical rainforest", "Coral reef", "Mangrove swamp"],
+      "correct": 2,
+      "lesson": "Coral reefs cover less than 1% of the ocean floor but host roughly 25% of all marine species."
+    },
+    {
+      "q": "What's the deepest part of the world's oceans?",
+      "options": ["Puerto Rico Trench", "Java Trench", "Mariana Trench", "South Sandwich Trench"],
+      "correct": 2,
+      "lesson": "The Mariana Trench's Challenger Deep is around 11,000 m below sea level — deeper than Everest is tall."
+    },
+    {
+      "q": "Trees in a forest can share resources via…",
+      "options": ["Wind dispersal", "Mycorrhizal fungal networks", "Migratory birds", "Direct trunk contact"],
+      "correct": 1,
+      "lesson": "Symbiotic root fungi (the 'wood-wide web') let trees exchange carbon, nitrogen, and even chemical signals across species."
+    }
+  ],
+  "bonus": [
+    {
+      "q": "Which of these animals is technically a fish but breathes air?",
+      "options": ["Dolphin", "Lungfish", "Whale shark", "Sea otter"],
+      "correct": 1,
+      "lesson": "Lungfish have functioning lungs and survive dry seasons by aestivating in mud cocoons."
+    },
+    {
+      "q": "What proportion of Earth's oxygen is produced by ocean plankton?",
+      "options": ["About 10%", "About 30%", "About 50%", "About 80%"],
+      "correct": 2,
+      "lesson": "Phytoplankton — drifting marine algae — generate roughly half the oxygen we breathe, more than all forests combined."
+    }
+  ]
+}

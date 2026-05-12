@@ -1,0 +1,105 @@
+name: Test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Manual trigger — also runs the 50-player stress test, which is slower.
+  workflow_dispatch:
+  # Nightly so CVE drift in pinned dependencies surfaces between PRs.
+  schedule:
+    - cron: '17 4 * * *'   # 04:17 UTC daily
+
+jobs:
+  unit-and-integration:
+    name: pnpm test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the minimum supported (matches engines in package.json).
+        # 20 is maintenance-LTS, 22 is active-LTS, 24 is current.
+        # GitHub Actions runners default to Node 24 from June 2026 onward.
+        node: ['18', '20', '22', '24']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Blocking: fail the build for any HIGH-or-above advisory. Lower-severity
+      # advisories surface via Dependabot PRs instead of breaking CI.
+      - name: Audit production dependencies (high+)
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Run test suite
+        run: pnpm test
+        env:
+          # Stable, predictable tokens so the suite doesn't have to scrape the
+          # boot banner. Test-only — real deploys use real secrets.
+          HOST_TOKEN: ci-host-token-do-not-use-in-prod
+          ADMIN_TOKEN: ci-admin-token-do-not-use-in-prod
+          COOKIE_SECRET: ci-cookie-secret-for-tests-only
+          NODE_ENV: test
+
+  container-scan:
+    name: Trivy container scan
+    runs-on: ubuntu-latest
+    # Skip on PR forks (Trivy needs to push results to the security tab and
+    # forks don't have write access). Still runs on push to main + nightly.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build image
+        run: docker build -t omegaquiz:ci .
+
+      # Note: aquasecurity/trivy-action has had supply-chain incidents in the
+      # past (compromised releases in 2024 and 2025). Pin to a tag, not `@main`,
+      # and consider switching to a SHA pin if you want extra protection — see
+      # https://github.com/aquasecurity/trivy-action/releases for the current
+      # release. Dependabot config will keep this fresh.
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: omegaquiz:ci
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          # OS packages + Node deps + secrets. Misconfig scanning is noisy for
+          # this tiny image; leaving it off keeps the signal-to-noise high.
+          scanners: vuln,secret
+
+  stress:
+    name: 50-player stress run
+    # Only on manual dispatch — runs ~45s and we don't need it on every PR.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run stress test
+        run: pnpm stress
+        env:
+          HOST_TOKEN: ci-host-token-do-not-use-in-prod
+          ADMIN_TOKEN: ci-admin-token-do-not-use-in-prod
+          COOKIE_SECRET: ci-cookie-secret-for-tests-only

@@ -1,0 +1,1993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Omega Quiz</title>
+<style>
+:root{
+  --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
+  --gold:#f4c430; --gold-bright:#ffd700; --gold-dim:#8a6d10;
+  --red:#c41e3a; --green:#1ea14a; --white:#f5f3e8;
+  --gray-bg:#0d1230; --gray-line:#1a2055; --gray-text:#9aa3d4;
+}
+/* A11Y: honour user motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* A11Y: real outline for keyboard users (survives Windows High Contrast Mode). */
+:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+  background:linear-gradient(180deg, var(--navy-deep) 0%, #0a1230 100%);
+  color:var(--white);min-height:100vh;font-size:14px;
+}
+
+/* --- Top bar --- */
+.topbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 24px;background:rgba(2,6,37,.95);
+  border-bottom:1px solid var(--gold-dim);
+  position:sticky;top:0;z-index:10;
+}
+.topbar .brand{display:flex;align-items:center;gap:12px}
+/* h1 reset + brand styling. */
+.topbar .brand-title{color:var(--gold);font-family:'Georgia',serif;font-size:16px;letter-spacing:.15em;text-transform:uppercase;margin:0;font-weight:bold;line-height:1.2}
+.topbar .brand-sub{color:var(--gray-text);font-size:11px;letter-spacing:.2em;text-transform:uppercase}
+.status-pills{display:flex;gap:10px;flex-wrap:wrap}
+.pill{
+  background:rgba(13,18,48,.8);border:1px solid var(--gray-line);
+  padding:6px 12px;border-radius:14px;font-size:12px;
+  display:flex;align-items:center;gap:6px;
+}
+.pill .label{color:var(--gray-text);text-transform:uppercase;letter-spacing:.08em;font-size:10px}
+.pill .value{color:var(--gold);font-weight:bold;font-size:14px}
+.pill.phase{border-color:var(--gold)}
+.pill.phase .value{color:var(--white)}
+
+/* --- Tabs --- */
+.tabs{
+  display:flex;gap:0;background:rgba(2,6,37,.7);
+  border-bottom:1px solid var(--gray-line);padding:0 24px;
+}
+.tab{
+  padding:12px 20px;cursor:pointer;color:var(--gray-text);
+  border-bottom:2px solid transparent;font-size:13px;letter-spacing:.05em;
+  text-transform:uppercase;transition:all .15s;
+}
+.tab:hover{color:var(--white)}
+.tab.active{color:var(--gold);border-bottom-color:var(--gold)}
+.tab .badge{
+  background:var(--gold);color:var(--navy-deep);
+  font-size:10px;font-weight:bold;padding:2px 6px;border-radius:8px;margin-left:6px;
+}
+
+/* --- Content --- */
+.content{padding:20px 24px;max-width:1400px;margin:0 auto}
+.panel{
+  background:rgba(13,18,48,.6);border:1px solid var(--gray-line);
+  border-radius:10px;padding:18px;margin-bottom:16px;
+}
+.panel h2{
+  color:var(--gold);font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;margin-bottom:12px;font-weight:600;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.panel-actions{display:flex;gap:8px}
+
+/* --- Buttons --- */
+.btn{
+  background:linear-gradient(180deg,#16258a,#0a116e);
+  border:1px solid var(--gold);color:var(--gold);
+  padding:7px 14px;border-radius:7px;cursor:pointer;
+  font-family:inherit;font-size:12px;letter-spacing:.05em;
+  transition:all .15s;
+}
+.btn:hover:not(:disabled){background:linear-gradient(180deg,#2540c4,#0a116e);box-shadow:0 0 12px rgba(244,196,48,.3)}
+/* A11Y: disabled state. Admin uses many ghost / outline buttons — those keep
+   a muted look; only the gradient primary buttons get the dim-gold fill. */
+.btn:disabled{cursor:not-allowed;opacity:.55;filter:saturate(.4)}
+.btn.primary{background:linear-gradient(180deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);font-weight:bold}
+.btn.danger{border-color:var(--red);color:#fca5a5}
+.btn.danger:hover{background:rgba(196,30,58,.2)}
+.btn.small{padding:7px 12px;font-size:12px;min-height:28px}  /* A11Y: 24×24 minimum target (WCAG 2.5.8) */
+.btn.ghost{background:transparent;border-color:var(--gray-line);color:var(--gray-text)}
+.btn.ghost:hover{color:var(--white);border-color:var(--white)}
+
+/* --- Tables --- */
+.tbl{width:100%;border-collapse:collapse;font-size:13px}
+.tbl th{
+  text-align:left;color:var(--gray-text);font-weight:600;text-transform:uppercase;
+  letter-spacing:.05em;font-size:11px;padding:8px 10px;border-bottom:1px solid var(--gray-line);
+}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--gray-line);vertical-align:middle}
+.tbl tr:hover{background:rgba(244,196,48,.04)}
+.tbl td.actions{display:flex;gap:6px;justify-content:flex-end}
+
+/* --- Status dots --- */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.offline{background:#444}
+.dot.disconnected{background:#f59e0b;box-shadow:0 0 6px #f59e0b;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.badge-alive{background:rgba(34,197,94,.2);color:#86efac;padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid #4ade8033}
+.badge-dead{background:rgba(196,30,58,.2);color:#fca5a5;padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid #f8717133}
+
+/* --- Question editor --- */
+.q-card{
+  background:rgba(2,6,37,.6);border:1px solid var(--gray-line);
+  border-radius:8px;padding:14px;margin-bottom:10px;
+}
+.q-card.dragging{opacity:.4}
+.q-card .q-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px}
+.q-card .q-label{color:var(--gold);font-size:11px;letter-spacing:.15em;text-transform:uppercase}
+/* Text fields inside a question card. Exclude radio/checkbox so they keep
+   their natural circular size — otherwise width:100% blows out the flex row. */
+.q-card textarea, .q-card input:not([type="radio"]):not([type="checkbox"]){
+  width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);
+  color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;
+  font-size:13px;resize:vertical;box-sizing:border-box;
+}
+.q-card textarea{min-height:50px}
+.q-card textarea:focus, .q-card input:focus{border-color:var(--gold);box-shadow:0 0 8px rgba(244,196,48,.2)}
+.q-card .opt-row{display:flex;gap:10px;align-items:center;margin:6px 0}
+.q-card .opt-row input[type="radio"]{flex:0 0 auto;width:18px;height:18px;accent-color:var(--gold);transform:scale(1.2);margin:0}
+.q-card .opt-row input[type="text"]{flex:1;min-width:0}
+.q-card .opt-row .opt-letter{flex:0 0 auto;color:var(--gold);font-weight:bold;width:18px;text-align:center}
+.q-card .lesson-label{color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin:10px 0 4px}
+
+.q-toolbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:10px 0;border-bottom:1px solid var(--gray-line);margin-bottom:14px;flex-wrap:wrap;gap:10px;
+}
+.q-toolbar .left{display:flex;gap:8px;align-items:center}
+.q-toolbar .right{display:flex;gap:8px;align-items:center}
+.q-section-title{color:var(--gold);font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin:14px 0 8px}
+
+.banner{
+  padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+.banner.warn{background:rgba(245,158,11,.15);border:1px solid #f59e0b;color:#fbbf24}
+.banner.info{background:rgba(59,130,246,.15);border:1px solid #3b82f6;color:#93c5fd}
+.banner.success{background:rgba(34,197,94,.15);border:1px solid #4ade80;color:#86efac;animation:fadeOut 3s 2s forwards}
+@keyframes fadeOut{to{opacity:0;height:0;padding-top:0;padding-bottom:0;margin-bottom:0;border-width:0}}
+
+/* --- Event log --- */
+.log-list{max-height:600px;overflow-y:auto;font-family:'Courier New',monospace;font-size:12px}
+.log-entry{
+  display:grid;grid-template-columns:80px 100px 1fr;gap:10px;
+  padding:6px 10px;border-bottom:1px solid var(--gray-line);
+}
+.log-entry .ts{color:var(--gray-text)}
+.log-entry .type{color:var(--gold);text-transform:uppercase;font-size:10px;letter-spacing:.1em}
+.log-entry .msg{color:var(--white)}
+.log-entry.t-join .type{color:#86efac}
+.log-entry.t-disconnect .type, .log-entry.t-disconnect-final .type, .log-entry.t-timeout .type{color:#fca5a5}
+.log-entry.t-admin .type{color:#fbbf24}
+.log-entry.t-reconnect .type{color:#93c5fd}
+
+/* --- Auth error --- */
+.auth-error{
+  max-width:500px;margin:80px auto;padding:30px;
+  background:rgba(13,18,48,.8);border:2px solid var(--red);border-radius:12px;text-align:center;
+}
+.auth-error h1{color:var(--red);font-size:20px;margin-bottom:14px}
+.auth-error p{color:var(--gray-text);font-size:14px;line-height:1.5}
+.auth-error code{background:rgba(0,0,0,.4);padding:2px 6px;border-radius:4px;color:var(--gold)}
+
+/* --- Hidden / Tab content --- */
+[data-tab-content]{display:none}
+[data-tab-content].active{display:block}
+
+/* --- Modal --- */
+.modal-bg{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);
+  display:none;align-items:center;justify-content:center;z-index:100;
+}
+.modal-bg.active{display:flex}
+.modal{
+  background:#0a1230;border:2px solid var(--gold);border-radius:12px;
+  padding:24px;max-width:500px;width:90%;
+}
+.modal h3{color:var(--gold);font-size:14px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:14px}
+.modal p{color:var(--white);font-size:14px;line-height:1.5;margin-bottom:14px}
+.modal .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+
+.score-input{width:60px;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--gold);padding:3px 6px;border-radius:5px;font-family:inherit;font-size:12px;text-align:center}
+
+.history-cells{display:flex;gap:2px;flex-wrap:wrap}
+.h-cell{
+  width:22px;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:bold;border:1px solid var(--gray-line);
+}
+.h-cell.correct{background:rgba(34,197,94,.3);color:#86efac;border-color:#4ade8055}
+.h-cell.wrong{background:rgba(196,30,58,.3);color:#fca5a5;border-color:#f8717155}
+.h-cell.timeout{background:rgba(245,158,11,.3);color:#fbbf24;border-color:#f59e0b55}
+.h-cell.placeholder{background:rgba(0,0,0,.2);color:#444}
+
+.empty-state{text-align:center;color:var(--gray-text);padding:40px 20px;font-style:italic}
+.empty-state .icon{font-size:32px;margin-bottom:8px;opacity:.5}
+
+.muted{color:var(--gray-text);font-size:12px}
+
+/* Audience tally bars on admin overview */
+.audience-panel{display:none}
+.audience-panel.active{display:block}
+.audience-bars{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+.audience-bar-row{display:grid;grid-template-columns:24px 1fr;gap:10px;align-items:start}
+.audience-bar-row .letter{color:var(--gold);font-weight:bold;font-size:13px;padding-top:3px}
+.audience-bar-row.correct .letter{color:#86efac}
+.audience-bar-row .opt-text{font-size:12px;color:var(--white);margin-bottom:4px}
+.audience-bar-row.correct .opt-text{color:#86efac;font-weight:bold}
+.audience-bar-row .opt-text::after{display:none}
+.audience-bar-row.correct .opt-text::after{content:' ✓';display:inline;color:#86efac}
+.audience-bar-row .sub-row{display:flex;align-items:center;gap:6px;font-size:11px;margin:2px 0}
+.audience-bar-row .sub-row .grp{min-width:50px;color:var(--gray-text);text-transform:uppercase;letter-spacing:.05em;font-size:10px}
+.audience-bar-row .sub-row .grp.alive{color:#86efac}
+.audience-bar-row .sub-row .grp.elim{color:#fca5a5}
+.audience-bar-row .sub-row .bar-bg{flex:1;height:8px;background:rgba(0,0,0,.4);border-radius:4px;overflow:hidden;border:1px solid var(--gray-line)}
+.audience-bar-row .sub-row .bar{height:100%;border-radius:4px;transition:width .8s ease-out}
+.audience-bar-row .sub-row .bar.alive{background:linear-gradient(90deg,#22c55e,#16a34a)}
+.audience-bar-row .sub-row .bar.elim{background:linear-gradient(90deg,#ef4444,#991b1b)}
+.audience-bar-row .sub-row .pct{min-width:34px;text-align:right;color:var(--gold);font-weight:bold;font-size:11px}
+</style>
+</head>
+<body>
+
+<!-- AUTH FAILURE -->
+<div id="authError" class="auth-error" style="display:none">
+  <h1>⛔ Admin access required</h1>
+  <p>Sign in with the admin magic link from the server logs, or use <code>/auth/login?role=admin</code> with your recovery token.</p>
+  <p style="margin-top:10px">If the magic link has expired or already been used, the recovery sign-in still works with <code>ADMIN_TOKEN</code>.</p>
+</div>
+
+<!-- MAIN APP -->
+<div id="app" style="display:none">
+
+  <div class="topbar">
+    <div class="brand">
+      <div>
+        <h1 class="brand-title">Omega Quiz Admin</h1>
+        <div class="brand-sub">Operator Dashboard</div>
+      </div>
+    </div>
+    <div class="status-pills">
+      <div class="pill phase"><span class="label">Phase</span><span class="value" id="pillPhase">—</span></div>
+      <div class="pill"><span class="label">Players</span><span class="value" id="pillPlayers">0</span></div>
+      <div class="pill"><span class="label">Alive</span><span class="value" id="pillAlive">0</span></div>
+      <div class="pill"><span class="label">Join Code</span><span class="value" id="pillCode">—</span></div>
+      <div class="pill"><span class="label">Question</span><span class="value" id="pillQuestion">—</span></div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="players">Players<span class="badge" id="playersBadge" style="display:none">0</span></div>
+    <div class="tab" data-tab="questions">Questions</div>
+    <div class="tab" data-tab="branding">Branding</div>
+    <div class="tab" data-tab="settings">Settings</div>
+    <div class="tab" data-tab="log">Event Log<span class="badge" id="logBadge" style="display:none">0</span></div>
+  </div>
+
+  <div class="content">
+
+    <div id="banner-area"></div>
+
+    <!-- OVERVIEW -->
+    <div data-tab-content="overview" class="active">
+
+      <div class="panel">
+        <h2>Game Control
+          <span class="panel-actions">
+            <a href="/host" target="_blank" class="btn ghost" id="openHostLink">Open Host Screen ↗</a>
+            <a href="/" target="_blank" class="btn ghost">Open Player View ↗</a>
+          </span>
+        </h2>
+        <div id="gameControl" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <!-- buttons injected dynamically based on phase -->
+        </div>
+        <div id="currentQDisplay" class="muted" style="margin-top:12px;font-size:13px"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Snapshot</h2>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+          <div><div class="muted">Total joined</div><div style="font-size:24px;color:var(--gold);font-weight:bold" id="snapTotal">0</div></div>
+          <div><div class="muted">Currently online</div><div style="font-size:24px;color:#86efac;font-weight:bold" id="snapOnline">0</div></div>
+          <div><div class="muted">Disconnected (in window)</div><div style="font-size:24px;color:#fbbf24;font-weight:bold" id="snapDisc">0</div></div>
+          <div><div class="muted">Still in running</div><div style="font-size:24px;color:var(--gold);font-weight:bold" id="snapAlive">0</div></div>
+          <div><div class="muted">Answered current Q</div><div style="font-size:24px;color:var(--white);font-weight:bold" id="snapAnswered">— / —</div></div>
+        </div>
+      </div>
+
+      <!-- LIVE answer tally — visible only during the active question phase.
+           Admin-only by design; host projector doesn't see this so the room
+           can't get spoilers about how the vote is trending. -->
+      <div class="panel audience-panel" id="liveAnswerPanel">
+        <h2>Live Answers — this question
+          <span class="panel-actions"><span class="muted" id="liveAnswerMeta" style="font-weight:normal;text-transform:none;letter-spacing:0;font-size:12px"></span></span>
+        </h2>
+        <div class="audience-bars" id="liveAnswerBars"></div>
+        <div class="muted" id="liveAnswerChanges" style="margin-top:10px;font-size:12px;line-height:1.5"></div>
+      </div>
+
+      <div class="panel audience-panel" id="audiencePanel">
+        <h2>Audience Tally — Last Reveal</h2>
+        <div class="muted" id="audienceMeta" style="margin-bottom:8px"></div>
+        <div class="audience-bars" id="audienceBars"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Recent Events <a class="btn small ghost" data-switch-tab="log" style="font-weight:normal">View all →</a></h2>
+        <div id="overviewLog" class="log-list" style="max-height:240px"></div>
+      </div>
+    </div>
+
+    <!-- PLAYERS -->
+    <div data-tab-content="players">
+      <div class="panel">
+        <h2>Player Roster
+          <span class="panel-actions">
+            <a href="/results.xlsx" download class="btn" title="Per-question history with green/red conditional fills">📊 Download Excel</a>
+            <a href="/results.csv" download class="btn ghost" title="Plain CSV (no colour formatting)">Plain CSV</a>
+          </span>
+        </h2>
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Score</th>
+              <th>State</th>
+              <th>History</th>
+              <th>Current Q</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="playerTbody">
+            <tr><td colspan="8" class="empty-state"><div class="icon">👥</div>No players yet</td></tr>
+          </tbody>
+        </table>
+        <div class="muted" id="playerRosterLegend" style="margin-top:10px;font-size:11px">
+          Online · Disconnected · Offline · History cells: correct, wrong, timeout
+        </div>
+      </div>
+    </div>
+
+    <!-- QUESTIONS -->
+    <div data-tab-content="questions">
+
+      <div id="qLockBanner" class="banner warn" style="display:none">
+        ⚠️ Questions can only be edited in the lobby phase or after the game ends. Current edits are read-only.
+      </div>
+
+      <!-- Prominent empty-state card. Hidden once at least one question exists. -->
+      <div id="qEmptyState" class="panel" style="display:none;border:2px dashed var(--gold);background:rgba(244,196,48,.06);text-align:center;padding:28px 24px">
+        <div style="font-size:32px;margin-bottom:6px">📭</div>
+        <h2 style="text-align:center;justify-content:center;color:var(--gold)">No questions loaded yet</h2>
+        <p class="muted" style="font-size:13px;line-height:1.55;max-width:520px;margin:6px auto 16px">Pick one of the options below to populate your question bank. The game can't start until at least one question is loaded.</p>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button class="btn primary" id="qEmptyBrowsePacks">🌐 Browse sample packs</button>
+          <button class="btn" id="qEmptyImportCsv">Import CSV</button>
+          <a class="btn ghost" href="/questions-template.csv" download>Download template</a>
+          <button class="btn ghost" id="qEmptyAddOne">Add a question manually</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Question Bank
+          <span class="panel-actions">
+            <button class="btn small" id="importCsvBtn">Import CSV</button>
+            <a class="btn small" href="/questions.csv" download>Export CSV</a>
+            <a class="btn small ghost" href="/questions-template.csv" download>Template CSV</a>
+            <button class="btn small" id="browsePacksBtn" title="Browse sample question packs published on GitHub">🌐 Browse sample packs</button>
+            <button class="btn small primary" id="saveQuestionsBtn">Save Changes</button>
+          </span>
+        </h2>
+
+        <div class="q-toolbar">
+          <div class="left">
+            <span class="muted">Main: <strong id="mainCount" style="color:var(--white)">0</strong> · Bonus: <strong id="bonusCount" style="color:var(--white)">0</strong></span>
+            <span id="dirtyDot" class="muted" style="display:none;color:#fbbf24">• unsaved changes</span>
+          </div>
+        </div>
+
+        <div class="q-section-title">Main Quiz Questions</div>
+        <div id="mainQList"></div>
+        <button class="btn small ghost" id="addMainBtn">+ Add Question</button>
+
+        <div class="q-section-title" style="margin-top:24px">Tiebreaker / Bonus Questions</div>
+        <div id="bonusQList"></div>
+        <button class="btn small ghost" id="addBonusBtn">+ Add Bonus Question</button>
+
+        <input type="file" id="importFile" accept=".json" style="display:none">
+        <input type="file" id="importCsvFile" accept=".csv,text/csv" style="display:none">
+      </div>
+    </div>
+
+    <!-- BRANDING -->
+    <div data-tab-content="branding">
+      <div class="panel">
+        <h2>Branding & Personalisation
+          <span class="panel-actions">
+            <button class="btn small primary" id="saveBrandingBtn">Save</button>
+          </span>
+        </h2>
+        <p class="muted" style="margin-bottom:14px">Branding persists on disk in <code>data/config.json</code>. The question bank persists separately in <code>data/questions.json</code>. Changes broadcast live to every screen.</p>
+
+        <!-- Server URL: drives the QR code + magic-link URLs. Overrides the
+             PUBLIC_BASE_URL env var. Leave blank to fall back to env var or the
+             request's Host header. -->
+        <div style="background:rgba(2,6,37,.4);border:1px solid var(--gray-line);border-radius:8px;padding:12px 14px;margin-bottom:14px;max-width:900px">
+          <label class="lesson-label" for="brandingPublicUrlInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Public server URL <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— used by QR codes and magic-link URLs</span></label>
+          <input type="text" id="brandingPublicUrlInput" maxlength="200" placeholder="https://omegaquiz.example.com  or  http://192.168.1.50:3000"
+            style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:'Courier New',monospace;font-size:13px;box-sizing:border-box">
+          <div class="muted" style="font-size:11px;margin-top:6px;line-height:1.4">
+            <strong style="color:#fbbf24">Tip:</strong> include the protocol explicitly (<code>http://</code> or <code>https://</code>). If you leave it out, IP addresses &amp; <code>localhost</code> default to <code>http://</code>, public hostnames default to <code>https://</code>. Get this wrong and the QR code / magic link will fail to load.
+          </div>
+          <div class="muted" id="brandingPublicUrlSource" style="font-size:11px;margin-top:4px"></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:900px">
+          <div>
+            <label class="lesson-label" for="brandingNameInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Company name</label>
+            <input type="text" id="brandingNameInput" maxlength="80" placeholder="e.g. Human Ability"
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
+          </div>
+          <div>
+            <label class="lesson-label" for="brandingDomainInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Company email domain</label>
+            <input type="text" id="brandingDomainInput" maxlength="120" placeholder="e.g. organisation.com.au"
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
+          </div>
+          <div style="grid-column:1 / -1">
+            <label class="lesson-label" for="brandingTaglineInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Tagline (optional)</label>
+            <input type="text" id="brandingTaglineInput" maxlength="120" placeholder="e.g. All Staff Cybersecurity Training"
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
+          </div>
+          <div style="grid-column:1 / -1;display:grid;grid-template-columns:1fr 2fr;gap:12px">
+            <div>
+              <label class="lesson-label" for="brandingClosedCtaLabel" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Session-closed CTA — button label</label>
+              <input type="text" id="brandingClosedCtaLabel" maxlength="60" placeholder="e.g. Take the follow-up survey"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+            <div>
+              <label class="lesson-label" for="brandingClosedCtaUrl" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Session-closed CTA — URL <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— https://, http:// or mailto:. Leave both blank to hide the button.</span></label>
+              <input type="text" id="brandingClosedCtaUrl" maxlength="500" placeholder="https://survey.example.com/post-session"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+          </div>
+          <div style="grid-column:1 / -1">
+            <label class="lesson-label" for="brandingConsentInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Privacy notice on join screen <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— shown to players above the Join button. Leave blank to omit. Limited HTML allowed: &lt;em&gt;, &lt;br&gt;, &lt;span class="mono"&gt;.</span></label>
+            <textarea id="brandingConsentInput" maxlength="800" rows="3" placeholder='e.g. "By joining you agree to share your name and work email with the session facilitator. Data is held in memory only and cleared at the end."'
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;line-height:1.45;box-sizing:border-box;resize:vertical"></textarea>
+            <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.4">
+              AU operators: APP 5 of the Privacy Act 1988 expects you to inform individuals about the collection at the point it happens. Keep this filled in (or rewritten for your jurisdiction).
+            </div>
+          </div>
+          <div style="grid-column:1 / -1;display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="brandingRestrictInput" style="transform:scale(1.2);accent-color:var(--gold)">
+            <label for="brandingRestrictInput" style="color:var(--white);font-size:13px">Only accept joins from this domain (rejects other email addresses)</label>
+          </div>
+          <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:8px">
+            <input type="checkbox" id="brandingShowNamesInput" style="transform:scale(1.2);accent-color:var(--gold);margin-top:2px">
+            <label for="brandingShowNamesInput" style="color:var(--white);font-size:13px;line-height:1.4">
+              Show player names on the host projector at the end of the game
+              <div class="muted" style="font-size:11px;margin-top:2px;font-weight:normal;letter-spacing:0;text-transform:none">
+                When enabled, the end screen runs an interactive top-5 award ceremony (5th place → 1st place with confetti).
+                Switch off if your audience would prefer the final results anonymised ("Finalist 1", "Finalist 2"…).
+              </div>
+            </label>
+          </div>
+          <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:8px">
+            <input type="checkbox" id="brandingElimCanAnswerInput" style="transform:scale(1.2);accent-color:var(--gold);margin-top:2px">
+            <label for="brandingElimCanAnswerInput" style="color:var(--white);font-size:13px;line-height:1.4">
+              Let eliminated players keep tapping answers
+              <div class="muted" style="font-size:11px;margin-top:2px;font-weight:normal;letter-spacing:0;text-transform:none">
+                Engagement mode — eliminated players see and tap the options for fun. Their picks
+                appear in the live audience tally (admin screen) but they can't re-enter the prize race
+                and don't score. Off by default.
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap">
+          <div>
+            <label class="lesson-label" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Logo (PNG / SVG / JPG / WEBP, max 256 KB)</label>
+            <input type="file" id="brandingLogoFile" accept="image/png,image/jpeg,image/webp,image/svg+xml"
+              style="font-family:inherit;font-size:12px;color:var(--gray-text)">
+            <button class="btn small ghost" id="brandingRemoveLogo" style="margin-left:8px">Remove logo</button>
+          </div>
+          <div style="background:rgba(0,0,0,.3);border:1px solid var(--gray-line);border-radius:8px;padding:10px;min-width:180px;text-align:center">
+            <div class="muted" style="font-size:10px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:6px">Logo preview</div>
+            <img id="brandingLogoPreview" alt="" style="max-height:80px;max-width:200px;display:none">
+            <div id="brandingLogoEmpty" class="muted" style="font-size:12px;font-style:italic">No logo</div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top:18px;background:rgba(2,6,37,.6)">
+          <h2 style="margin-bottom:8px">Live preview</h2>
+          <div class="muted" style="font-size:12px;margin-bottom:4px">Email placeholder players will see:</div>
+          <div id="brandingPreview" style="font-family:'Courier New',monospace;color:var(--gold);font-size:14px">alex@company.com</div>
+          <div class="muted" style="font-size:12px;margin-top:10px;margin-bottom:4px">Host screen title:</div>
+          <div id="brandingTitlePreview" style="color:var(--gold);font-family:Georgia,serif;font-size:18px">Who Wants to Be an OmegaQuiz Employee?</div>
+          <div class="muted" style="font-size:12px;margin-top:10px;margin-bottom:4px">QR code &amp; magic-link base URL:</div>
+          <div id="brandingUrlPreview" style="font-family:'Courier New',monospace;color:var(--gold);font-size:13px;word-break:break-all">http://localhost:3000</div>
+        </div>
+
+        <!-- Answer lock mode: tap-to-commit vs tap-then-confirm -->
+        <div class="panel" style="margin-top:18px">
+          <h2 style="margin-bottom:8px">Answer locking</h2>
+          <p class="muted" style="font-size:12px;margin-bottom:10px">How player answers commit. Quick mode is fastest; Lock-in mode prevents accidental taps and gives players a moment to change their mind.</p>
+          <div style="display:flex;gap:18px;flex-wrap:wrap">
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingAnswerLockMode" value="quick" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Quick-select</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Tap an option and the answer is locked in immediately. Fastest for high-energy rounds.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingAnswerLockMode" value="confirm" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Lock-in confirmation</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Tap an option to highlight it, then tap "Lock In Answer" to commit. Reduces fat-finger mistakes.</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Level style: money ($100 → $1M) vs plain "Level N" -->
+        <div class="panel" style="margin-top:18px">
+          <h2 style="margin-bottom:8px">Prize ladder style</h2>
+          <p class="muted" style="font-size:12px;margin-bottom:10px">Controls the right-hand panel on the host screen and the "Playing for $X" subtitle.</p>
+          <div style="display:flex;gap:18px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:8px;color:var(--white);cursor:pointer">
+              <input type="radio" name="brandingLevelStyle" value="money" style="accent-color:var(--gold);transform:scale(1.2)">
+              <span><strong>Money</strong> &nbsp;<span class="muted">($100 → $1,000,000, WWTBAM-style)</span></span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;color:var(--white);cursor:pointer">
+              <input type="radio" name="brandingLevelStyle" value="levels" style="accent-color:var(--gold);transform:scale(1.2)">
+              <span><strong>Levels</strong> &nbsp;<span class="muted">("Level 1" → "Level 10", neutral)</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Lifelines: refill schedule for 50/50, Ask IT and Skip -->
+        <div class="panel" style="margin-top:18px">
+          <h2 style="margin-bottom:8px">Lifelines</h2>
+          <p class="muted" style="font-size:12px;margin-bottom:10px">Three lifelines — 50/50, Ask IT, and Skip — can each be used once before they refill. Multiple lifelines can be used on the same question (e.g. 50/50 then Ask IT) but each type is one-shot until refill.</p>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer">
+              <input type="radio" name="brandingLifelineRefill" value="never" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Never refill</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Classic WWTBAM rules. One use of each per game.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer">
+              <input type="radio" name="brandingLifelineRefill" value="each-question" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Refill every question</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">All three lifelines come back when the next question opens. Great for training where you want hint scaffolding on every round.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer">
+              <input type="radio" name="brandingLifelineRefill" value="at-bonus" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Refill at bonus round</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">A fresh set when the tiebreaker / bonus round begins. Useful for long games.</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Theme editor -->
+        <div class="panel" style="margin-top:18px">
+          <h2>Theme — colours
+            <span class="panel-actions">
+              <button type="button" class="btn small ghost" id="themeResetBtn">Reset to defaults</button>
+              <button type="button" class="btn small ghost" id="themeExportBtn">Export JSON</button>
+              <button type="button" class="btn small ghost" id="themeImportBtn">Import JSON / CSS</button>
+            </span>
+          </h2>
+          <p class="muted" style="font-size:12px;margin-bottom:12px">Changes apply live to this admin page (preview). Click <strong>Save</strong> at the top of this tab to push to all screens. Background, accent, text, success and danger are the most visible. The variants (mid / light / bright / dim) drive gradients and shadows.</p>
+          <div id="themeGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px"></div>
+          <div id="themeImportPanel" style="display:none;margin-top:12px">
+            <label class="lesson-label" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Paste JSON (e.g. <code>{"gold":"#ff8800",...}</code>) or CSS (lines like <code>--gold: #ff8800;</code>)</label>
+            <textarea id="themeImportText" rows="6" style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:'Courier New',monospace;font-size:12px;box-sizing:border-box" placeholder='{"gold":"#ff8800","navyDeep":"#001"}'></textarea>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <button type="button" class="btn small primary" id="themeImportApplyBtn">Apply (preview)</button>
+              <button type="button" class="btn small ghost" id="themeImportCancelBtn">Cancel</button>
+              <div class="muted" id="themeImportStatus" style="align-self:center;font-size:12px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div data-tab-content="settings">
+      <div class="panel">
+        <h2>Settings</h2>
+        <p class="muted" style="font-size:13px;line-height:1.55;margin-bottom:8px">
+          Operational tools for managing the question bank, integrations, and developer-facing
+          import/export options. Most operators never need to touch these — Browse sample packs
+          (in the Questions tab) and CSV import/export should cover normal use.
+        </p>
+      </div>
+
+      <!-- SESSION CONTROL — the safe, reversible "off button". Close the
+           storefront so new players see a goodbye screen; admin can still
+           sign in and reopen. Shutdown/Restart live further down (Dev opts). -->
+      <div class="panel" style="margin-top:18px">
+        <h2>Session control</h2>
+        <p class="muted" style="font-size:13px;line-height:1.55">
+          <strong>Close session</strong> hides the join page from new visitors and rejects
+          new player joins. Existing players keep their results view. Admin sign-in still works
+          so you can reopen later. This is reversible and recommended over Shutdown for
+          end-of-event hygiene.
+        </p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <span class="muted" style="font-size:12px;letter-spacing:.1em;text-transform:uppercase">Status:</span>
+          <span id="sessionStatusBadge" style="display:inline-block;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:bold;letter-spacing:.1em;text-transform:uppercase;background:rgba(30,161,74,.2);color:#86efac;border:1px solid #1ea14a">Open</span>
+          <button class="btn small danger" id="closeSessionBtn">Close session</button>
+          <button class="btn small primary" id="reopenSessionBtn" style="display:none">Reopen session</button>
+        </div>
+      </div>
+
+      <!-- DEVELOPER OPTIONS — collapsed by default so it doesn't distract from
+           day-to-day flows. The JSON import/export here uses the raw on-disk
+           shape; CSV is recommended for editing in spreadsheets. -->
+      <div class="panel" style="margin-top:18px">
+        <h2 style="cursor:pointer;user-select:none" id="devOptsToggle"
+            role="button" aria-expanded="false" aria-controls="devOptsBody"
+            tabindex="0">
+          <span id="devOptsCaret" aria-hidden="true" style="display:inline-block;width:16px">▸</span>
+          Developer options
+          <span class="muted" style="font-size:11px;letter-spacing:.15em;text-transform:uppercase;margin-left:10px">advanced</span>
+        </h2>
+        <div id="devOptsBody" style="display:none;margin-top:10px">
+          <p class="muted" style="font-size:13px;line-height:1.55">
+            Raw JSON access to the question bank and a reset-to-defaults shortcut.
+            JSON exports preserve the exact on-disk schema including bonus questions
+            and per-question images; CSV is friendlier for spreadsheet editing.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn small" id="importBtn">Import JSON</button>
+            <button class="btn small" id="exportBtn">Export JSON</button>
+            <button class="btn small ghost" id="resetDefaultsBtn"
+              title="Replace the current bank with the included phishing sample questions (bundled with the app).">
+              Load bundled samples
+            </button>
+          </div>
+          <p class="muted" style="font-size:12px;margin-top:10px;line-height:1.5">
+            <strong>Import JSON</strong> replaces the entire bank with the uploaded file's
+            <code>{ main, bonus }</code> arrays.
+            <strong>Export JSON</strong> downloads the current bank in the same shape.
+            <strong>Load bundled samples</strong> overwrites with the 10 main + 5 bonus
+            phishing questions that ship with the app.
+          </p>
+          <hr style="margin:18px 0;border:none;border-top:1px solid var(--gold-dim);opacity:.35">
+          <h3 style="margin:0 0 6px;font-size:14px;letter-spacing:.15em;text-transform:uppercase;color:var(--gold)">Process control</h3>
+          <p class="muted" style="font-size:12px;line-height:1.5">
+            Trigger an in-process exit. <strong>Most hosting platforms (Railway, Fly, Render,
+            Docker with --restart) auto-respawn the server within seconds</strong>, so this is
+            closer to a rolling restart than a true off-switch. For a real offline state,
+            scale your service to zero in the hosting dashboard. Use <em>Close session</em>
+            above for the everyday "wrap up an event" flow.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <button class="btn small" id="restartServerBtn">Restart server</button>
+            <button class="btn small danger" id="shutdownServerBtn">Shutdown server</button>
+          </div>
+          <p class="muted" style="font-size:11px;margin-top:6px;line-height:1.4">
+            Both rate-limited to one per 30 seconds per admin session. <strong>Restart</strong>
+            tells clients to reconnect; <strong>Shutdown</strong> tells them the session has
+            ended and stops their reconnect loop.
+          </p>
+        </div>
+      </div>
+
+      <!-- MAINTENANCE — destructive end-of-event action. -->
+      <div class="panel" style="margin-top:18px;border:1px solid var(--red);background:rgba(196,30,58,.08)">
+        <h2 style="color:#fca5a5">Maintenance — Export &amp; Wipe Data</h2>
+        <p class="muted" style="font-size:13px;line-height:1.55">
+          End-of-event reset. Downloads a final XLSX of the current results, then deletes
+          <code>data/config.json</code> + <code>data/questions.json</code> and resets the in-memory
+          game state. After this, the next operator joining will see a fresh setup with the
+          deployment's default branding and an empty question bank.
+        </p>
+        <p class="muted" style="font-size:12px;line-height:1.55;margin-top:8px">
+          <strong style="color:#fca5a5">Refused mid-game.</strong> Only available in the lobby
+          or after the game has ended. <strong style="color:#fca5a5">Player connections are
+          closed</strong> as part of the wipe; warn participants first.
+        </p>
+        <form id="wipeForm" method="POST" action="/admin/data:wipe" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <label class="lesson-label" style="margin:0;flex:1;min-width:260px">
+            Type <code>WIPE DATA</code> (in capitals) to confirm
+            <input type="text" name="confirm" id="wipeConfirmInput" autocomplete="off"
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:'Courier New',monospace;font-size:13px;margin-top:4px;box-sizing:border-box">
+          </label>
+          <button type="submit" class="btn danger small" id="wipeBtn" disabled>Export &amp; Wipe</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- LOG -->
+    <div data-tab-content="log">
+      <div class="panel">
+        <h2>Event Log
+          <span class="panel-actions">
+            <span class="muted" id="logCount">0 events</span>
+          </span>
+        </h2>
+        <div id="fullLog" class="log-list"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- SAMPLE PACKS MODAL -->
+<div class="modal-bg" id="packsModal">
+  <div class="modal" style="max-width:720px;width:96%;max-height:80vh;display:flex;flex-direction:column">
+    <h3 id="packsTitle">Sample question packs</h3>
+    <p class="muted" id="packsSource" style="font-size:11px;margin:0 0 10px;word-break:break-all"></p>
+    <div id="packsBody" style="overflow:auto;flex:1;min-height:120px"></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="packsModalCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-bg" id="confirmModal">
+  <div class="modal">
+    <h3 id="confirmTitle">Confirm</h3>
+    <p id="confirmMsg"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="confirmCancelBtn">Cancel</button>
+      <button class="btn danger" id="confirmOk">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script nonce="__CSP_NONCE__">
+/* =====================
+   AUTH
+   ===================== */
+// Auth happens server-side via the session cookie before this page is served.
+// The cookie is httpOnly + SameSite=Strict and rides along with the WS upgrade.
+document.getElementById('app').style.display = 'block';
+document.getElementById('openHostLink').href = '/host';
+
+/* =====================
+   WEBSOCKET
+   ===================== */
+let ws = null;
+let state = null;
+let questions = [];
+let bonusQuestions = [];
+let eventLog = [];
+let dirty = false;
+let lastBannerTimeout = null;
+
+// U1: WS auto-reconnect with exponential backoff. After the cap is reached we
+// surface a manual "Reconnect" button + a recovery-token link so the operator
+// knows the dashboard is stuck rather than just spinning silently.
+const RECONNECT_BASE_MS = 1500;
+const RECONNECT_MAX_MS  = 30_000;
+const RECONNECT_MAX_TRIES = 10;
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+function scheduleReconnect(){
+  if (reconnectTimer) return;
+  if (reconnectAttempt >= RECONNECT_MAX_TRIES) {
+    showAdminReconnectPrompt();
+    return;
+  }
+  reconnectAttempt++;
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.6, reconnectAttempt - 1), RECONNECT_MAX_MS);
+  showAdminReconnectBanner(`Reconnecting in ${Math.round(delay/1000)}s… (attempt ${reconnectAttempt}/${RECONNECT_MAX_TRIES})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}
+function ensureReconnectBanner(){
+  let b = document.getElementById('adminReconnectBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'adminReconnectBanner';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:rgba(196,30,58,.95);color:#fff;padding:10px 18px;border-radius:14px;z-index:200;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.4);display:flex;gap:10px;align-items:center';
+    document.body.appendChild(b);
+  }
+  return b;
+}
+function showAdminReconnectBanner(text){
+  const b = ensureReconnectBanner();
+  b.textContent = text;
+}
+function showAdminReconnectPrompt(){
+  const b = ensureReconnectBanner();
+  b.innerHTML = '<span>Lost connection to server.</span>'
+    + '<button type="button" id="adminManualReconnectBtn" style="background:#fff;color:#991b1b;border:none;padding:5px 12px;border-radius:10px;font-weight:bold;cursor:pointer;font-family:inherit">Reconnect</button>'
+    + '<a href="/auth/login?role=admin" style="color:#fff;text-decoration:underline;font-size:13px">Sign in again</a>';
+  const btn = document.getElementById('adminManualReconnectBtn');
+  if (btn) btn.onclick = () => {
+    reconnectAttempt = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    connect();
+  };
+}
+function clearAdminReconnectBanner(){
+  const b = document.getElementById('adminReconnectBanner');
+  if (b) b.remove();
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}`);
+  ws.onopen = () => {
+    reconnectAttempt = 0;
+    clearAdminReconnectBanner();
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+  };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'admin:init') {
+      questions = msg.questions;
+      bonusQuestions = msg.bonusQuestions;
+      eventLog = msg.eventLog || [];
+      renderQuestions();
+      renderLog();
+    } else if (msg.type === 'admin:state') {
+      state = msg.state;
+      renderAll();
+    } else if (msg.type === 'admin:event') {
+      eventLog.unshift(msg.event);
+      if (eventLog.length > 200) eventLog.pop();
+      renderLog();
+      renderOverviewLog();
+    } else if (msg.type === 'admin:questions') {
+      // Server confirmed new questions saved
+      questions = msg.questions;
+      bonusQuestions = msg.bonusQuestions;
+      dirty = false;
+      renderQuestions();
+      showBanner('success', 'Questions saved successfully.');
+    } else if (msg.type === 'questions:imported') {
+      // CSV import succeeded — admin:questions has already fired and re-rendered.
+      // Replace the success banner with a more specific one.
+      showBanner('success', `CSV imported: ${msg.mainCount} main + ${msg.bonusCount} bonus question${msg.bonusCount === 1 ? '' : 's'} loaded.`);
+    } else if (msg.type === 'samples:list') {
+      renderPacksList(msg.packs, msg.sourceUrl);
+    } else if (msg.type === 'samples:loaded') {
+      closePacksModal();
+      showBanner('success', `Loaded "${msg.pack.title}" (${msg.mainCount} main + ${msg.bonusCount} bonus). Title and category updated.`);
+    } else if (msg.type === 'data-wipe:done') {
+      // Server confirmed a wipe action — page should reload so the in-memory
+      // draft state isn't stale against the fresh server defaults.
+      showBanner('success', 'Data wiped. Reloading…');
+      setTimeout(() => location.reload(), 1500);
+    } else if (msg.type === 'error') {
+      showBanner('warn', msg.error);
+    }
+  };
+  ws.onclose = scheduleReconnect;
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
+connect();
+
+function send(type, payload) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type, ...payload }));
+}
+function adminAction(action, payload) { send('admin:action', { action, payload: payload || {} }); }
+function hostActionFromAdmin(hostAction, hostPayload) {
+  adminAction('game:host-action', { hostAction, hostPayload: hostPayload || {} });
+}
+
+/* =====================
+   TABS
+   ===================== */
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => switchTab(t.dataset.tab));
+});
+document.querySelectorAll('[data-switch-tab]').forEach(el => {
+  el.addEventListener('click', () => switchTab(el.dataset.switchTab));
+});
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('[data-tab-content]').forEach(c => c.classList.toggle('active', c.dataset.tabContent === name));
+}
+
+/* =====================
+   BANNERS
+   ===================== */
+function showBanner(kind, msg) {
+  const area = document.getElementById('banner-area');
+  area.innerHTML = `<div class="banner ${kind}"><span>${escapeHtml(msg)}</span><button class="btn small ghost" data-act="dismiss-banner" aria-label="Dismiss">×</button></div>`;
+  if (kind === 'success') {
+    clearTimeout(lastBannerTimeout);
+    lastBannerTimeout = setTimeout(() => area.innerHTML = '', 5000);
+  }
+}
+// Delegated click handler — replaces the inline onclick on the dynamically-
+// created banner dismiss button (CSP nonces don't cover inline event attrs).
+document.getElementById('banner-area').addEventListener('click', e => {
+  const target = e.target.closest('[data-act="dismiss-banner"]');
+  if (target && target.parentElement) target.parentElement.remove();
+});
+// Static modal cancel/close buttons — bound here rather than inline.
+document.getElementById('packsModalCloseBtn').addEventListener('click', () => closePacksModal());
+document.getElementById('confirmCancelBtn').addEventListener('click', () => closeModal());
+
+/* =====================
+   RENDER
+   ===================== */
+// Tab title surfaces phase + key counts so multi-tab operators can scan.
+function updateAdminPageTitle() {
+  if (!state) { document.title = 'Omega Quiz Admin'; return; }
+  const company = (brandingDraft && brandingDraft.companyName) || '';
+  const quiz    = (brandingDraft && brandingDraft.quizTitle)   || 'Omega Quiz';
+  let prefix = '';
+  if (state.phase === 'lobby') {
+    prefix = state.totalQuestions === 0
+      ? 'Empty — '
+      : `Lobby (${state.playerCount} joined) — `;
+  } else if (state.phase === 'question') {
+    prefix = state.inBonus
+      ? `Tiebreaker ${(state.bonusIndex||0)+1} — `
+      : `Q${state.questionIndex+1} — ${state.aliveCount} alive — `;
+  } else if (state.phase === 'reveal') {
+    prefix = `Reveal — ${state.aliveCount} alive — `;
+  } else if (state.phase === 'end') {
+    prefix = 'Game over — ';
+  }
+  const tail = (company ? company + ' ' : '') + quiz + ' (Admin)';
+  document.title = prefix + tail;
+}
+
+function renderAll() {
+  if (!state) return;
+  // A11Y / UX: tab title carries the live state so an operator running 3 tabs
+  // (admin / host / player) can read which tab is which from the strip.
+  updateAdminPageTitle();
+  // Top pills
+  document.getElementById('pillPhase').textContent = state.phase.toUpperCase();
+  document.getElementById('pillPlayers').textContent = state.playerCount;
+  document.getElementById('pillAlive').textContent = state.aliveCount;
+  document.getElementById('pillCode').textContent = state.joinCode;
+  if (state.phase === 'lobby') document.getElementById('pillQuestion').textContent = '—';
+  else if (state.inBonus) document.getElementById('pillQuestion').textContent = 'Bonus ' + (state.bonusIndex + 1);
+  else if (state.phase === 'end') document.getElementById('pillQuestion').textContent = 'Done';
+  else document.getElementById('pillQuestion').textContent = `${state.questionIndex + 1} / ${state.totalQuestions}`;
+
+  document.getElementById('playersBadge').textContent = state.playerCount;
+  document.getElementById('playersBadge').style.display = state.playerCount > 0 ? 'inline-block' : 'none';
+
+  renderGameControl();
+  renderSnapshot();
+  renderPlayers();
+  renderOverviewLog();
+  renderAudienceTally();
+  renderLiveAnswerTally();
+  renderQuestionLockState();
+}
+
+function renderLiveAnswerTally() {
+  const panel = document.getElementById('liveAnswerPanel');
+  const t = state.liveAnswerTally;
+  if (!t || state.phase !== 'question' || !state.currentQuestionRef) {
+    panel.classList.remove('active');
+    return;
+  }
+  panel.classList.add('active');
+  const elimRows = (t.answeredEliminated || 0) > 0;
+  let meta = `${t.answeredAlive} of ${t.aliveTotal} alive players answered (${t.aliveTotal > 0 ? Math.round((t.answeredAlive/t.aliveTotal)*100) : 0}%)`;
+  if (elimRows) meta += `  ·  ${t.answeredEliminated} of ${t.eliminatedTotal} eliminated players also tapped`;
+  document.getElementById('liveAnswerMeta').textContent = meta;
+
+  const wrap = document.getElementById('liveAnswerBars');
+  wrap.innerHTML = '';
+  const letters = ['A','B','C','D'];
+  state.currentQuestionRef.options.forEach((opt, i) => {
+    const isCorrect = state.currentQuestionRef.correct === i;
+    const isEliminated = (t.eliminatedOptions || []).includes(i);
+    const alivePct = t.answeredAlive ? Math.round((t.counts[i] / t.answeredAlive) * 100) : 0;
+    const elimPct  = t.answeredEliminated ? Math.round((t.eliminatedCounts[i] / t.answeredEliminated) * 100) : 0;
+    const row = document.createElement('div');
+    row.className = 'audience-bar-row' + (isCorrect ? ' correct' : '');
+    if (isEliminated) row.style.opacity = '0.45';
+    const eliminatedSuffix = isEliminated ? ' <span style="color:var(--gray-text);font-size:10px">(50/50)</span>' : '';
+    let subs = `<div class="sub-row"><span class="grp alive">${isEliminated ? '—' : 'Alive'}</span><div class="bar-bg"><div class="bar alive" style="width:${alivePct}%"></div></div><span class="pct">${alivePct}% (${t.counts[i]})</span></div>`;
+    if (elimRows) {
+      subs += `<div class="sub-row"><span class="grp elim">Out</span><div class="bar-bg"><div class="bar elim" style="width:${elimPct}%"></div></div><span class="pct">${elimPct}% (${t.eliminatedCounts[i]})</span></div>`;
+    }
+    row.innerHTML = `<span class="letter">${letters[i]}</span><div><div class="opt-text">${escapeHtml(opt)}${eliminatedSuffix}</div>${subs}</div>`;
+    wrap.appendChild(row);
+  });
+
+  // Change-tracking line.
+  const changesEl = document.getElementById('liveAnswerChanges');
+  if (t.changeEvents > 0) {
+    const eventsWord = t.changeEvents === 1 ? 'change' : 'changes';
+    const playersWord = t.playersWhoChanged === 1 ? 'player has' : 'players have';
+    changesEl.innerHTML = `<strong style="color:#fbbf24">↻</strong> ${t.playersWhoChanged} ${playersWord} changed their answer at least once · ${t.changeEvents} ${eventsWord} total`;
+  } else {
+    changesEl.innerHTML = '<span style="color:var(--gray-text)">No-one has changed their answer yet.</span>';
+  }
+}
+
+function renderAudienceTally() {
+  const panel = document.getElementById('audiencePanel');
+  const t = state.audienceTally;
+  if (!t || state.phase !== 'reveal' || !state.currentQuestionRef) {
+    panel.classList.remove('active');
+    return;
+  }
+  panel.classList.add('active');
+  const total = t.aliveTotal + t.elimTotal;
+  document.getElementById('audienceMeta').textContent =
+    `${total} of ${state.playerCount} players answered  ·  ${t.aliveTotal} survivors  ·  ${t.elimTotal} eliminated/already-out`;
+  const wrap = document.getElementById('audienceBars');
+  wrap.innerHTML = '';
+  const letters = ['A','B','C','D'];
+  state.currentQuestionRef.options.forEach((opt, i) => {
+    const isCorrect = state.currentQuestionRef.correct === i;
+    const aPct = t.aliveTotal ? Math.round((t.aliveBars[i] / t.aliveTotal) * 100) : 0;
+    const ePct = t.elimTotal ? Math.round((t.elimBars[i] / t.elimTotal) * 100) : 0;
+    const row = document.createElement('div');
+    row.className = 'audience-bar-row' + (isCorrect ? ' correct' : '');
+    let subs = `<div class="sub-row"><span class="grp alive">Alive</span><div class="bar-bg"><div class="bar alive" style="width:${aPct}%"></div></div><span class="pct">${aPct}% (${t.aliveBars[i]})</span></div>`;
+    if (t.elimTotal > 0) {
+      subs += `<div class="sub-row"><span class="grp elim">Out</span><div class="bar-bg"><div class="bar elim" style="width:${ePct}%"></div></div><span class="pct">${ePct}% (${t.elimBars[i]})</span></div>`;
+    }
+    row.innerHTML = `<span class="letter">${letters[i]}</span><div><div class="opt-text">${escapeHtml(opt)}</div>${subs}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
+function renderGameControl() {
+  const c = document.getElementById('gameControl');
+  const buttons = [];
+  if (state.phase === 'lobby') {
+    const empty = state.totalQuestions === 0;
+    buttons.push({
+      label: empty ? 'Start Game (no questions loaded)' : 'Start Game',
+      primary: !empty,
+      disabled: empty,
+      title: empty ? 'Import a CSV or click "Load sample questions" in the Questions tab first.' : '',
+      action: () => hostActionFromAdmin('start-game')
+    });
+  } else if (state.phase === 'question') {
+    buttons.push({ label: 'Close & Reveal', primary: true, action: () => hostActionFromAdmin('close-question') });
+    if (!state.lifelineUsed && !state.lifelineActive) {
+      buttons.push({ label: 'Open Lifeline Vote', action: () => hostActionFromAdmin('open-lifeline-vote') });
+    }
+    if (state.lifelineActive) {
+      ['5050','askit','skip'].forEach(t => {
+        buttons.push({ label: `Apply ${t.toUpperCase()}`, action: () => hostActionFromAdmin('apply-lifeline', { type: t }) });
+      });
+      buttons.push({ label: 'Cancel Vote', ghost: true, action: () => hostActionFromAdmin('cancel-lifeline-vote') });
+    }
+    // "Oops, started too early" escape hatch. Only valid at Q1 before anyone's
+    // been eliminated; the server enforces this too.
+    if (state.questionIndex === 0 && state.aliveCount === state.playerCount && !state.lifelineActive) {
+      buttons.push({
+        label: '← Return to Lobby', ghost: true,
+        action: () => confirmAction(
+          'Return to lobby?',
+          'Send everyone back to the lobby so more players can join. The current question is cleared and scores reset. Players stay in the game.',
+          () => hostActionFromAdmin('return-to-lobby')
+        )
+      });
+    }
+  } else if (state.phase === 'reveal') {
+    buttons.push({ label: 'Next Question →', primary: true, action: () => hostActionFromAdmin('next-question') });
+  } else if (state.phase === 'end') {
+    buttons.push({ label: 'Reset (New Game)', danger: true, action: () => confirmAction('Reset game?', 'This will clear all players and scores and return to a new lobby.', () => hostActionFromAdmin('reset-game')) });
+  }
+
+  c.innerHTML = '';
+  buttons.forEach(b => {
+    const btn = document.createElement('button');
+    btn.className = 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : '') + (b.ghost ? ' ghost' : '');
+    btn.textContent = b.label;
+    if (b.disabled) btn.disabled = true;
+    if (b.title) btn.title = b.title;
+    btn.onclick = b.action;
+    c.appendChild(btn);
+  });
+
+  // Current question display
+  const qd = document.getElementById('currentQDisplay');
+  if (state.currentQuestionRef && state.phase !== 'lobby' && state.phase !== 'end') {
+    const letters = ['A','B','C','D'];
+    qd.innerHTML = `<strong style="color:var(--gold)">Current question:</strong> ${state.currentQuestionRef.q}
+      <br><span style="opacity:.7">Correct: ${letters[state.currentQuestionRef.correct]} — "${escapeHtml(state.currentQuestionRef.options[state.currentQuestionRef.correct])}"</span>`;
+  } else {
+    qd.innerHTML = '';
+  }
+}
+
+function renderSnapshot() {
+  const total = state.playerCount;
+  const online = state.players.filter(p => p.online).length;
+  const disc = state.players.filter(isDisconnectedWithinReconnectWindow).length;
+  document.getElementById('snapTotal').textContent = total;
+  document.getElementById('snapOnline').textContent = online;
+  document.getElementById('snapDisc').textContent = disc;
+  document.getElementById('snapAlive').textContent = state.aliveCount;
+  document.getElementById('snapAnswered').textContent = `${state.answeredCount} / ${state.aliveCount}`;
+  const legend = document.getElementById('playerRosterLegend');
+  if (legend) {
+    legend.textContent = `Online · Disconnected (reconnectable for ${formatDuration(getReconnectWindowMs())}) · Offline (left/expired) · History cells: correct, wrong, timeout`;
+  }
+}
+
+function getReconnectWindowMs() {
+  return Number(state && state.reconnectWindowMs) || 300000;
+}
+function isDisconnectedWithinReconnectWindow(p) {
+  return !!(p && !p.online && p.disconnectedAt && (Date.now() - p.disconnectedAt) < getReconnectWindowMs());
+}
+function formatDuration(ms) {
+  const sec = Math.max(1, Math.round(Number(ms || 0) / 1000));
+  if (sec < 60) return sec + 's';
+  return Math.round(sec / 60) + ' min';
+}
+
+function renderPlayers() {
+  const tbody = document.getElementById('playerTbody');
+  if (!state.players.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">👥</div>No players yet</td></tr>';
+    return;
+  }
+  const rows = [...state.players].sort((a,b) => {
+    if (a.alive !== b.alive) return a.alive ? -1 : 1;
+    return b.score - a.score;
+  });
+
+  tbody.innerHTML = '';
+  rows.forEach(p => {
+    const tr = document.createElement('tr');
+    const isOnline = p.online;
+    const isDisc = isDisconnectedWithinReconnectWindow(p);
+    const statusClass = isOnline ? 'online' : (isDisc ? 'disconnected' : 'offline');
+    const statusText = isOnline ? 'Online' : (isDisc ? 'Disconnected' : 'Offline');
+
+    const histCells = (p.history || []).map(h => {
+      let cls = 'placeholder', label = '·';
+      if (h.answer == null) { cls = 'timeout'; label = '⏱'; }
+      else if (h.correct) { cls = 'correct'; label = '✓'; }
+      else { cls = 'wrong'; label = '✗'; }
+      return `<div class="h-cell ${cls}" title="${escapeHtml(h.label)}">${label}</div>`;
+    }).join('');
+
+    const currentLetter = p.currentAnswer != null ? ['A','B','C','D'][p.currentAnswer] : '—';
+
+    tr.innerHTML = `
+      <td><span class="dot ${statusClass}"></span>${statusText}</td>
+      <td><strong>${escapeHtml(p.name)}</strong></td>
+      <td class="muted">${escapeHtml(p.email)}</td>
+      <td><input type="number" class="score-input" value="${p.score}" min="0" data-pid="${p.id}" data-act="score"></td>
+      <td><span class="${p.alive ? 'badge-alive' : 'badge-dead'}">${p.alive ? 'Alive' : 'Eliminated'}</span></td>
+      <td><div class="history-cells">${histCells || '<span class="muted">—</span>'}</div></td>
+      <td>${currentLetter}</td>
+      <td class="actions">
+        <button class="btn small" data-pid="${p.id}" data-act="toggle">${p.alive ? 'Eliminate' : 'Revive'}</button>
+        ${isDisc ? `<button class="btn small ghost" data-pid="${p.id}" data-act="extend" title="Reset reconnect timer">Extend</button>` : ''}
+        <button class="btn small danger" data-pid="${p.id}" data-act="kick">Kick</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Wire action buttons
+  tbody.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = () => {
+      const pid = b.dataset.pid;
+      const act = b.dataset.act;
+      const player = state.players.find(p => p.id === pid);
+      if (!player) return;
+      if (act === 'toggle') {
+        adminAction('player:set-alive', { playerId: pid, alive: !player.alive });
+      } else if (act === 'kick') {
+        confirmAction(`Kick ${player.name}?`, `This will disconnect and remove them from the game. Their answer history will be lost.`, () => {
+          adminAction('player:kick', { playerId: pid });
+        });
+      } else if (act === 'extend') {
+        adminAction('player:force-reconnect-window', { playerId: pid });
+        showBanner('info', `Reconnect window reset for ${player.name}. They have about ${formatDuration(getReconnectWindowMs())} to rejoin.`);
+      }
+    };
+  });
+  tbody.querySelectorAll('input[data-act="score"]').forEach(inp => {
+    inp.onchange = () => {
+      const pid = inp.dataset.pid;
+      const val = parseInt(inp.value, 10);
+      if (!isNaN(val) && val >= 0) adminAction('player:set-score', { playerId: pid, score: val });
+    };
+  });
+}
+
+function renderQuestionLockState() {
+  const locked = !(state.phase === 'lobby' || state.phase === 'end');
+  document.getElementById('qLockBanner').style.display = locked ? 'flex' : 'none';
+  document.getElementById('saveQuestionsBtn').disabled = locked || !dirty;
+  document.getElementById('resetDefaultsBtn').disabled = locked;
+  document.getElementById('addMainBtn').disabled = locked;
+  document.getElementById('addBonusBtn').disabled = locked;
+  // Inputs inside cards
+  document.querySelectorAll('.q-card input, .q-card textarea').forEach(el => el.disabled = locked);
+  document.querySelectorAll('.q-card .btn').forEach(el => el.disabled = locked);
+}
+
+function renderOverviewLog() {
+  const wrap = document.getElementById('overviewLog');
+  if (!eventLog.length) { wrap.innerHTML = '<div class="empty-state muted">No events yet</div>'; return; }
+  wrap.innerHTML = eventLog.slice(0, 15).map(logEntryHtml).join('');
+}
+function renderLog() {
+  const wrap = document.getElementById('fullLog');
+  if (!eventLog.length) { wrap.innerHTML = '<div class="empty-state muted">No events yet</div>'; return; }
+  wrap.innerHTML = eventLog.map(logEntryHtml).join('');
+  document.getElementById('logCount').textContent = `${eventLog.length} events`;
+  document.getElementById('logBadge').textContent = eventLog.length;
+  document.getElementById('logBadge').style.display = eventLog.length ? 'inline-block' : 'none';
+}
+function logEntryHtml(e) {
+  const t = new Date(e.ts);
+  const ts = t.toTimeString().slice(0, 8);
+  return `<div class="log-entry t-${e.type}">
+    <span class="ts">${ts}</span>
+    <span class="type">${e.type}</span>
+    <span class="msg">${escapeHtml(e.msg)}</span>
+  </div>`;
+}
+
+/* =====================
+   QUESTION EDITOR
+   ===================== */
+function renderQuestions() {
+  document.getElementById('mainCount').textContent = questions.length;
+  document.getElementById('bonusCount').textContent = bonusQuestions.length;
+  document.getElementById('dirtyDot').style.display = dirty ? 'inline' : 'none';
+  document.getElementById('saveQuestionsBtn').disabled = !dirty;
+
+  // Empty-state card visible only when both banks are empty.
+  const empty = questions.length === 0 && bonusQuestions.length === 0;
+  document.getElementById('qEmptyState').style.display = empty ? 'block' : 'none';
+
+  renderQuestionList('mainQList', questions, 'main');
+  renderQuestionList('bonusQList', bonusQuestions, 'bonus');
+  if (state) renderQuestionLockState();
+}
+
+// Empty-state CTAs — wired once, target the same buttons elsewhere on the tab.
+// "Load bundled samples" was removed from this card; Browse sample packs is now
+// the primary path. The bundled-samples shortcut still lives in Settings →
+// Developer options for anyone who needs it.
+document.addEventListener('DOMContentLoaded', () => {
+  const importCsvBtn = document.getElementById('qEmptyImportCsv');
+  if (importCsvBtn) importCsvBtn.onclick = () => document.getElementById('importCsvFile').click();
+  const addOneBtn = document.getElementById('qEmptyAddOne');
+  if (addOneBtn) addOneBtn.onclick = () => document.getElementById('addMainBtn').click();
+  const browsePacksBtnEmpty = document.getElementById('qEmptyBrowsePacks');
+  if (browsePacksBtnEmpty) browsePacksBtnEmpty.onclick = () => document.getElementById('browsePacksBtn').click();
+
+  // Developer options expander — start collapsed, toggle on click or Enter/Space.
+  const devToggle = document.getElementById('devOptsToggle');
+  const devBody   = document.getElementById('devOptsBody');
+  const devCaret  = document.getElementById('devOptsCaret');
+  function toggleDev() {
+    const open = devBody.style.display === 'block';
+    devBody.style.display = open ? 'none' : 'block';
+    devCaret.textContent = open ? '▸' : '▾';
+    devToggle.setAttribute('aria-expanded', String(!open));
+  }
+  if (devToggle) {
+    devToggle.addEventListener('click', toggleDev);
+    devToggle.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleDev(); }
+    });
+  }
+
+  // Session Control — close/reopen buttons. The status badge is updated in
+  // applyBranding() below; here we just wire the click handlers + confirm flow.
+  const closeBtn = document.getElementById('closeSessionBtn');
+  if (closeBtn) closeBtn.onclick = () => {
+    confirmAction(
+      'Close session?',
+      'New visitors will see a "session ended" screen instead of the join form. Players who already joined keep their results view. The admin can reopen at any time.',
+      () => adminAction('session:close')
+    );
+  };
+  const reopenBtn = document.getElementById('reopenSessionBtn');
+  if (reopenBtn) reopenBtn.onclick = () => adminAction('session:reopen');
+
+  // Shutdown / Restart — destructive, irreversible from inside the app on
+  // most platforms (because PaaS will auto-restart anyway). Confirm copy is
+  // explicit about the trade-off so the operator picks the right one.
+  const restartBtn = document.getElementById('restartServerBtn');
+  if (restartBtn) restartBtn.onclick = () => {
+    confirmAction(
+      'Restart server?',
+      'The process will exit cleanly. On Railway / Fly / Render / Docker (--restart) the platform will auto-respawn it within a few seconds. Connected clients see a "reconnecting…" banner and reattach automatically. Use this for hot config reloads or after a CSP/branding change you want to ensure has flushed.',
+      () => adminAction('admin:restart')
+    );
+  };
+  const shutdownBtn = document.getElementById('shutdownServerBtn');
+  if (shutdownBtn) shutdownBtn.onclick = () => {
+    confirmAction(
+      'Shutdown server?',
+      'The process will exit cleanly. ⚠️ On most hosting platforms (Railway, Fly, Render, Docker with --restart) the platform will respawn it within seconds — for a true offline state, scale your service to zero in the hosting dashboard. Connected clients will see "Session ended" and stop their reconnect loop. Use Close session (above) for the everyday "wrap up an event" flow instead.',
+      () => adminAction('admin:shutdown')
+    );
+  };
+});
+
+function renderQuestionList(targetId, arr, kind) {
+  const target = document.getElementById(targetId);
+  target.innerHTML = '';
+  arr.forEach((q, idx) => {
+    const card = document.createElement('div');
+    card.className = 'q-card';
+    card.draggable = true;
+    card.dataset.kind = kind;
+    card.dataset.idx = idx;
+
+    const letters = ['A','B','C','D'];
+    card.innerHTML = `
+      <div class="q-head">
+        <span class="q-label">${kind === 'main' ? `Question ${idx+1}` : `Bonus ${idx+1}`}</span>
+        <span style="flex:1"></span>
+        <button class="btn small ghost" data-action="up">↑</button>
+        <button class="btn small ghost" data-action="down">↓</button>
+        <button class="btn small danger" data-action="delete">Delete</button>
+      </div>
+      <label class="lesson-label">Question (HTML allowed)</label>
+      <textarea data-field="q">${escapeHtmlAttr(q.q)}</textarea>
+      <label class="lesson-label">Answer Options (radio = correct answer)</label>
+      ${q.options.map((opt, i) => `
+        <div class="opt-row">
+          <input type="radio" name="correct-${kind}-${idx}" ${i === q.correct ? 'checked' : ''} data-correct="${i}">
+          <span class="opt-letter">${letters[i]}</span>
+          <input type="text" data-field="option" data-idx="${i}" value="${escapeHtmlAttr(opt)}">
+        </div>
+      `).join('')}
+      <label class="lesson-label">Lesson / Explanation (shown on host screen after reveal)</label>
+      <textarea data-field="lesson">${escapeHtmlAttr(q.lesson)}</textarea>
+      <label class="lesson-label">Image (optional — PNG / JPG / WEBP / SVG, max 256 KB)</label>
+      <div class="q-image-row" style="display:flex;align-items:center;gap:10px">
+        <div class="q-image-preview" style="flex:0 0 auto;width:72px;height:54px;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          ${q.image ? `<img src="${q.image}" alt="${escapeHtmlAttr(q.imageAlt || '')}" style="max-width:100%;max-height:100%;display:block">` : `<span class="muted" style="font-size:10px">No image</span>`}
+        </div>
+        <input type="file" data-field="image-file" accept="image/png,image/jpeg,image/webp,image/svg+xml"
+          style="font-family:inherit;font-size:12px;color:var(--gray-text);flex:1;min-width:0">
+        <button type="button" class="btn small ghost" data-action="image-remove" ${q.image ? '' : 'disabled'}>Remove</button>
+      </div>
+      <label class="lesson-label">Image alt text <span class="muted" style="font-weight:normal;letter-spacing:0;text-transform:none;font-size:11px">(required for screen-reader users when the image carries information)</span></label>
+      <input type="text" data-field="imageAlt" maxlength="200" value="${escapeHtmlAttr(q.imageAlt || '')}" placeholder="e.g. Screenshot of a fake login page with PayPal branding">
+    `;
+
+    // Field bindings
+    card.querySelector('[data-field="q"]').oninput = e => { q.q = e.target.value; markDirty(); };
+    card.querySelector('[data-field="lesson"]').oninput = e => { q.lesson = e.target.value; markDirty(); };
+    card.querySelectorAll('[data-field="option"]').forEach(inp => {
+      inp.oninput = e => { q.options[parseInt(e.target.dataset.idx)] = e.target.value; markDirty(); };
+    });
+    card.querySelectorAll('[data-correct]').forEach(r => {
+      r.onchange = e => { if (e.target.checked) { q.correct = parseInt(e.target.dataset.correct); markDirty(); } };
+    });
+    card.querySelector('[data-field="imageAlt"]').oninput = e => { q.imageAlt = e.target.value; markDirty(); };
+    // Image picker
+    card.querySelector('[data-field="image-file"]').onchange = e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      if (f.size > 256 * 1024) {
+        showBanner('warn', `Image is too large (${Math.round(f.size/1024)} KB). Max is 256 KB.`);
+        e.target.value = '';
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = ev => {
+        q.image = ev.target.result;
+        markDirty();
+        renderQuestions();
+      };
+      reader.readAsDataURL(f);
+    };
+    card.querySelector('[data-action="image-remove"]').onclick = () => {
+      q.image = '';
+      markDirty();
+      renderQuestions();
+    };
+    card.querySelector('[data-action="delete"]').onclick = () => {
+      arr.splice(idx, 1); markDirty(); renderQuestions();
+    };
+    card.querySelector('[data-action="up"]').onclick = () => {
+      if (idx === 0) return;
+      [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
+      markDirty(); renderQuestions();
+    };
+    card.querySelector('[data-action="down"]').onclick = () => {
+      if (idx === arr.length - 1) return;
+      [arr[idx+1], arr[idx]] = [arr[idx], arr[idx+1]];
+      markDirty(); renderQuestions();
+    };
+
+    // Drag-and-drop
+    card.addEventListener('dragstart', e => {
+      card.classList.add('dragging');
+      e.dataTransfer.setData('text/plain', JSON.stringify({ kind, idx }));
+    });
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dragover', e => e.preventDefault());
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      const src = JSON.parse(e.dataTransfer.getData('text/plain'));
+      if (src.kind !== kind) return; // no cross-list drops
+      const item = arr.splice(src.idx, 1)[0];
+      arr.splice(idx, 0, item);
+      markDirty(); renderQuestions();
+    });
+
+    target.appendChild(card);
+  });
+}
+
+function markDirty() {
+  dirty = true;
+  document.getElementById('dirtyDot').style.display = 'inline';
+  document.getElementById('saveQuestionsBtn').disabled = false;
+}
+
+document.getElementById('addMainBtn').onclick = () => {
+  questions.push({ q: 'New question…', options: ['', '', '', ''], correct: 0, lesson: '' });
+  markDirty(); renderQuestions();
+};
+document.getElementById('addBonusBtn').onclick = () => {
+  bonusQuestions.push({ q: 'New tiebreaker question…', options: ['', '', '', ''], correct: 0, lesson: '' });
+  markDirty(); renderQuestions();
+};
+document.getElementById('saveQuestionsBtn').onclick = () => {
+  adminAction('questions:update', { main: questions, bonus: bonusQuestions });
+};
+document.getElementById('resetDefaultsBtn').onclick = () => {
+  confirmAction('Load sample questions?', 'This will replace the current bank with the included 10 main + 5 bonus phishing sample questions. Useful for trying the app or for cybersecurity training.', () => {
+    adminAction('questions:reset-defaults');
+  });
+};
+
+/* =====================
+   SAMPLE PACKS BROWSER
+   ===================== */
+let _packsDetach = null;
+function openPacksModal() {
+  const modal = document.getElementById('packsModal');
+  modal.classList.add('active');
+  document.getElementById('packsSource').textContent = 'Fetching catalogue…';
+  document.getElementById('packsBody').innerHTML = '<div class="muted" style="padding:24px;text-align:center;font-style:italic">Loading…</div>';
+  adminAction('samples:list');
+  if (_packsDetach) _packsDetach();
+  _packsDetach = trapModal(modal, { onEscape: closePacksModal });
+}
+function closePacksModal() {
+  document.getElementById('packsModal').classList.remove('active');
+  if (_packsDetach) { _packsDetach(); _packsDetach = null; }
+}
+function renderPacksList(packs, sourceUrl) {
+  const body = document.getElementById('packsBody');
+  document.getElementById('packsSource').textContent = 'Source: ' + (sourceUrl || '(unknown)');
+  if (!packs || packs.length === 0) {
+    body.innerHTML = '<div class="muted" style="padding:24px;text-align:center;font-style:italic">No packs in the manifest.</div>';
+    return;
+  }
+  body.innerHTML = '';
+  packs.forEach(p => {
+    const row = document.createElement('div');
+    row.style.cssText = 'background:rgba(2,6,37,.6);border:1px solid var(--gray-line);border-radius:8px;padding:12px 14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start';
+    const count = (p.mainCount ? p.mainCount + ' main' : '?') + (p.bonusCount ? ' + ' + p.bonusCount + ' bonus' : '');
+    row.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <strong style="color:var(--white);font-size:14px">${escapeHtml(p.title)}</strong>
+          ${p.category ? `<span style="background:rgba(244,196,48,.18);color:var(--gold);font-size:10px;padding:2px 8px;border-radius:10px;letter-spacing:.1em;text-transform:uppercase">${escapeHtml(p.category)}</span>` : ''}
+          <span class="muted" style="font-size:11px">${count}</span>
+        </div>
+        ${p.description ? `<div class="muted" style="font-size:12px;line-height:1.4">${escapeHtml(p.description)}</div>` : ''}
+      </div>
+      <button class="btn small primary" data-pack="${escapeHtmlAttr(p.id)}">Load</button>
+    `;
+    body.appendChild(row);
+  });
+  body.querySelectorAll('button[data-pack]').forEach(btn => {
+    btn.onclick = () => {
+      const id = btn.dataset.pack;
+      const pack = packs.find(p => p.id === id);
+      if (!pack) return;
+      confirmAction(
+        'Load "' + (pack.title || id) + '"?',
+        'This replaces the current question bank and updates the quiz title to "' + (pack.title || id) + '". You can switch back from the same browser.',
+        () => adminAction('samples:load', { packId: id })
+      );
+    };
+  });
+}
+document.getElementById('browsePacksBtn').onclick = openPacksModal;
+document.getElementById('exportBtn').onclick = () => {
+  const data = { main: questions, bonus: bonusQuestions, exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'omegaquiz-questions.json';
+  a.click();
+  URL.revokeObjectURL(url);
+};
+document.getElementById('importBtn').onclick = () => {
+  document.getElementById('importFile').click();
+};
+document.getElementById('importCsvBtn').onclick = () => {
+  document.getElementById('importCsvFile').click();
+};
+document.getElementById('importCsvFile').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    // The server does the heavy lifting: parses, validates per row, sanitises,
+    // and replaces both banks. We just ship the file content over WS.
+    adminAction('questions:import-csv', { csv: ev.target.result });
+  };
+  reader.readAsText(f);
+  e.target.value = '';
+};
+document.getElementById('importFile').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!Array.isArray(data.main) || !Array.isArray(data.bonus)) throw new Error('Need {main:[], bonus:[]}');
+      questions = data.main;
+      bonusQuestions = data.bonus;
+      markDirty();
+      renderQuestions();
+      showBanner('info', `Imported ${questions.length} main + ${bonusQuestions.length} bonus questions. Click Save to apply.`);
+    } catch (err) {
+      showBanner('warn', 'Import failed: ' + err.message);
+    }
+    e.target.value = '';
+  };
+  reader.readAsText(f);
+};
+
+/* =====================
+   MODAL
+   ===================== */
+// A11Y: tiny focus-trap helper. Moves focus to the modal, holds Tab inside it,
+// and exits on Esc. Returns a detacher to call when the modal closes.
+function trapModal(modalEl, opts) {
+  opts = opts || {};
+  const previouslyFocused = document.activeElement;
+  function focusables() {
+    return Array.from(modalEl.querySelectorAll(
+      'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);  // only visible
+  }
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      if (opts.onEscape) { e.preventDefault(); opts.onEscape(); }
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const list = focusables();
+    if (list.length === 0) return;
+    const first = list[0], last = list[list.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+  modalEl.addEventListener('keydown', onKey);
+  // Move focus into the modal on the next tick (so the new content has rendered).
+  setTimeout(() => {
+    const initial = opts.initialFocus || focusables()[0];
+    if (initial) initial.focus();
+  }, 0);
+  return function detach() {
+    modalEl.removeEventListener('keydown', onKey);
+    if (previouslyFocused && typeof previouslyFocused.focus === 'function') previouslyFocused.focus();
+  };
+}
+
+let _confirmDetach = null;
+function confirmAction(title, msg, onOk) {
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMsg').textContent = msg;
+  const modal = document.getElementById('confirmModal');
+  modal.classList.add('active');
+  document.getElementById('confirmOk').onclick = () => { closeModal(); onOk(); };
+  if (_confirmDetach) _confirmDetach();
+  _confirmDetach = trapModal(modal, {
+    initialFocus: document.getElementById('confirmOk'),
+    onEscape: closeModal,
+  });
+}
+function closeModal() {
+  document.getElementById('confirmModal').classList.remove('active');
+  if (_confirmDetach) { _confirmDetach(); _confirmDetach = null; }
+}
+
+/* =====================
+   HELPERS
+   ===================== */
+// Idempotent escapes: leave `&` alone when it's already part of a valid HTML
+// entity. Without this, server-sanitised values like `It&#39;s` would render
+// as the literal string `It&#39;s` in the editor instead of `It's`.
+const _ENT = /&(?!(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)|[<>"']/g;
+const _ENT_MAP = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
+function escapeHtml(s){ if (s == null) return ''; return String(s).replace(_ENT, c => _ENT_MAP[c]); }
+function escapeHtmlAttr(s){ if (s == null) return ''; return String(s).replace(_ENT, c => _ENT_MAP[c]); }
+
+// Periodic refresh for disconnect countdown
+setInterval(() => { if (state && state.players && state.players.length) renderSnapshot(); }, 1000);
+
+/* =====================
+   BRANDING TAB
+   ===================== */
+const LOGO_MAX_BYTES = 256 * 1024;
+const THEME_DEFAULTS = {
+  navyDeep:'#020625', navyMid:'#050d3d', navyLight:'#0a1660',
+  gold:'#f4c430', goldBright:'#ffd700', goldDim:'#8a6d10',
+  red:'#c41e3a', green:'#1ea14a', white:'#f5f3e8'
+};
+const THEME_LABELS = {
+  navyDeep:'Background (dark)', navyMid:'Background (mid)', navyLight:'Background (light)',
+  gold:'Accent (primary)', goldBright:'Accent (bright)', goldDim:'Accent (dim)',
+  red:'Danger / wrong', green:'Success / alive', white:'Body text'
+};
+const THEME_KEY_TO_VAR = {
+  navyDeep:'navy-deep', navyMid:'navy-mid', navyLight:'navy-light',
+  gold:'gold', goldBright:'gold-bright', goldDim:'gold-dim',
+  red:'red', green:'green', white:'white'
+};
+let brandingDraft = {
+  companyName:'', companyDomain:'', restrictDomain:false, logoDataUri:'', tagline:'',
+  publicBaseUrl:'', quizTitle:'Omega Quiz', quizCategory:'cyber',
+  levelStyle:'money', theme: { ...THEME_DEFAULTS }
+};
+function applyTheme(theme){
+  if (!theme || typeof theme !== 'object') return;
+  for (const [k, v] of Object.entries(theme)) {
+    const css = THEME_KEY_TO_VAR[k];
+    if (css && /^#[0-9a-f]{6}$/i.test(v)) {
+      document.documentElement.style.setProperty('--' + css, v);
+    }
+  }
+}
+
+async function loadBrandingForm(){
+  try {
+    const r = await fetch('/branding.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    brandingDraft = await r.json();
+    populateBrandingForm();
+  } catch (e) { showBanner('warn', 'Could not load branding: ' + e.message); }
+}
+function populateBrandingForm(){
+  // Ensure shape from server (older config.json might miss new fields).
+  if (!brandingDraft.theme) brandingDraft.theme = { ...THEME_DEFAULTS };
+  if (!brandingDraft.levelStyle) brandingDraft.levelStyle = 'money';
+
+  document.getElementById('brandingNameInput').value = brandingDraft.companyName || '';
+  document.getElementById('brandingDomainInput').value = brandingDraft.companyDomain || '';
+  document.getElementById('brandingTaglineInput').value = brandingDraft.tagline || '';
+  document.getElementById('brandingConsentInput').value = brandingDraft.consentText == null ? '' : brandingDraft.consentText;
+  document.getElementById('brandingPublicUrlInput').value = brandingDraft.publicBaseUrl || '';
+  document.getElementById('brandingRestrictInput').checked = !!brandingDraft.restrictDomain;
+  document.getElementById('brandingShowNamesInput').checked = brandingDraft.showNamesAtEnd !== false; // default true
+  document.getElementById('brandingElimCanAnswerInput').checked = !!brandingDraft.eliminatedCanAnswer;
+  const levelRadios = document.getElementsByName('brandingLevelStyle');
+  levelRadios.forEach(r => { r.checked = (r.value === brandingDraft.levelStyle); });
+  const lockRadios = document.getElementsByName('brandingAnswerLockMode');
+  const lockMode = brandingDraft.answerLockMode === 'confirm' ? 'confirm' : 'quick';
+  lockRadios.forEach(r => { r.checked = (r.value === lockMode); });
+  // Lifeline refill schedule — default 'never' (classic).
+  const refillRadios = document.getElementsByName('brandingLifelineRefill');
+  const refillMode = ['never','each-question','at-bonus'].includes(brandingDraft.lifelineRefill)
+    ? brandingDraft.lifelineRefill : 'never';
+  refillRadios.forEach(r => { r.checked = (r.value === refillMode); });
+  // Session-closed CTA fields (Branding tab).
+  const ctaLabelEl = document.getElementById('brandingClosedCtaLabel');
+  const ctaUrlEl = document.getElementById('brandingClosedCtaUrl');
+  if (ctaLabelEl) ctaLabelEl.value = brandingDraft.closedSessionCtaLabel || '';
+  if (ctaUrlEl) ctaUrlEl.value = brandingDraft.closedSessionCtaUrl || '';
+  // Session Control badge + button visibility.
+  const closed = !!brandingDraft.sessionClosed;
+  const badge = document.getElementById('sessionStatusBadge');
+  if (badge) {
+    if (closed) {
+      badge.textContent = 'Closed';
+      badge.style.background = 'rgba(196,30,58,.18)';
+      badge.style.color = '#fca5a5';
+      badge.style.borderColor = '#c41e3a';
+    } else {
+      badge.textContent = 'Open';
+      badge.style.background = 'rgba(30,161,74,.2)';
+      badge.style.color = '#86efac';
+      badge.style.borderColor = '#1ea14a';
+    }
+  }
+  const closeBtn = document.getElementById('closeSessionBtn');
+  const reopenBtn = document.getElementById('reopenSessionBtn');
+  if (closeBtn)  closeBtn.style.display  = closed ? 'none' : 'inline-block';
+  if (reopenBtn) reopenBtn.style.display = closed ? 'inline-block' : 'none';
+  renderThemeGrid();
+  applyTheme(brandingDraft.theme);
+  const preview = document.getElementById('brandingLogoPreview');
+  const empty = document.getElementById('brandingLogoEmpty');
+  if (brandingDraft.logoDataUri) {
+    preview.src = brandingDraft.logoDataUri;
+    preview.style.display = 'block';
+    empty.style.display = 'none';
+  } else {
+    preview.style.display = 'none';
+    preview.removeAttribute('src');
+    empty.style.display = 'block';
+  }
+  refreshBrandingPreview();
+}
+function refreshBrandingPreview(){
+  const domain = document.getElementById('brandingDomainInput').value.trim().toLowerCase().replace(/^@/, '');
+  document.getElementById('brandingPreview').textContent = 'alex@' + (domain || 'company.com');
+  const name = document.getElementById('brandingNameInput').value.trim();
+  document.getElementById('brandingTitlePreview').textContent = name ? (name + ' Omega Quiz') : 'Who Wants to Be an OmegaQuiz Employee?';
+  let urlPreview = document.getElementById('brandingPublicUrlInput').value.trim();
+  if (urlPreview && !/^https?:\/\//i.test(urlPreview)) {
+    // Mirror the server's protocol heuristic so the preview matches reality.
+    const bare = urlPreview.replace(/:\d+$/, '').toLowerCase();
+    const isLocalish =
+      bare === 'localhost' || bare.endsWith('.local') || bare.endsWith('.localhost') ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(bare) ||
+      bare.startsWith('[') || (bare.includes(':') && !/\.[a-z]{2,}$/.test(bare));
+    urlPreview = (isLocalish ? 'http://' : 'https://') + urlPreview;
+  }
+  if (urlPreview) urlPreview = urlPreview.replace(/\/+$/, '');
+  document.getElementById('brandingUrlPreview').textContent = urlPreview || location.origin + '  (current request — set above to override)';
+  const src = document.getElementById('brandingPublicUrlSource');
+  if (urlPreview) {
+    src.textContent = 'Active source: admin override';
+  } else {
+    src.textContent = 'Active source: PUBLIC_BASE_URL env var, or the request Host header if unset.';
+  }
+}
+['brandingNameInput','brandingDomainInput','brandingTaglineInput','brandingPublicUrlInput'].forEach(id => {
+  document.getElementById(id).addEventListener('input', refreshBrandingPreview);
+});
+document.getElementById('brandingRestrictInput').addEventListener('change', () => {
+  // No preview change but useful to trigger same-flow in future.
+});
+document.getElementById('brandingLogoFile').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  if (f.size > LOGO_MAX_BYTES) {
+    showBanner('warn', `Logo too large (${Math.round(f.size/1024)} KB). Max is ${LOGO_MAX_BYTES/1024} KB.`);
+    e.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = ev => {
+    brandingDraft.logoDataUri = ev.target.result; // data:image/...;base64,...
+    const preview = document.getElementById('brandingLogoPreview');
+    const empty = document.getElementById('brandingLogoEmpty');
+    preview.src = brandingDraft.logoDataUri;
+    preview.style.display = 'block';
+    empty.style.display = 'none';
+  };
+  reader.readAsDataURL(f);
+});
+document.getElementById('brandingRemoveLogo').addEventListener('click', () => {
+  brandingDraft.logoDataUri = '';
+  document.getElementById('brandingLogoFile').value = '';
+  document.getElementById('brandingLogoPreview').style.display = 'none';
+  document.getElementById('brandingLogoEmpty').style.display = 'block';
+});
+document.getElementById('saveBrandingBtn').addEventListener('click', () => {
+  const levelStyleEl = document.querySelector('input[name="brandingLevelStyle"]:checked');
+  const lockModeEl = document.querySelector('input[name="brandingAnswerLockMode"]:checked');
+  const refillEl = document.querySelector('input[name="brandingLifelineRefill"]:checked');
+  const next = {
+    companyName: document.getElementById('brandingNameInput').value,
+    companyDomain: document.getElementById('brandingDomainInput').value,
+    tagline: document.getElementById('brandingTaglineInput').value,
+    consentText: document.getElementById('brandingConsentInput').value,
+    publicBaseUrl: document.getElementById('brandingPublicUrlInput').value,
+    restrictDomain: document.getElementById('brandingRestrictInput').checked,
+    showNamesAtEnd: document.getElementById('brandingShowNamesInput').checked,
+    eliminatedCanAnswer: document.getElementById('brandingElimCanAnswerInput').checked,
+    logoDataUri: brandingDraft.logoDataUri || '',
+    levelStyle: levelStyleEl ? levelStyleEl.value : 'money',
+    answerLockMode: lockModeEl ? lockModeEl.value : 'quick',
+    lifelineRefill: refillEl ? refillEl.value : 'never',
+    quizTitle: brandingDraft.quizTitle || 'Omega Quiz',
+    quizCategory: brandingDraft.quizCategory || 'cyber',
+    closedSessionCtaLabel: document.getElementById('brandingClosedCtaLabel').value,
+    closedSessionCtaUrl: document.getElementById('brandingClosedCtaUrl').value,
+    theme: brandingDraft.theme
+  };
+  adminAction('branding:update', { branding: next });
+});
+
+/* =====================
+   THEME EDITOR
+   ===================== */
+function renderThemeGrid(){
+  const grid = document.getElementById('themeGrid');
+  grid.innerHTML = '';
+  Object.keys(THEME_DEFAULTS).forEach(key => {
+    const cur = brandingDraft.theme[key] || THEME_DEFAULTS[key];
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.2);border:1px solid var(--gray-line);border-radius:6px;padding:8px 10px';
+    row.innerHTML = `
+      <input type="color" data-key="${key}" data-role="picker" value="${cur}" style="width:34px;height:34px;border:none;border-radius:6px;background:transparent;cursor:pointer;padding:0">
+      <div style="flex:1;min-width:0">
+        <div style="color:var(--white);font-size:12px">${THEME_LABELS[key]}</div>
+        <div class="muted" style="font-size:10px">--${THEME_KEY_TO_VAR[key]}</div>
+      </div>
+      <input type="text" data-key="${key}" data-role="hex" value="${cur}" maxlength="7" style="width:78px;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:5px 7px;border-radius:5px;font-family:'Courier New',monospace;font-size:12px;text-align:center;text-transform:lowercase">
+    `;
+    grid.appendChild(row);
+  });
+  // Wire up both inputs to update the draft + live preview.
+  grid.querySelectorAll('[data-role="picker"]').forEach(picker => {
+    picker.addEventListener('input', e => updateThemeKey(e.target.dataset.key, e.target.value));
+  });
+  grid.querySelectorAll('[data-role="hex"]').forEach(hex => {
+    hex.addEventListener('input', e => {
+      const v = e.target.value.trim().toLowerCase();
+      if (/^#[0-9a-f]{6}$/.test(v)) {
+        updateThemeKey(e.target.dataset.key, v);
+        e.target.style.borderColor = 'var(--gray-line)';
+      } else if (v === '' || /^#?[0-9a-f]{0,6}$/.test(v)) {
+        e.target.style.borderColor = '#f59e0b';  // amber: typing in progress
+      } else {
+        e.target.style.borderColor = 'var(--red)';
+      }
+    });
+  });
+}
+function updateThemeKey(key, hex){
+  if (!THEME_KEY_TO_VAR[key]) return;
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return;
+  brandingDraft.theme[key] = hex.toLowerCase();
+  // Sync the matching field so picker ↔ hex stay together.
+  const picker = document.querySelector(`[data-role="picker"][data-key="${key}"]`);
+  const hexInp = document.querySelector(`[data-role="hex"][data-key="${key}"]`);
+  if (picker && picker.value !== hex) picker.value = hex;
+  if (hexInp && hexInp.value !== hex) hexInp.value = hex;
+  document.documentElement.style.setProperty('--' + THEME_KEY_TO_VAR[key], hex);
+}
+
+// Reset, export, import buttons
+document.getElementById('themeResetBtn').addEventListener('click', () => {
+  brandingDraft.theme = { ...THEME_DEFAULTS };
+  renderThemeGrid();
+  applyTheme(brandingDraft.theme);
+  showBanner('info', 'Theme reset to defaults (preview only — click Save to persist).');
+});
+document.getElementById('themeExportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(brandingDraft.theme, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'omegaquiz-theme.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('themeImportBtn').addEventListener('click', () => {
+  const panel = document.getElementById('themeImportPanel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+});
+document.getElementById('themeImportCancelBtn').addEventListener('click', () => {
+  document.getElementById('themeImportPanel').style.display = 'none';
+  document.getElementById('themeImportText').value = '';
+  document.getElementById('themeImportStatus').textContent = '';
+});
+document.getElementById('themeImportApplyBtn').addEventListener('click', () => {
+  const text = document.getElementById('themeImportText').value;
+  const status = document.getElementById('themeImportStatus');
+  try {
+    const parsed = parseThemeImport(text);
+    const count = Object.keys(parsed).length;
+    if (count === 0) throw new Error('No recognised colour keys found.');
+    brandingDraft.theme = { ...brandingDraft.theme, ...parsed };
+    renderThemeGrid();
+    applyTheme(brandingDraft.theme);
+    status.style.color = '#86efac';
+    status.textContent = `Applied ${count} colour${count === 1 ? '' : 's'} (preview — click Save to persist).`;
+  } catch (e) {
+    status.style.color = '#fca5a5';
+    status.textContent = 'Import failed: ' + e.message;
+  }
+});
+
+// parseThemeImport: accepts either JSON ({navyDeep:"#...",...}) or CSS-ish
+// (`--navy-deep: #...;`). Returns an object of {camelKey: '#hex'} for keys we
+// recognise. Throws on unparseable input.
+function parseThemeImport(text){
+  text = String(text || '').trim();
+  if (!text) throw new Error('Paste a theme first.');
+  // Try JSON.
+  if (text[0] === '{') {
+    let obj;
+    try { obj = JSON.parse(text); } catch (e) { throw new Error('Invalid JSON: ' + e.message); }
+    const out = {};
+    for (const k of Object.keys(THEME_DEFAULTS)) {
+      const v = obj[k];
+      if (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v.trim())) out[k] = v.trim().toLowerCase();
+    }
+    return out;
+  }
+  // CSS-ish: scan for `--var-name: #hex;` lines (case-insensitive on hex).
+  const out = {};
+  const re = /--([a-z][a-z0-9-]*)\s*:\s*(#[0-9a-fA-F]{3,6})/g;
+  const varToKey = Object.fromEntries(Object.entries(THEME_KEY_TO_VAR).map(([k, v]) => [v, k]));
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const key = varToKey[m[1].toLowerCase()];
+    if (!key) continue;
+    let hex = m[2].toLowerCase();
+    if (hex.length === 4) hex = '#' + hex.slice(1).split('').map(c => c + c).join('');
+    out[key] = hex;
+  }
+  return out;
+}
+
+// Lazy-load the form the first time the Branding tab is opened.
+document.querySelector('.tab[data-tab="branding"]').addEventListener('click', loadBrandingForm, { once: true });
+
+// Server confirms with branding:saved.
+const _origOnOpenMessage = null; // (no-op slot)
+const _origMessageHandler = ws ? ws.onmessage : null;
+function bindBrandingMessages(){
+  if (!ws) { setTimeout(bindBrandingMessages, 200); return; }
+  const prev = ws.onmessage;
+  ws.onmessage = e => {
+    if (prev) prev(e);
+    try {
+      const m = JSON.parse(e.data);
+      if (m.type === 'branding:saved') {
+        brandingDraft = m.branding;
+        populateBrandingForm();
+        showBanner('success', 'Branding saved.');
+      }
+    } catch {}
+  };
+}
+bindBrandingMessages();
+
+// Maintenance: Export & Wipe form. Gates the submit button on a literal
+// "WIPE DATA" confirmation string. Browser handles the file download
+// natively; the server broadcasts data-wipe:done so the dashboard reloads.
+(function wireWipeForm(){
+  const form = document.getElementById('wipeForm');
+  const input = document.getElementById('wipeConfirmInput');
+  const btn = document.getElementById('wipeBtn');
+  if (!form || !input || !btn) return;
+  input.addEventListener('input', () => {
+    btn.disabled = input.value.trim() !== 'WIPE DATA';
+  });
+  form.addEventListener('submit', () => {
+    // Disable to prevent double-submit; the page will reload once the WS
+    // data-wipe:done message arrives (~1.5s after).
+    btn.disabled = true;
+    btn.textContent = 'Wiping…';
+  });
+})();
+</script>
+</body>
+</html>

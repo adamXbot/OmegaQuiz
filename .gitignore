@@ -1,0 +1,10 @@
+node_modules/
+.env
+*.log
+.DS_Store
+data/
+.stress-data/
+package-lock.json
+# Resumable-session state is developer-local. Protocol files
+# (.claude/commands/, CLAUDE.md) stay tracked — only the live state is ignored.
+.claude/state/

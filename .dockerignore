@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+package-lock.json
+.git
+.gitignore
+.env
+.env.*
+.DS_Store
+data/
+test/
+*.md
+Dockerfile
+.dockerignore
+.github/

@@ -1,0 +1,20 @@
+{
+  "name": "omegaquiz",
+  "version": "1.1.0",
+  "description": "Open source realtime quiz for staff training",
+  "main": "server.js",
+  "packageManager": "pnpm@11.0.6",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/security.test.js",
+    "stress": "node test/stress.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "qrcode": "^1.5.4",
+    "ws": "^8.20.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

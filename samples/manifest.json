@@ -1,0 +1,34 @@
+{
+  "$schema": "https://omegaquiz.example.com/schema/manifest.json",
+  "comment": "List of sample question packs. The admin app lists each pack in the 'Browse sample packs' modal, then loads the pack's `url` when an operator picks one. Bundled packs use the bundled:samples/ scheme; hosted manifests can use public https:// pack URLs.",
+  "version": 1,
+  "packs": [
+    {
+      "id": "cyber-phishing",
+      "title": "Omega Quiz",
+      "category": "cyber",
+      "description": "10-question phishing awareness round + 5 tiebreaker questions. The default pack — covers look-alike domains, BEC, smishing, MFA, post-click response.",
+      "url": "bundled:samples/cyber-phishing.json",
+      "questions": 10,
+      "bonus": 5
+    },
+    {
+      "id": "nature-trivia",
+      "title": "Nature Quiz",
+      "category": "nature",
+      "description": "Short illustrative pack about wildlife and ecosystems. Replace with your own once you've forked the repo.",
+      "url": "bundled:samples/nature-trivia.json",
+      "questions": 5,
+      "bonus": 2
+    },
+    {
+      "id": "pop-culture",
+      "title": "Pop Culture Quiz",
+      "category": "pop-culture",
+      "description": "Movies, music, and TV — a lighter-weight pack for team-building events.",
+      "url": "bundled:samples/pop-culture.json",
+      "questions": 5,
+      "bonus": 2
+    }
+  ]
+}

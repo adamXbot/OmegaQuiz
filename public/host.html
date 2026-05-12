@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Host — Who Wants to Be an OmegaQuiz Employee</title>
+<style>
+:root{
+  --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
+  --gold:#f4c430; --gold-bright:#ffd700; --gold-dim:#8a6d10;
+  --red:#c41e3a; --green:#1ea14a; --white:#f5f3e8;
+  --shadow-gold:0 0 30px rgba(244,196,48,.6);
+  --shadow-gold-soft:0 0 15px rgba(244,196,48,.3);
+}
+/* A11Y: honour user motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* A11Y: real outline for keyboard users (survives Windows High Contrast Mode). */
+:focus-visible {
+  outline: 2px solid var(--gold-bright);
+  outline-offset: 2px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:'Georgia','Times New Roman',serif;
+  background:radial-gradient(ellipse at center top, var(--navy-light) 0%, var(--navy-mid) 40%, var(--navy-deep) 100%);
+  color:var(--white);user-select:none;position:relative;
+}
+body::before, body::after{
+  content:'';position:fixed;top:-20%;width:60vw;height:140vh;
+  background:linear-gradient(to bottom, rgba(244,196,48,.08), transparent 70%);
+  pointer-events:none;z-index:0;
+}
+body::before{left:-10%;transform:rotate(15deg)}
+body::after{right:-10%;transform:rotate(-15deg)}
+
+.stage{position:relative;z-index:1;height:100vh;display:grid;grid-template-columns:1fr 320px;gap:24px;padding:24px}
+.main{display:flex;flex-direction:column;justify-content:space-between}
+.side{display:flex;flex-direction:column;gap:16px}
+
+/* HEADER */
+.header{text-align:center;padding:12px 0 8px}
+.title{font-size:clamp(20px,2.4vw,32px);letter-spacing:.18em;color:var(--gold);text-shadow:0 0 12px rgba(244,196,48,.5), 0 2px 0 #000;text-transform:uppercase;font-weight:bold}
+.subtitle{font-size:11px;letter-spacing:.4em;color:#9aa3d4;margin-top:6px;text-transform:uppercase}
+
+/* SURVIVOR COUNTER - the centerpiece */
+.survivor-counter{
+  text-align:center;padding:10px 0 0;
+}
+.counter-label{font-size:11px;letter-spacing:.4em;color:#9aa3d4;text-transform:uppercase;margin-bottom:6px}
+.counter-value{
+  font-size:clamp(48px,7vw,90px);
+  color:var(--gold);
+  font-weight:bold;letter-spacing:.05em;
+  text-shadow:0 0 30px rgba(244,196,48,.7), 0 4px 0 #000;
+  line-height:1;
+  font-family:'Georgia',serif;
+  display:inline-block;
+  transition:all .4s ease;
+}
+.counter-value.flash{animation:flashGold .6s 3}
+@keyframes flashGold{
+  0%,100%{filter:brightness(1)}
+  50%{filter:brightness(1.5);transform:scale(1.05)}
+}
+.counter-meta{font-size:13px;color:#9aa3d4;margin-top:6px;letter-spacing:.15em}
+
+/* QUESTION */
+.question-wrap{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:24px;padding:10px 40px}
+.question-box{
+  width:100%;max-width:1000px;
+  background:linear-gradient(180deg, #0d1a6e 0%, #050b3a 50%, #0d1a6e 100%);
+  border:2px solid var(--gold);border-radius:60px / 50%;
+  padding:28px 60px;text-align:center;
+  box-shadow:0 0 0 4px var(--navy-deep), 0 0 0 5px var(--gold-dim), var(--shadow-gold);
+  min-height:120px;display:flex;align-items:center;justify-content:center;
+}
+.question-text{font-size:clamp(16px,1.8vw,24px);line-height:1.45;text-shadow:0 2px 4px rgba(0,0,0,.6)}
+.question-text .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:2px 8px;border-radius:4px;color:var(--gold-bright)}
+
+.answers{display:grid;grid-template-columns:1fr 1fr;gap:14px 40px;width:100%;max-width:1000px}
+.answer{
+  background:linear-gradient(180deg,#0d1a6e,#050b3a);
+  border:2px solid var(--gold);border-radius:40px / 50%;
+  padding:14px 24px;display:flex;align-items:center;gap:14px;
+  box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold-dim);
+  font-size:clamp(13px,1.3vw,18px);color:var(--white);text-align:left;
+  transition:all .25s ease;
+}
+.answer .letter{color:var(--gold);font-weight:bold;letter-spacing:.1em;min-width:24px}
+.answer.correct{background:linear-gradient(180deg,#16a34a,#0f7a36);border-color:#4ade80;box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px #4ade80, 0 0 35px rgba(34,197,94,.9);animation:flash-green .5s 3}
+.answer.eliminated{opacity:.25;text-decoration:line-through}
+@keyframes flash-green{0%,100%{filter:brightness(1)}50%{filter:brightness(1.5)}}
+
+/* AUDIENCE TALLY BARS — overlaid on the answer pills at reveal */
+.answer{position:relative}
+.audience-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px}
+.audience-row .grp-label{min-width:62px;color:#bdc4eb;letter-spacing:.05em;text-transform:uppercase;font-size:10px}
+.audience-row .grp-label.alive{color:#86efac}
+.audience-row .grp-label.elim{color:#fca5a5}
+.audience-row .bar-bg{flex:1;height:9px;background:rgba(0,0,0,.45);border-radius:5px;overflow:hidden;border:1px solid rgba(244,196,48,.2)}
+.audience-row .bar{height:100%;border-radius:5px;transition:width .9s cubic-bezier(.22,.61,.36,1)}
+.audience-row .bar.alive{background:linear-gradient(90deg,#22c55e,#16a34a);box-shadow:0 0 6px rgba(34,197,94,.5)}
+.audience-row .bar.elim{background:linear-gradient(90deg,#ef4444,#991b1b);box-shadow:0 0 6px rgba(220,38,38,.4)}
+.audience-row .pct{min-width:36px;text-align:right;font-weight:bold;color:var(--gold);font-size:12px}
+.audience-row .pct.zero{opacity:.4}
+.answer.correct .audience-row .grp-label{color:#fff}
+.answer.correct .audience-row .pct{color:#fff}
+
+/* SIDE PANEL */
+.panel{
+  background:linear-gradient(180deg, rgba(5,11,58,.85), rgba(2,6,37,.85));
+  border:2px solid var(--gold-dim);border-radius:12px;
+  padding:14px;box-shadow:inset 0 0 20px rgba(0,0,0,.5);
+}
+.panel-title{text-align:center;color:var(--gold);font-size:10px;letter-spacing:.3em;margin-bottom:10px;text-transform:uppercase}
+.survivors-list{font-size:13px;color:#a8b0d8}
+.survivors-list li{padding:5px 8px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;margin:3px 0;list-style:none}
+.survivors-list li.top{background:linear-gradient(90deg, transparent, rgba(244,196,48,.15), transparent);color:var(--gold)}
+.survivors-list .score{font-size:11px;opacity:.7}
+.empty{color:#666;text-align:center;font-size:12px;padding:10px 0;font-style:italic}
+
+.ladder{padding:8px}
+.rung{display:flex;justify-content:space-between;padding:4px 12px;margin:1px 0;border-radius:14px;font-size:12px;color:#a8b0d8;border:1px solid transparent}
+.rung .num{font-weight:bold;opacity:.6;min-width:22px}
+.rung.milestone{color:var(--white)}
+.rung.milestone .val{color:var(--gold)}
+.rung.current{background:linear-gradient(90deg, transparent, #d97706, transparent);color:#fff;border-color:var(--gold-bright);box-shadow:0 0 12px rgba(255,165,0,.5)}
+.rung.passed{color:var(--green);opacity:.6}
+.rung.passed .val{color:var(--green)}
+
+/* CONTROLS */
+.controls{display:flex;gap:10px;justify-content:center;align-items:center;padding:10px 0;flex-wrap:wrap}
+.btn{
+  background:linear-gradient(180deg,#16258a,#050b3a);
+  border:1px solid var(--gold);color:var(--gold);
+  padding:10px 22px;border-radius:20px;cursor:pointer;
+  font-family:'Georgia',serif;font-size:13px;letter-spacing:.15em;
+  text-transform:uppercase;transition:all .2s;
+}
+.btn:hover{background:linear-gradient(180deg,#2540c4,#0a116e);box-shadow:var(--shadow-gold-soft)}
+.btn.primary{background:linear-gradient(180deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);border-color:var(--white);font-weight:bold}
+.btn.primary:hover{transform:scale(1.03);box-shadow:0 0 25px rgba(244,196,48,.8)}
+.btn.danger{border-color:var(--red);color:var(--red)}
+/* A11Y: disabled state with readable contrast — see player view comment. */
+.btn:disabled{cursor:not-allowed;background:var(--gold-dim);color:var(--navy-deep);box-shadow:none}
+
+/* GAME CONTROL PANEL (right column) */
+#controlPanel .ctl-row{display:flex;gap:8px;flex-wrap:wrap}
+#controlPanel .ctl-row .btn{flex:1 1 auto;min-width:0}
+#controlPanel .ctl-sub{font-size:11px;letter-spacing:.25em;color:var(--gold);text-transform:uppercase;opacity:.85}
+#controlPanel .ctl-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+#controlPanel .ctl-status{margin-top:10px;font-size:12px;color:#bdc4eb;min-height:1.2em;text-align:center}
+.lifeline-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:10px 6px;gap:2px;line-height:1.1;letter-spacing:.08em;
+  text-transform:none;font-size:12px;text-align:center;min-height:78px;
+}
+.lifeline-btn .lifeline-ico{font-size:22px;line-height:1;margin-bottom:3px;font-family:'Courier New',monospace;font-weight:bold}
+.lifeline-btn .lifeline-name{font-weight:bold;letter-spacing:.12em;font-size:12px;color:var(--gold)}
+.lifeline-btn .lifeline-hint{font-size:10px;color:#bdc4eb;letter-spacing:.05em}
+.lifeline-btn.vote-btn{border-style:dashed}
+.lifeline-btn.spent{opacity:.55}
+.lifeline-btn.spent .lifeline-name{text-decoration:line-through}
+
+/* LOBBY OVERLAY */
+.overlay{
+  position:fixed;inset:0;z-index:50;
+  background:radial-gradient(ellipse at center, var(--navy-light), var(--navy-deep) 70%);
+  display:none;flex-direction:column;align-items:center;justify-content:center;
+  gap:30px;padding:40px;text-align:center;
+}
+.overlay.active{display:flex}
+.overlay h1{font-size:clamp(32px,5vw,56px);color:var(--gold);letter-spacing:.08em;text-shadow:0 0 30px rgba(244,196,48,.8), 0 4px 0 #000;text-transform:uppercase;line-height:1.1;max-width:1200px}
+.overlay .tagline{font-size:clamp(14px,1.4vw,18px);color:#bdc4eb;letter-spacing:.2em;text-transform:uppercase;max-width:800px}
+
+.lobby-info{display:grid;grid-template-columns:auto auto;gap:50px;align-items:center;margin-top:10px}
+.qr-wrap{background:var(--navy-deep);border:3px solid var(--gold);border-radius:16px;padding:18px;box-shadow:var(--shadow-gold)}
+.qr-wrap img, .qr-wrap svg{width:280px;height:280px;display:block}
+.join-details{text-align:left}
+.join-code-label{font-size:14px;color:#bdc4eb;letter-spacing:.3em;text-transform:uppercase;margin-bottom:8px}
+.join-code{font-size:90px;color:var(--gold);font-weight:bold;letter-spacing:.15em;text-shadow:0 0 25px rgba(244,196,48,.7),0 4px 0 #000;line-height:1;font-family:'Courier New',monospace}
+.join-url{font-size:14px;color:#9aa3d4;margin-top:14px;font-family:'Courier New',monospace}
+.lobby-joined{margin-top:20px;font-size:18px;color:var(--gold);letter-spacing:.15em}
+.lobby-joined .count{font-size:40px;font-weight:bold;display:inline-block;min-width:60px;text-align:center;margin:0 8px}
+.lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto}
+.lobby-player-chip{background:rgba(244,196,48,.15);border:1px solid var(--gold-dim);color:var(--gold);padding:5px 12px;border-radius:14px;font-size:13px;animation:popIn .3s ease}
+@keyframes popIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+
+/* LIFELINE PANEL */
+.lifeline-panel{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(5,11,58,.97);border:2px solid var(--gold);border-radius:20px;
+  padding:30px 40px;z-index:55;box-shadow:var(--shadow-gold);text-align:center;
+  display:none;min-width:600px;
+}
+.lifeline-panel.active{display:block}
+.lifeline-panel h2{color:var(--gold);font-size:24px;letter-spacing:.15em;text-transform:uppercase;margin-bottom:20px}
+.vote-row{display:grid;grid-template-columns:1fr 80px;gap:14px;align-items:center;margin:10px 0;font-size:18px}
+.vote-row .name{text-align:left;color:var(--white)}
+.vote-row .bar-bg{background:rgba(0,0,0,.3);height:24px;border-radius:12px;overflow:hidden}
+.vote-row .bar{height:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));border-radius:12px;transition:width .4s}
+.vote-row .count{text-align:right;color:var(--gold);font-weight:bold;min-width:40px}
+.vote-cols{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:20px}
+.lifeline-panel .controls{margin-top:20px}
+
+/* ASK IT POPUP */
+.askit-popup{
+  position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(5,11,58,.97);border:2px solid var(--gold);border-radius:16px;
+  padding:24px 30px;z-index:56;box-shadow:var(--shadow-gold);max-width:600px;
+  display:none;
+}
+.askit-popup.active{display:block}
+.askit-popup h3{color:var(--gold);font-size:18px;letter-spacing:.15em;margin-bottom:14px;text-transform:uppercase}
+.askit-popup .hint-text{color:var(--white);font-size:16px;line-height:1.5;margin-bottom:12px}
+.askit-popup .verdict{color:var(--gold-bright);font-size:20px;font-weight:bold;text-align:center;margin-top:12px}
+.askit-popup .close{position:absolute;top:8px;right:14px;background:none;border:none;color:var(--gold);font-size:22px;cursor:pointer}
+
+/* END SCREEN */
+.end-podium{display:flex;flex-direction:column;gap:14px;max-width:700px;width:100%}
+.end-row{display:flex;justify-content:space-between;align-items:center;padding:14px 24px;background:rgba(13,26,110,.6);border:1px solid var(--gold-dim);border-radius:12px}
+.end-row.winner{background:linear-gradient(90deg, rgba(244,196,48,.3), rgba(244,196,48,.1));border-color:var(--gold);box-shadow:var(--shadow-gold-soft)}
+.end-row .pos{color:var(--gold);font-weight:bold;font-size:20px;min-width:40px}
+.end-row .name{font-size:18px;color:var(--white);flex:1;text-align:left;margin-left:14px}
+.end-row .score{color:var(--gold);font-weight:bold}
+
+/* AWARD CEREMONY */
+.ceremony-place-label{
+  color:var(--gold);text-transform:uppercase;letter-spacing:.3em;
+  font-size:clamp(20px,2.4vw,30px);
+  text-shadow:0 0 24px rgba(244,196,48,.5),0 2px 0 #000;
+  margin-bottom:18px;min-height:1.2em;
+  transition:opacity .4s ease;
+}
+.ceremony-current-name{
+  color:var(--white);font-weight:bold;
+  font-size:clamp(48px,7vw,96px);line-height:1.05;
+  text-shadow:0 0 30px rgba(244,196,48,.7),0 4px 0 #000;
+  margin:10px 0;min-height:1.1em;
+  opacity:0;transform:scale(.7);
+  transition:opacity .55s ease, transform .55s cubic-bezier(.22,1.4,.32,1);
+}
+.ceremony-current-name.shown{opacity:1;transform:scale(1)}
+.ceremony-current-name.winner{color:var(--gold-bright);text-shadow:0 0 50px rgba(255,215,0,.8),0 0 12px #fff,0 4px 0 #000;font-size:clamp(56px,9vw,128px)}
+.ceremony-current-score{color:var(--gold);font-size:clamp(16px,1.6vw,22px);letter-spacing:.15em;text-transform:uppercase;min-height:1.2em;opacity:0;transition:opacity .55s ease .2s}
+.ceremony-current-score.shown{opacity:.85}
+.ceremony-stack{
+  display:flex;flex-direction:column-reverse;gap:8px;align-items:center;
+  margin-top:30px;max-width:680px;margin-left:auto;margin-right:auto;
+}
+.ceremony-stack .stack-row{
+  display:grid;grid-template-columns:80px 1fr 100px;gap:14px;align-items:center;
+  width:100%;padding:10px 22px;background:rgba(13,26,110,.55);
+  border:1px solid var(--gold-dim);border-radius:12px;
+  animation:stackIn .5s ease;
+}
+.ceremony-stack .stack-row .pos{color:var(--gold);font-weight:bold;font-size:18px;text-align:left}
+.ceremony-stack .stack-row .name{color:var(--white);font-size:18px;text-align:left}
+.ceremony-stack .stack-row .score{color:var(--gold);text-align:right;font-weight:bold;font-size:15px}
+@keyframes stackIn{
+  from{opacity:0;transform:translateY(-12px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+/* REVIEW MODE (post-game) */
+.review-mode{
+  position:fixed;inset:0;z-index:60;background:rgba(2,6,37,.98);overflow-y:auto;padding:40px;
+  display:none;
+}
+.review-mode.active{display:block}
+.review-mode h1{color:var(--gold);text-align:center;font-size:36px;letter-spacing:.1em;margin-bottom:30px;text-transform:uppercase}
+.review-card{max-width:900px;margin:0 auto 24px;background:rgba(13,26,110,.5);border:2px solid var(--gold);border-radius:16px;padding:24px 30px}
+.review-card .qnum{color:var(--gold);font-size:12px;letter-spacing:.3em;text-transform:uppercase;margin-bottom:8px}
+.review-card .qtext{color:var(--white);font-size:18px;line-height:1.5;margin-bottom:16px}
+.review-card .answer-pill{display:block;padding:8px 14px;margin:6px 0;border-radius:10px;background:rgba(0,0,0,.2);font-size:15px;color:#a8b0d8}
+.review-card .answer-pill.correct{background:rgba(34,197,94,.2);color:#86efac;border-left:3px solid #4ade80}
+.review-card .lesson{margin-top:16px;padding-top:14px;border-top:1px solid var(--gold-dim);color:#bdc4eb;font-style:italic;font-size:14px;line-height:1.6}
+
+.audio-toggle{position:fixed;top:20px;right:20px;z-index:60;background:rgba(5,11,58,.8);border:1px solid var(--gold);color:var(--gold);width:42px;height:42px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px}
+</style>
+</head>
+<body>
+
+<button class="audio-toggle" id="audioToggle" title="Toggle audio" aria-label="Game sounds are off — click to enable" aria-pressed="false">🔇</button>
+
+<!-- LOBBY -->
+<div class="overlay active" id="lobbyScreen">
+  <img id="brandLogo" alt="" style="max-height:80px;max-width:240px;margin-bottom:6px;display:none">
+  <div class="subtitle" id="brandSubtitle">All Staff Cybersecurity Training</div>
+  <h1 id="brandTitle">Who Wants to Be a<br>OmegaQuiz Employee?</h1>
+  <div class="tagline">Scan the QR code or visit the URL below to join</div>
+  <div class="lobby-info">
+    <div class="qr-wrap"><img src="/qr" alt="Join QR" id="qrImg"></div>
+    <div class="join-details">
+      <div class="join-code-label">Join Code</div>
+      <div class="join-code" id="joinCode">----</div>
+      <div class="join-url" id="joinUrl"></div>
+    </div>
+  </div>
+  <div class="lobby-joined"><span class="count" id="lobbyCount">0</span> players joined</div>
+  <div class="lobby-players" id="lobbyPlayers"></div>
+  <div class="controls">
+    <button class="btn primary" id="startBtn">Start Game →</button>
+  </div>
+</div>
+
+<!-- END SCREEN -->
+<div class="overlay" id="endScreen">
+  <!-- CEREMONY VIEW (interactive top-5 reveal) -->
+  <div id="ceremonyView" style="display:none;width:100%;max-width:1100px;text-align:center">
+    <div class="ceremony-place-label" id="ceremonyPlaceLabel" aria-live="polite">And the top 5 are…</div>
+    <div class="ceremony-current-name" id="ceremonyCurrentName">&nbsp;</div>
+    <div class="ceremony-current-score" id="ceremonyCurrentScore">&nbsp;</div>
+    <div class="ceremony-stack" id="ceremonyStack"></div>
+    <div class="controls" style="margin-top:36px">
+      <button class="btn primary" id="ceremonyNextBtn">Begin Ceremony →</button>
+      <button class="btn ghost" id="ceremonySkipBtn">Skip to full results</button>
+    </div>
+  </div>
+
+  <!-- FULL RESULTS PODIUM (after ceremony, or shown immediately if names are hidden) -->
+  <div id="podiumView" style="display:none;width:100%;max-width:900px;text-align:center">
+    <div class="subtitle">Game Over</div>
+    <h1 id="endTitle">Results</h1>
+    <div class="end-podium" id="endPodium"></div>
+    <div class="controls" style="margin-top:20px">
+      <button class="btn primary" id="reviewBtn">Review Lessons</button>
+      <button class="btn danger" id="resetGameBtn">Reset (New Game)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confetti canvas — fixed full-screen overlay, transparent, no pointer events. -->
+<canvas id="confettiCanvas" style="position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:9999;display:none"></canvas>
+
+<!-- REVIEW MODE -->
+<div class="review-mode" id="reviewMode">
+  <h1>What We Learned</h1>
+  <div id="reviewContent"></div>
+  <div style="text-align:center;margin-top:30px">
+    <button class="btn primary" id="reviewBackBtn">← Back to Results</button>
+  </div>
+</div>
+
+<!-- MAIN GAME STAGE -->
+<div class="stage" id="gameStage" style="display:none">
+  <div class="main">
+    <div class="header">
+      <div class="title">Phishing Edition</div>
+      <div class="subtitle" id="questionLabel">Question 1 of 10</div>
+    </div>
+
+    <div class="survivor-counter">
+      <div class="counter-label">Still in the Running</div>
+      <div class="counter-value" id="survivorCount">0</div>
+      <div class="counter-meta" id="answeredMeta">0 / 0 answered</div>
+    </div>
+
+    <div class="question-wrap">
+      <img id="questionImage" alt="" style="display:none;max-width:min(700px,80vw);max-height:36vh;object-fit:contain;border-radius:12px;background:rgba(0,0,0,.25);box-shadow:0 0 0 2px var(--gold-dim),0 8px 24px rgba(0,0,0,.5)">
+      <div class="question-box"><div class="question-text" id="questionText">…</div></div>
+      <div class="answers" id="answersGrid"></div>
+    </div>
+
+    <!-- Stage controls deliberately empty — see the right-hand "Game Control"
+         panel for lifelines + Close/Next. Keeping the wrapper preserves the
+         vertical rhythm of the main column. -->
+    <div class="controls" aria-hidden="true"></div>
+  </div>
+
+  <div class="side">
+    <!-- GAME CONTROL — operator buttons live here so they're clear of the
+         projected visual area. Per-lifeline buttons let the host apply each
+         lifeline directly; the Vote button still opens a player-vote panel. -->
+    <div class="panel" id="controlPanel" style="display:none">
+      <div class="panel-title">Game Control</div>
+      <div class="ctl-row" id="ctlPhaseRow">
+        <button class="btn primary" id="closeBtn">Close &amp; Reveal</button>
+        <button class="btn primary" id="nextBtn" style="display:none">Next Question →</button>
+      </div>
+      <div class="ctl-sub" id="ctlLifelinesLabel" style="margin-top:10px">Lifelines</div>
+      <div class="ctl-grid" id="ctlLifelines">
+        <button class="btn lifeline-btn" id="ll5050" data-lifeline="5050"
+          aria-label="50/50 — remove two wrong answers">
+          <span class="lifeline-ico" aria-hidden="true">½:½</span>
+          <span class="lifeline-name">50/50</span>
+          <span class="lifeline-hint">Drop two wrong</span>
+        </button>
+        <button class="btn lifeline-btn" id="llaskit" data-lifeline="askit"
+          aria-label="Ask IT — show a hint pop-up">
+          <span class="lifeline-ico" aria-hidden="true">📞</span>
+          <span class="lifeline-name">Ask IT</span>
+          <span class="lifeline-hint">Show hint</span>
+        </button>
+        <button class="btn lifeline-btn" id="llskip" data-lifeline="skip"
+          aria-label="Skip — reveal the answer without scoring">
+          <span class="lifeline-ico" aria-hidden="true">⏭️</span>
+          <span class="lifeline-name">Skip</span>
+          <span class="lifeline-hint">Pass &amp; reveal</span>
+        </button>
+        <button class="btn lifeline-btn vote-btn" id="lifelineBtn"
+          aria-label="Open lifeline vote — let players vote on which to use">
+          <span class="lifeline-ico" aria-hidden="true">🗳️</span>
+          <span class="lifeline-name">Player Vote</span>
+          <span class="lifeline-hint">Crowd-decide</span>
+        </button>
+      </div>
+      <div class="ctl-status" id="ctlStatus" aria-live="polite"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Top 5 Survivors</div>
+      <ul class="survivors-list" id="survivorsList"><li class="empty">—</li></ul>
+    </div>
+    <div class="panel ladder" id="ladder">
+      <div class="panel-title">Prize Ladder</div>
+    </div>
+  </div>
+</div>
+
+<!-- LIFELINE VOTE PANEL -->
+<div class="lifeline-panel" id="lifelinePanel">
+  <h2>Lifeline Vote</h2>
+  <div class="vote-cols" id="voteBars"></div>
+  <div style="color:#bdc4eb;font-size:13px;margin-bottom:14px">Players vote on their phones. Host applies winner.</div>
+  <div class="controls">
+    <button class="btn primary" id="applyVoteBtn">Apply Winner</button>
+    <button class="btn" id="cancelVoteBtn">Cancel</button>
+  </div>
+</div>
+
+<!-- ASK IT POPUP -->
+<div class="askit-popup" id="askitPopup">
+  <button class="close" id="askitCloseBtn">×</button>
+  <h3>📞 Ask IT Says…</h3>
+  <div class="hint-text" id="askitHint"></div>
+  <div class="verdict" id="askitVerdict"></div>
+</div>
+
+<script nonce="__CSP_NONCE__">
+/* =====================
+   STATE & WEBSOCKET
+   ===================== */
+// Auth happens server-side via the session cookie before this page is served.
+// The cookie is httpOnly + SameSite=Strict and rides along with the WS upgrade.
+let state = null;
+let ws = null;
+let audioOn = false;
+let prevSurvivors = null;
+
+// Branding: fetch on load + on `branding:updated` push.
+// Drives company name/logo/tagline, the colour theme (CSS vars), AND the
+// prize-ladder style (money vs. plain "Level N").
+const THEME_KEY_TO_VAR = {
+  navyDeep:'navy-deep', navyMid:'navy-mid', navyLight:'navy-light',
+  gold:'gold', goldBright:'gold-bright', goldDim:'gold-dim',
+  red:'red', green:'green', white:'white'
+};
+function applyTheme(theme){
+  if (!theme || typeof theme !== 'object') return;
+  for (const [k, v] of Object.entries(theme)) {
+    const css = THEME_KEY_TO_VAR[k];
+    if (css && /^#[0-9a-f]{6}$/i.test(v)) {
+      document.documentElement.style.setProperty('--' + css, v);
+    }
+  }
+}
+// Default prize ladder (replaced when branding loads).
+let prizes = ["$100","$200","$500","$1,000","$2,500","$5,000","$10,000","$25,000","$100,000","$1,000,000"];
+let levelStyle = 'money';
+let showNamesAtEnd = true; // toggle from branding, drives the end-of-game ceremony
+function makePrizes(style, count){
+  count = count || 10;
+  if (style === 'levels') return Array.from({ length: count }, (_, i) => 'Level ' + (i + 1));
+  const money = ["$100","$200","$500","$1,000","$2,500","$5,000","$10,000","$25,000","$100,000","$1,000,000"];
+  // If we somehow have more than 10 questions, fall back to "Question N" past the array.
+  return Array.from({ length: count }, (_, i) => money[i] || ('Question ' + (i + 1)));
+}
+
+async function applyBranding(){
+  try {
+    const r = await fetch('/branding.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const b = await r.json();
+    const titleEl = document.getElementById('brandTitle');
+    const subEl   = document.getElementById('brandSubtitle');
+    const logoEl  = document.getElementById('brandLogo');
+    hostBrandTitle = b.quizTitle || 'Omega Quiz';
+    hostBrandCompany = b.companyName || '';
+    if (hostBrandCompany) titleEl.innerHTML = hostBrandCompany + '<br>' + hostBrandTitle;
+    else                  titleEl.innerHTML = hostBrandTitle;
+    if (b.tagline) subEl.textContent = b.tagline;
+    if (state) updatePageTitle(state); else document.title = (hostBrandCompany ? hostBrandCompany + ' — ' : '') + hostBrandTitle + ' (Host)';
+    if (b.logoDataUri) {
+      logoEl.src = b.logoDataUri;
+      // A11Y: when companyName is set, the title text duplicates the logo so
+      // leave alt empty (decorative). Otherwise the logo is the brand identity
+      // and gets a real alt.
+      logoEl.alt = b.companyName ? '' : ((b.quizTitle || 'Omega Quiz') + ' logo');
+      logoEl.style.display = 'block';
+    } else {
+      logoEl.style.display = 'none';
+      logoEl.removeAttribute('src');
+      logoEl.alt = '';
+    }
+    applyTheme(b.theme);
+    levelStyle = (b.levelStyle === 'levels') ? 'levels' : 'money';
+    showNamesAtEnd = b.showNamesAtEnd !== false;  // default true if unset
+    sessionClosed  = !!b.sessionClosed;
+    applySessionClosedBanner();
+    const count = (state && state.totalQuestions) || 10;
+    prizes = makePrizes(levelStyle, count);
+    // Re-render whatever's currently visible so the ladder/labels pick up the change.
+    if (state) render();
+  } catch (e) { /* offline / fetch error — leave defaults */ }
+}
+
+// Host-side "session closed" pill, shown above the lobby/end overlay when the
+// admin has flipped the storefront to closed. The host can still see live
+// state — the panel is informational, not blocking.
+let sessionClosed = false;
+function applySessionClosedBanner() {
+  let b = document.getElementById('sessionClosedHost');
+  if (!sessionClosed) { if (b) b.remove(); return; }
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'sessionClosedHost';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(196,30,58,.92);color:#fff;padding:8px 22px;border-radius:20px;z-index:80;font-size:13px;letter-spacing:.1em;text-transform:uppercase;box-shadow:0 4px 14px rgba(0,0,0,.45)';
+    b.textContent = 'Session closed — admin can reopen';
+    document.body.appendChild(b);
+  }
+}
+applyBranding();
+
+// U1: WS auto-reconnect with exponential backoff. After the cap is reached we
+// surface a manual "Reconnect" button + a recovery-token link so the operator
+// knows the projector is stuck rather than just spinning silently.
+const RECONNECT_BASE_MS = 1500;
+const RECONNECT_MAX_MS  = 30_000;
+const RECONNECT_MAX_TRIES = 10;
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+// Set by `server:shutdown {final:true}` — pins the banner and stops the
+// reconnect loop until the operator reloads. Admin-initiated shutdowns set it;
+// PaaS SIGTERM / admin restart leave it false so the loop keeps trying.
+let finalShutdown = false;
+function scheduleReconnect(){
+  if (finalShutdown) return;
+  if (reconnectTimer) return;
+  if (reconnectAttempt >= RECONNECT_MAX_TRIES) {
+    showReconnectPrompt();
+    return;
+  }
+  reconnectAttempt++;
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.6, reconnectAttempt - 1), RECONNECT_MAX_MS);
+  showShutdownBanner(`Reconnecting in ${Math.round(delay/1000)}s… (attempt ${reconnectAttempt}/${RECONNECT_MAX_TRIES})`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
+}
+function showReconnectPrompt(){
+  let b = document.getElementById('shutdownBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'shutdownBanner';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(196,30,58,.95);color:#fff;padding:14px 24px;border-radius:20px;z-index:120;font-size:14px;letter-spacing:.05em;box-shadow:0 4px 18px rgba(0,0,0,.5);display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center';
+    document.body.appendChild(b);
+  }
+  b.innerHTML = '<span>Lost connection. Server may be down.</span>'
+    + '<button type="button" id="manualReconnectBtn" style="background:#fff;color:#991b1b;border:none;padding:6px 14px;border-radius:14px;font-weight:bold;cursor:pointer;font-family:inherit">Reconnect</button>'
+    + '<a href="/auth/login?role=host" style="color:#fff;text-decoration:underline;font-size:13px">Sign in again</a>';
+  const btn = document.getElementById('manualReconnectBtn');
+  if (btn) btn.onclick = () => {
+    reconnectAttempt = 0;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    connect();
+  };
+}
+
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}`);
+  ws.onopen = () => {
+    reconnectAttempt = 0;
+    ws.send(JSON.stringify({ type: 'host:hello' }));
+  };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'host:state') {
+      state = msg.state;
+      clearShutdownBanner();
+      render();
+    } else if (msg.type === 'lifeline:askit') {
+      showAskItPopup(msg.hint, msg.correctLetter);
+    } else if (msg.type === 'lifeline:skip') {
+      sfx('lifeline');
+    } else if (msg.type === 'error') {
+      alert(msg.error);
+    } else if (msg.type === 'branding:updated') {
+      applyBranding();
+    } else if (msg.type === 'server:shutdown') {
+      // Server is rolling — show a banner so operators don't think their
+      // network broke. If final=true (admin pressed Shutdown), stop the
+      // auto-reconnect loop and show a terminal message. Otherwise (PaaS
+      // SIGTERM, admin Restart) keep retrying — the process is coming back.
+      if (msg.final) {
+        finalShutdown = true;
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        showShutdownBanner(msg.message || 'Session ended.');
+      } else {
+        showShutdownBanner(msg.message || 'Server is restarting — reconnecting…');
+      }
+    }
+  };
+  ws.onclose = scheduleReconnect;
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
+// Sticky toast shown when the server is restarting. Removed by render() on
+// the next successful state push.
+function showShutdownBanner(text){
+  let b = document.getElementById('shutdownBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'shutdownBanner';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);background:rgba(196,30,58,.95);color:#fff;padding:10px 22px;border-radius:20px;z-index:120;font-size:14px;letter-spacing:.05em;box-shadow:0 4px 18px rgba(0,0,0,.5)';
+    document.body.appendChild(b);
+  }
+  b.textContent = text;
+}
+function clearShutdownBanner(){ const b = document.getElementById('shutdownBanner'); if (b) b.remove(); }
+connect();
+
+function hostAction(action, payload){
+  ws.send(JSON.stringify({ type: 'host:action', action, payload: payload || {} }));
+}
+
+// S3: button bindings replace inline onclick= attributes (CSP nonce policy
+// covers <script> blocks but not inline event handlers).
+function bindHostButtons(){
+  const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
+  wire('reviewBtn',     () => showReview());
+  wire('resetGameBtn',  () => hostAction('reset-game'));
+  wire('reviewBackBtn', () => hideReview());
+  wire('closeBtn',      () => hostAction('close-question'));
+  wire('nextBtn',       () => hostAction('next-question'));
+  wire('lifelineBtn',   () => hostAction('open-lifeline-vote'));
+  wire('cancelVoteBtn', () => hostAction('cancel-lifeline-vote'));
+  wire('askitCloseBtn', () => document.getElementById('askitPopup').classList.remove('active'));
+  document.querySelectorAll('[data-lifeline]').forEach(btn => {
+    btn.addEventListener('click', () => hostAction('apply-lifeline', { type: btn.dataset.lifeline }));
+  });
+}
+bindHostButtons();
+
+/* =====================
+   RENDER
+   ===================== */
+// prizes is populated by applyBranding() based on `levelStyle`. The defaults
+// declared earlier (above applyBranding) match this list so first render works
+// even before /branding.json resolves.
+const milestones = [4, 9];
+
+// A11Y / UX: tab title reflects game phase + question for multi-tab operators.
+let hostBrandTitle = 'Omega Quiz';
+let hostBrandCompany = '';
+function updatePageTitle(s) {
+  const base = hostBrandCompany ? (hostBrandCompany + ' — ') : '';
+  let prefix = '';
+  if (!s) prefix = '';
+  else if (s.phase === 'lobby')    prefix = `Lobby (${s.playerCount} joined) — `;
+  else if (s.phase === 'question') prefix = (s.inBonus ? `Tiebreaker ${(s.bonusIndex||0)+1} — ` : `Q${s.questionIndex+1} of ${s.totalQuestions} (${s.aliveCount} alive) — `);
+  else if (s.phase === 'reveal')   prefix = (s.inBonus ? `Tiebreaker reveal — ` : `Reveal Q${s.questionIndex+1} — `);
+  else if (s.phase === 'end')      prefix = 'Game over — ';
+  document.title = prefix + base + hostBrandTitle + ' (Host)';
+}
+
+// Track previous phase so we can emit "phase-entered" sfx on the host
+// projector (the reveal whoosh, the end-game fanfare etc.).
+let prevPhase = null;
+function render(){
+  if (!state) return;
+  updatePageTitle(state);
+  // Phase transition cleanup: when the game moves away from 'end' (e.g. via
+  // Reset Game), arm the ceremony to run again next time.
+  if (state.phase !== 'end' && ceremonyInitialized) {
+    ceremonyInitialized = false;
+    ceremony = null;
+    document.getElementById('confettiCanvas').style.display = 'none';
+  }
+
+  // Phase-transition sounds — entering reveal plays a quick "ding", entering
+  // end plays a fanfare. Suppressed on first render so we don't fire on reconnect.
+  if (prevPhase !== null && prevPhase !== state.phase) {
+    if (state.phase === 'reveal') sfx('reveal');
+    else if (state.phase === 'end') sfx('fanfare');
+    else if (state.phase === 'question' && prevPhase === 'lobby') sfx('chime');
+  }
+  prevPhase = state.phase;
+
+  // Lobby
+  if (state.phase === 'lobby'){
+    document.getElementById('lobbyScreen').classList.add('active');
+    document.getElementById('endScreen').classList.remove('active');
+    document.getElementById('gameStage').style.display = 'none';
+    document.getElementById('joinCode').textContent = state.joinCode;
+    document.getElementById('joinUrl').textContent = location.origin + '/?code=' + state.joinCode;
+    document.getElementById('lobbyCount').textContent = state.playerCount;
+    const chips = document.getElementById('lobbyPlayers');
+    chips.innerHTML = '';
+    state.players.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'lobby-player-chip';
+      div.textContent = p.name;
+      chips.appendChild(div);
+    });
+    // Empty-bank guard — show a clear hint instead of letting the host hit a
+    // dead-end Start button. The server also rejects start-game when empty.
+    const startBtn = document.getElementById('startBtn');
+    if (state.totalQuestions === 0) {
+      startBtn.disabled = true;
+      startBtn.textContent = 'No questions loaded yet';
+      startBtn.title = 'Ask the admin to import a CSV or load the sample questions';
+    } else {
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start Game →';
+      startBtn.title = '';
+      startBtn.onclick = () => {
+        if (state.playerCount === 0){ if (!confirm('No players have joined. Start anyway?')) return; }
+        hostAction('start-game');
+      };
+    }
+    return;
+  }
+
+  // End
+  if (state.phase === 'end'){
+    document.getElementById('lobbyScreen').classList.remove('active');
+    document.getElementById('gameStage').style.display = 'none';
+    document.getElementById('endScreen').classList.add('active');
+    handleEndPhase();
+    return;
+  }
+
+  // Game in progress
+  document.getElementById('lobbyScreen').classList.remove('active');
+  document.getElementById('endScreen').classList.remove('active');
+  document.getElementById('gameStage').style.display = 'grid';
+
+  // Question header
+  const labelPrefix = state.inBonus
+    ? `Tiebreaker ${state.bonusIndex + 1}`
+    : `Question ${state.questionIndex + 1} of ${state.totalQuestions}`;
+  // In money mode: "Question 3 of 10  —  Playing for $1,000".
+  // In levels mode: just "Question 3 of 10" (the ladder already shows the level label).
+  const prizeLabel = prizes[state.questionIndex] || '';
+  const suffix = (state.inBonus || levelStyle === 'levels' || !prizeLabel) ? '' : `  —  Playing for ${prizeLabel}`;
+  document.getElementById('questionLabel').textContent = labelPrefix + suffix;
+
+  // Survivor counter
+  const survivorEl = document.getElementById('survivorCount');
+  if (prevSurvivors !== null && prevSurvivors > state.aliveCount){
+    survivorEl.classList.remove('flash');
+    void survivorEl.offsetWidth;
+    survivorEl.classList.add('flash');
+    sfx('drop');
+  }
+  prevSurvivors = state.aliveCount;
+  survivorEl.textContent = state.aliveCount;
+  document.getElementById('answeredMeta').textContent = `${state.answeredCount} / ${state.aliveCount} answered`;
+
+  // Question + answers
+  if (state.currentQuestion){
+    document.getElementById('questionText').innerHTML = state.currentQuestion.q;
+    const qImg = document.getElementById('questionImage');
+    if (state.currentQuestion.image) {
+      qImg.src = state.currentQuestion.image;
+      qImg.alt = state.currentQuestion.imageAlt || ('Image for question ' + (state.questionIndex + 1));
+      qImg.style.display = 'block';
+    } else {
+      qImg.removeAttribute('src'); qImg.alt = ''; qImg.style.display = 'none';
+    }
+    const grid = document.getElementById('answersGrid');
+    grid.innerHTML = '';
+    const letters = ['A','B','C','D'];
+    const tally = state.audienceTally;
+    state.currentQuestion.options.forEach((opt, i) => {
+      const div = document.createElement('div');
+      div.className = 'answer';
+      if (state.eliminatedOptions.includes(i)) div.classList.add('eliminated');
+      if (state.phase === 'reveal' && state.revealedCorrect === i) div.classList.add('correct');
+      let html = `<div style="flex:1;display:flex;flex-direction:column;width:100%">
+        <div style="display:flex;align-items:center;gap:14px"><span class="letter">${letters[i]}:</span><span>${opt}</span></div>`;
+      if (state.phase === 'reveal' && tally && (tally.aliveTotal + tally.elimTotal) > 0) {
+        const aPct = tally.aliveTotal ? Math.round((tally.aliveBars[i] / tally.aliveTotal) * 100) : 0;
+        const ePct = tally.elimTotal ? Math.round((tally.elimBars[i] / tally.elimTotal) * 100) : 0;
+        html += `<div class="audience-row"><span class="grp-label alive">Alive</span><div class="bar-bg"><div class="bar alive" style="width:${aPct}%"></div></div><span class="pct ${aPct===0?'zero':''}">${aPct}%</span></div>`;
+        if (tally.elimTotal > 0) {
+          html += `<div class="audience-row"><span class="grp-label elim">Out</span><div class="bar-bg"><div class="bar elim" style="width:${ePct}%"></div></div><span class="pct ${ePct===0?'zero':''}">${ePct}%</span></div>`;
+        }
+      }
+      html += `</div>`;
+      div.innerHTML = html;
+      grid.appendChild(div);
+    });
+  }
+
+  // Top survivors panel (only show when field is narrowed — ≤ 5 alive after Q3+)
+  const survList = document.getElementById('survivorsList');
+  survList.innerHTML = '';
+  if (state.aliveCount > 0 && state.aliveCount <= 5){
+    state.topSurvivors.forEach((p, i) => {
+      const li = document.createElement('li');
+      li.className = 'top';
+      li.innerHTML = `<span>#${i+1} ${escapeHtml(p.name)}</span><span class="score">${p.score} pts</span>`;
+      survList.appendChild(li);
+    });
+  } else if (state.aliveCount > 5){
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = `${state.aliveCount} still in the running — names revealed in final 5`;
+    survList.appendChild(li);
+  } else {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'No survivors';
+    survList.appendChild(li);
+  }
+
+  // Ladder
+  renderLadder();
+
+  // Game Control panel — visible during question/reveal, hidden in lobby/end.
+  const ctlPanel = document.getElementById('controlPanel');
+  if (state.phase === 'question' || state.phase === 'reveal') {
+    ctlPanel.style.display = 'block';
+  } else {
+    ctlPanel.style.display = 'none';
+  }
+  document.getElementById('closeBtn').style.display = state.phase === 'question' ? 'inline-block' : 'none';
+  document.getElementById('nextBtn').style.display = state.phase === 'reveal' ? 'inline-block' : 'none';
+
+  // Lifeline buttons: per-type state. A button is "spent" if its type is used.
+  // All buttons get disabled during reveal (no point applying mid-reveal) and
+  // while a vote is in flight (to avoid double-apply).
+  const lifelinesUsed = state.lifelinesUsed || {};
+  const types = ['5050','askit','skip'];
+  const allSpent = types.every(t => lifelinesUsed[t]);
+  // Original hint text for each button — re-applied when the lifeline refills.
+  const hintMap = { '5050':'Drop two wrong', 'askit':'Show hint', 'skip':'Pass & reveal' };
+  types.forEach(t => {
+    const btn = document.getElementById('ll' + t);
+    if (!btn) return;
+    const spent = !!lifelinesUsed[t];
+    btn.disabled = spent || state.phase !== 'question' || !!state.lifelineActive;
+    btn.classList.toggle('spent', spent);
+    btn.querySelector('.lifeline-hint').textContent = spent ? 'Used' : hintMap[t];
+  });
+  const voteBtn = document.getElementById('lifelineBtn');
+  voteBtn.disabled = allSpent || state.phase !== 'question' || !!state.lifelineActive;
+  voteBtn.classList.toggle('spent', allSpent);
+  voteBtn.querySelector('.lifeline-hint').textContent = allSpent ? 'All used' : 'Crowd-decide';
+
+  // Status line — quick at-a-glance view of what's available.
+  const remaining = types.filter(t => !lifelinesUsed[t]);
+  const labelMap = { '5050':'50/50', askit:'Ask IT', skip:'Skip' };
+  document.getElementById('ctlStatus').textContent = allSpent
+    ? 'All lifelines used'
+    : ('Available: ' + remaining.map(t => labelMap[t]).join(' • '));
+
+  // Lifeline panel
+  const lp = document.getElementById('lifelinePanel');
+  if (state.lifelineActive){
+    lp.classList.add('active');
+    renderVoteBars(state.lifelineActive.voteCounts);
+  } else {
+    lp.classList.remove('active');
+  }
+}
+
+function renderLadder(){
+  const ladder = document.getElementById('ladder');
+  ladder.innerHTML = '<div class="panel-title">' + (levelStyle === 'levels' ? 'Levels' : 'Prize Ladder') + '</div>';
+  if (state.inBonus){
+    const note = document.createElement('div');
+    note.style.textAlign = 'center';
+    note.style.color = '#f4c430';
+    note.style.padding = '20px';
+    note.innerHTML = `<div style="font-size:14px;letter-spacing:.2em">TIEBREAKER</div><div style="font-size:28px;margin-top:8px">SUDDEN DEATH</div>`;
+    ladder.appendChild(note);
+    return;
+  }
+  for (let i = prizes.length - 1; i >= 0; i--){
+    const rung = document.createElement('div');
+    rung.className = 'rung';
+    if (milestones.includes(i)) rung.classList.add('milestone');
+    if (i < state.questionIndex) rung.classList.add('passed');
+    if (i === state.questionIndex) rung.classList.add('current');
+    rung.innerHTML = `<span class="num">${i+1}</span><span class="val">${prizes[i]}</span>`;
+    ladder.appendChild(rung);
+  }
+}
+
+function renderVoteBars(counts){
+  const container = document.getElementById('voteBars');
+  const used = (state && state.lifelinesUsed) || {};
+  const items = [
+    { key: '5050', icon: '½:½', label: '50:50 — remove two wrong answers' },
+    { key: 'askit', icon: '📞', label: 'Ask IT — get a hint' },
+    { key: 'skip', icon: '⏭️', label: 'Skip — pass this question' }
+  ].filter(item => !used[item.key]);  // hide types that are already spent
+  const total = Math.max(1, items.reduce((n, it) => n + (counts[it.key]||0), 0));
+  container.innerHTML = '';
+  items.forEach(item => {
+    const c = counts[item.key] || 0;
+    const pct = Math.round((c / total) * 100);
+    const row = document.createElement('div');
+    row.className = 'vote-row';
+    row.innerHTML = `
+      <div>
+        <div class="name"><span aria-hidden="true" style="font-family:monospace;margin-right:8px">${item.icon}</span>${item.label}</div>
+        <div class="bar-bg"><div class="bar" style="width:${pct}%"></div></div>
+      </div>
+      <div class="count">${c}</div>
+    `;
+    container.appendChild(row);
+  });
+  document.getElementById('applyVoteBtn').onclick = () => {
+    // Pick the highest-vote *still-available* lifeline. Tiebreak: 5050 > askit > skip.
+    const order = items.map(it => it.key);
+    if (order.length === 0) return;
+    let best = order[0], max = -1;
+    order.forEach(k => { if ((counts[k]||0) > max){ max = counts[k]||0; best = k; } });
+    hostAction('apply-lifeline', { type: best });
+  };
+}
+
+function showAskItPopup(hint, letter){
+  document.getElementById('askitHint').textContent = hint;
+  document.getElementById('askitVerdict').textContent = `IT recommends answer ${letter}`;
+  document.getElementById('askitPopup').classList.add('active');
+  sfx('lifeline');
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* =====================
+   REVIEW MODE
+   ===================== */
+async function showReview(){
+  document.getElementById('endScreen').classList.remove('active');
+  document.getElementById('reviewMode').classList.add('active');
+  const data = await (await fetch('/lessons.json')).json();
+  const content = document.getElementById('reviewContent');
+  content.innerHTML = '';
+  data.main.forEach((q, i) => content.appendChild(reviewCard(i+1, q)));
+}
+function hideReview(){
+  document.getElementById('reviewMode').classList.remove('active');
+  document.getElementById('endScreen').classList.add('active');
+}
+function reviewCard(num, q){
+  const div = document.createElement('div');
+  div.className = 'review-card';
+  const letters = ['A','B','C','D'];
+  let answersHtml = q.options.map((o, i) =>
+    `<div class="answer-pill ${i===q.correct?'correct':''}"><strong>${letters[i]}.</strong> ${o}${i===q.correct?' ✓':''}</div>`
+  ).join('');
+  div.innerHTML = `<div class="qnum">Question ${num}</div><div class="qtext">${q.q}</div>${answersHtml}<div class="lesson">${q.lesson}</div>`;
+  return div;
+}
+
+/* =====================
+   AUDIO
+   ===================== */
+// AudioContext can only be created/resumed in response to a user gesture.
+// Browsers (Chrome especially) start the context in 'suspended' state until
+// the operator clicks something — see https://goo.gl/7K7WLu. We make
+// ensureAudio() async and await resume so race conditions can't drop the
+// first sound after enable. Returns true iff the context is running.
+let audioCtx = null;
+async function ensureAudio(){
+  try {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    return audioCtx.state === 'running';
+  } catch (e) { console.warn('Audio init failed:', e); return false; }
+}
+function playTone(freq, dur, type='sine', vol=0.1, delay=0){
+  if (!audioOn || !audioCtx || audioCtx.state !== 'running') return;
+  const t0 = audioCtx.currentTime + delay;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function sfx(name){
+  if (!audioOn) return;
+  // Lazy resume — handles the case where the tab was backgrounded and the
+  // context auto-suspended. Fire-and-forget here is fine; if it lands late,
+  // the next sfx call will play.
+  if (audioCtx && audioCtx.state === 'suspended') { audioCtx.resume().catch(()=>{}); }
+  switch(name){
+    case 'drop':    playTone(180,0.2,'sawtooth',0.1); break;
+    case 'lifeline':playTone(660,0.08,'triangle',0.1); playTone(880,0.12,'triangle',0.1,0.06); break;
+    case 'correct': playTone(523,0.15,'sine',0.15); playTone(659,0.15,'sine',0.15,0.15); playTone(784,0.4,'sine',0.15,0.3); break;
+    case 'wrong':   playTone(220,0.18,'sawtooth',0.12); playTone(180,0.3,'sawtooth',0.1,0.12); break;
+    case 'reveal':  playTone(440,0.1,'triangle',0.12); playTone(660,0.18,'triangle',0.12,0.08); break;
+    case 'chime':   playTone(523,0.1,'sine',0.12); playTone(784,0.18,'sine',0.12,0.08); break;
+    case 'tada':    playTone(523,0.12,'triangle',0.14); playTone(659,0.12,'triangle',0.14,0.12); playTone(784,0.12,'triangle',0.14,0.24); playTone(1046,0.45,'triangle',0.16,0.36); break;
+    case 'fanfare': playTone(392,0.15,'square',0.1); playTone(523,0.15,'square',0.1,0.15); playTone(659,0.3,'square',0.12,0.3); break;
+  }
+}
+// A11Y: keyboard users can close the popups with Escape.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const askit = document.getElementById('askitPopup');
+  if (askit && askit.classList.contains('active')) { askit.classList.remove('active'); return; }
+  const lp = document.getElementById('lifelinePanel');
+  if (lp && lp.classList.contains('active')) { hostAction('cancel-lifeline-vote'); return; }
+});
+document.getElementById('audioToggle').onclick = async () => {
+  audioOn = !audioOn;
+  const btn = document.getElementById('audioToggle');
+  btn.textContent = audioOn ? '🔊' : '🔇';
+  btn.setAttribute('aria-pressed', String(audioOn));
+  btn.setAttribute('aria-label', audioOn ? 'Game sounds are on — click to mute' : 'Game sounds are off — click to enable');
+  if (audioOn) {
+    // Wait for the context to actually be running before firing the
+    // confirmation chime — without this await, the very first toggle is
+    // silent because the context is still in 'suspended' state.
+    const ok = await ensureAudio();
+    if (ok) sfx('chime');
+  }
+};
+
+/* =====================
+   END-OF-GAME CEREMONY
+   ===================== */
+// Track whether we've already initialised the end screen for the current game.
+// Reset when the phase moves back to lobby (Reset Game).
+let ceremonyInitialized = false;
+let ceremony = null;  // { finalists, stage } during ceremony
+
+function handleEndPhase() {
+  if (ceremonyInitialized) return;
+  ceremonyInitialized = true;
+
+  const ceremonyView = document.getElementById('ceremonyView');
+  const podiumView   = document.getElementById('podiumView');
+
+  // Names hidden → skip ceremony entirely; show anonymised podium.
+  if (!showNamesAtEnd) {
+    ceremonyView.style.display = 'none';
+    podiumView.style.display = 'block';
+    showFinalPodium(true);
+    return;
+  }
+  // No survivors / no players → no ceremony either.
+  const ranked = [...state.players].sort((a,b)=>b.score - a.score || a.name.localeCompare(b.name));
+  if (ranked.length === 0) {
+    ceremonyView.style.display = 'none';
+    podiumView.style.display = 'block';
+    showFinalPodium(false);
+    return;
+  }
+  // Top 5 (or fewer if there aren't that many).
+  enterCeremony(ranked.slice(0, 5));
+  ceremonyView.style.display = 'block';
+  podiumView.style.display = 'none';
+}
+
+function enterCeremony(finalists) {
+  ceremony = { finalists, stage: 0 };
+  const N = finalists.length;
+  document.getElementById('ceremonyPlaceLabel').textContent =
+    N === 1 ? 'Our finalist…' :
+    N === 2 ? 'Our top 2…' :
+              `Our top ${N}…`;
+  const nameEl  = document.getElementById('ceremonyCurrentName');
+  const scoreEl = document.getElementById('ceremonyCurrentScore');
+  nameEl.textContent = '';   nameEl.classList.remove('shown','winner');
+  scoreEl.textContent = '';  scoreEl.classList.remove('shown');
+  document.getElementById('ceremonyStack').innerHTML = '';
+  const nextBtn = document.getElementById('ceremonyNextBtn');
+  nextBtn.disabled = false;
+  nextBtn.textContent = N === 1 ? 'Reveal the Winner →' : `Reveal #${N} →`;
+  nextBtn.onclick = advanceCeremony;
+  document.getElementById('ceremonySkipBtn').onclick = skipToFullResults;
+}
+
+function advanceCeremony() {
+  if (!ceremony) return;
+  const { finalists, stage } = ceremony;
+  const N = finalists.length;
+  const newStage = stage + 1;
+  const placeIdx = N - newStage;  // 0 = winner
+
+  if (placeIdx < 0) {
+    skipToFullResults();
+    return;
+  }
+
+  // Move the previously revealed name into the stack so the new reveal has
+  // a clean stage.
+  if (stage > 0) {
+    const prevIdx = N - stage;
+    const prevPerson = finalists[prevIdx];
+    pushOntoStack(prevIdx + 1, prevPerson);
+  }
+
+  const placeNumber = placeIdx + 1;  // 1 = winner
+  const person = finalists[placeIdx];
+
+  const label   = document.getElementById('ceremonyPlaceLabel');
+  const nameEl  = document.getElementById('ceremonyCurrentName');
+  const scoreEl = document.getElementById('ceremonyCurrentScore');
+  nameEl.classList.remove('shown', 'winner');
+  scoreEl.classList.remove('shown');
+  nameEl.textContent = '';
+  scoreEl.textContent = '';
+
+  if (placeNumber === 1) {
+    label.textContent = N === 1 ? 'The finalist is…' : 'And the winner is…';
+  } else {
+    const ordinals = ['', '', '2nd', '3rd', '4th', '5th'];
+    label.textContent = `In ${ordinals[placeNumber] || (placeNumber + 'th')} place…`;
+  }
+  sfx('drop');
+
+  // Small "drumroll" delay then reveal name → score → confetti (winner only).
+  setTimeout(() => {
+    nameEl.textContent = person.name;
+    if (placeNumber === 1) nameEl.classList.add('winner');
+    nameEl.classList.add('shown');
+    setTimeout(() => {
+      scoreEl.textContent = `${person.score} correct`;
+      scoreEl.classList.add('shown');
+    }, 280);
+    if (placeNumber === 1) {
+      fireConfetti();
+      sfx('correct');
+    }
+  }, 550);
+
+  ceremony.stage = newStage;
+  const nextBtn = document.getElementById('ceremonyNextBtn');
+  nextBtn.textContent = placeNumber === 1
+    ? 'Show Full Results →'
+    : `Reveal #${placeIdx} →`;
+}
+
+function pushOntoStack(placeNumber, person) {
+  const stack = document.getElementById('ceremonyStack');
+  const row = document.createElement('div');
+  row.className = 'stack-row';
+  row.innerHTML = `<span class="pos">#${placeNumber}</span><span class="name">${escapeHtml(person.name)}</span><span class="score">${person.score} correct</span>`;
+  stack.appendChild(row);
+}
+
+function skipToFullResults() {
+  ceremony = null;
+  document.getElementById('ceremonyView').style.display = 'none';
+  document.getElementById('podiumView').style.display = 'block';
+  showFinalPodium(false);
+}
+
+function showFinalPodium(anonymise) {
+  const podium = document.getElementById('endPodium');
+  podium.innerHTML = '';
+  const ranked  = [...state.players].sort((a,b)=>b.score - a.score || a.name.localeCompare(b.name));
+  const winners = state.players.filter(p => p.alive);
+  const title = document.getElementById('endTitle');
+  if (winners.length === 0) {
+    title.textContent = 'No survivors!';
+  } else if (anonymise) {
+    title.textContent = winners.length === 1 ? 'We have a winner!' : `${winners.length}-way tie`;
+  } else if (winners.length === 1) {
+    title.textContent = `🏆 ${winners[0].name} Wins! 🏆`;
+  } else {
+    title.textContent = `${winners.length}-way tie!`;
+  }
+  ranked.slice(0, 10).forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'end-row' + (p.alive ? ' winner' : '');
+    const displayName = anonymise
+      ? `Finalist ${i + 1}`
+      : escapeHtml(p.name) + (p.alive ? ' ✓' : '');
+    row.innerHTML = `<span class="pos">#${i+1}</span><span class="name">${displayName}</span><span class="score">${p.score} correct</span>`;
+    podium.appendChild(row);
+  });
+}
+
+/* =====================
+   CONFETTI
+   ===================== */
+let confettiAnimId = null;
+function fireConfetti(durationMs = 5200) {
+  // A11Y: skip motion-heavy effects when the user has expressed a preference.
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const canvas = document.getElementById('confettiCanvas');
+  if (!canvas) return;
+  canvas.style.display = 'block';
+  const dpr = window.devicePixelRatio || 1;
+  const w = window.innerWidth, h = window.innerHeight;
+  canvas.width  = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+
+  const colors = ['#f4c430','#ffd700','#22c55e','#3b82f6','#ef4444','#a855f7','#ec4899','#f97316','#fff'];
+  const particles = [];
+  // Two angled bursts from the bottom corners — classic stage-show feel.
+  [[0.10, 1], [0.90, -1]].forEach(([xRel, dir]) => {
+    const x0 = xRel * w;
+    const y0 = h - 20;
+    for (let i = 0; i < 110; i++) {
+      const baseAngle = -Math.PI / 2 + dir * 0.55;  // angled inward
+      const angle = baseAngle + (Math.random() - 0.5) * 0.7;
+      const speed = 16 + Math.random() * 14;
+      particles.push({
+        x: x0, y: y0,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        gravity: 0.36,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: 6 + Math.random() * 6,
+        angle: Math.random() * Math.PI * 2,
+        angleVel: (Math.random() - 0.5) * 0.45
+      });
+    }
+  });
+
+  const start = Date.now();
+  function tick() {
+    const elapsed = Date.now() - start;
+    if (elapsed > durationMs) {
+      cancelAnimationFrame(confettiAnimId);
+      confettiAnimId = null;
+      ctx.clearRect(0, 0, w, h);
+      canvas.style.display = 'none';
+      return;
+    }
+    ctx.clearRect(0, 0, w, h);
+    const fade = elapsed > durationMs - 900 ? Math.max(0, (durationMs - elapsed) / 900) : 1;
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += p.gravity;
+      p.vx *= 0.992;
+      p.angle += p.angleVel;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size * 0.6);
+      ctx.restore();
+    });
+    confettiAnimId = requestAnimationFrame(tick);
+  }
+  tick();
+}
+</script>
+</body>
+</html>

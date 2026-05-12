@@ -1,0 +1,51 @@
+# Render blueprint — push this repo and click the "Deploy to Render" button in
+# the README, or use the Blueprints menu in your Render dashboard.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: omegaquiz
+    runtime: node
+    plan: free                   # Upgrade to "starter" or higher if you need
+                                 # >50 players or no-sleep behaviour.
+    region: oregon
+    branch: main
+    buildCommand: corepack enable && corepack prepare pnpm@11.0.6 --activate && pnpm install --prod --frozen-lockfile
+    startCommand: node server.js
+    # /health returns 200 only when the server is fully initialised, 503 while
+    # shutting down. Hitting "/" instead returns the player join page which is
+    # always 200 and therefore useless as a readiness signal.
+    healthCheckPath: /health
+    autoDeploy: true
+
+    # Persistent disk for data/config.json and data/questions.json.
+    # Without this, every redeploy clears branding and the question bank.
+    disk:
+      name: omegaquiz-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 3000
+
+      # `sync: false` means "ask the operator at deploy time and store the
+      # secret on Render". The value is never committed to git.
+      - key: HOST_TOKEN
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: COOKIE_SECRET
+        sync: false
+
+      # Optional — leave blank to let the request Host header drive QR / magic
+      # links, or set to your custom domain (e.g. https://quiz.example.com).
+      - key: PUBLIC_BASE_URL
+        sync: false
+
+      # Tell the app where to persist branding config and the question bank.
+      # Must match disk.mountPath.
+      - key: DATA_DIR
+        value: /opt/render/project/src/data

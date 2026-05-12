@@ -1,0 +1,55 @@
+# Fly.io config for omegaquiz.
+#
+# First-time setup:
+#   1. Install flyctl:        curl -L https://fly.io/install.sh | sh
+#   2. Sign in:               fly auth login
+#   3. Launch (skips deploy): fly launch --no-deploy --name omegaquiz --copy-config
+#   4. Create the volume:     fly volumes create omegaquiz_data --region <your-region> --size 1
+#   5. Set secrets:           fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
+#   6. Set the public URL:    fly secrets set PUBLIC_BASE_URL=https://omegaquiz.fly.dev
+#   7. Deploy:                fly deploy
+
+app = "omegaquiz"
+primary_region = "syd"   # change to your nearest region (sjc, lhr, fra, etc.)
+
+[build]
+  # Uses the Dockerfile in this repo.
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  DATA_DIR = "/app/data"
+
+[[mounts]]
+  source = "omegaquiz_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # WebSocket connections need persistent processes — disable auto-stop.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    # ~50 player phones + host + admin = ~52 WS clients. Plenty of headroom.
+    hard_limit = 200
+    soft_limit = 150
+
+[checks.health]
+  port = 3000
+  type = "http"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  # /health returns 200 only when the server is fully initialised; 503 while
+  # shutting down. Hitting "/" instead returns the player join page which is
+  # always 200 and therefore useless as a readiness signal.
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
