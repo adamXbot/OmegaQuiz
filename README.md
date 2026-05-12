@@ -1,8 +1,6 @@
 # OmegaQuiz
 
-A self-hosted, multi-device, Millionaire-style live quiz built for in-house staff training. You run a 10–15 question session in a room of 5–100 people; their phones are the buzzers, a projector is the game board, and you get an Excel report at the end with every answer and a pass/fail summary.
-
-This README is written for an IT administrator who needs to host it, load questions into it, run the session, and pull the report. If you want a deeper look at the security or accessibility audits, see [`docs/`](docs/) and [`SECURITY.md`](SECURITY.md).
+A self-hosted, multi-device, live quiz built for in-house staff training. You run a 10–15 question session in a room of 5–100 people; their phones are the buzzers, a projector is the game board, and you get an Excel report at the end with every answer and a pass/fail summary.
 
 ---
 
@@ -13,7 +11,7 @@ Three screens, one game:
 | Screen | Where it runs | Who uses it | What it shows |
 |---|---|---|---|
 | **Player** (`/`) | Each staff member's phone | Players | Joins via QR code, taps A/B/C/D for each question, sees their own correct count at the end |
-| **Host** (`/host`) | Boardroom projector / TV | Whoever's running the quiz | The big "Who Wants to Be A …" board: question, answer choices, survivor count, prize ladder |
+| **Host** (`/host`) | Boardroom projector / TV | Whoever's running the quiz | The big board: question, answer choices, survivor count, prize ladder |
 | **Admin** (`/admin`) | Facilitator's laptop / tablet | You (or whoever moderates) | Roster, live answer tally, question editor, branding, Excel/CSV report download, session close / reopen |
 
 A session goes: open the lobby on the projector → staff scan the QR and join with name + work email → admin clicks **Start Game** → for each question, host clicks **Close & Reveal** once everyone's answered → at the end, admin downloads the results spreadsheet.
