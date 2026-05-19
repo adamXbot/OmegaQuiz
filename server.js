@@ -77,9 +77,33 @@ if (process.env.NODE_ENV === 'production' && TOKENS_AUTO_GENERATED) {
   console.error('FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production.');
   process.exit(1);
 }
+if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_SECRET) {
+  // Without a stable secret every restart invalidates every active session —
+  // not catastrophic, but operators expect "deploy a fix" not "log everyone
+  // out." Force the env var so the choice is intentional.
+  console.error('FATAL: COOKIE_SECRET must be set in production.');
+  process.exit(1);
+}
 
-// Behind Railway / a reverse proxy, trust X-Forwarded-* for protocol & IP.
-app.set('trust proxy', 1);
+// Behind Railway / Render / Fly / nginx, trust X-Forwarded-* for protocol & IP.
+//
+// TRUST_PROXY env var:
+//   - undefined / 'auto' (default) → trust XFF when the socket peer looks like
+//     a reverse proxy (loopback, RFC1918, 100.64/10 carrier-grade NAT,
+//     IPv6 loopback/ULA, or a known Cloudflare edge IP).
+//   - '1' / 'true' / 'always' → always trust XFF (use behind any proxy chain).
+//   - '0' / 'false' / 'never' → never trust XFF (CF check is also disabled).
+//   - A positive integer → Express trust-proxy hop count + auto behaviour.
+const TRUST_PROXY_RAW = String(process.env.TRUST_PROXY || 'auto').toLowerCase();
+const TRUST_PROXY_MODE =
+  ['', 'auto'].includes(TRUST_PROXY_RAW) ? 'auto' :
+  ['1', 'true', 'always', 'yes', 'on'].includes(TRUST_PROXY_RAW) ? 'always' :
+  ['0', 'false', 'never', 'no', 'off'].includes(TRUST_PROXY_RAW) ? 'never' :
+  /^\d+$/.test(TRUST_PROXY_RAW) ? 'auto' :  // numeric hop count → still auto-detect
+  'auto';
+const TRUST_PROXY_HOPS = /^\d+$/.test(TRUST_PROXY_RAW) ? parseInt(TRUST_PROXY_RAW, 10) :
+  TRUST_PROXY_MODE === 'never' ? 0 : 1;
+app.set('trust proxy', TRUST_PROXY_HOPS);
 
 // Where to fetch the catalogue of sample question packs from. By default this
 // uses the bundled samples/manifest.json shipped with the app; set
@@ -110,19 +134,21 @@ async function fetchSampleJson(url) {
 // Server-side fetch with safety rails. Used only by the sample-packs flow.
 //
 // Refusals:
-//   - non-https scheme
+//   - non-https scheme (on the initial URL AND every redirect hop)
 //   - hostnames pointing at loopback / private IPv4 ranges (basic SSRF guard)
 //   - HTTP responses > SAMPLE_MAX_BYTES
 //   - responses that don't decode as JSON
+//   - more than SAFE_FETCH_MAX_HOPS redirects
 //
 // Note: admin role is required by the WS handler before this is ever called.
-// Shared SSRF-safe fetcher. Returns { text, contentType, url } and enforces
-// https-only, no private/loopback hosts, max-size + timeout. Both
-// fetchJsonSafe (existing sample-pack path) and seedQuestionsFromUrl (the
-// new -u CLI flag) build on this so the safety bar stays consistent.
-async function fetchTextSafe(url) {
+// We handle redirects manually (redirect: 'manual') and re-run the same
+// validations on every Location — Node's default 'follow' behaviour will
+// happily downgrade https://attacker.example to http://internal-host on a
+// 302, which would defeat the SSRF guards above.
+const SAFE_FETCH_MAX_HOPS = 3;
+function assertSafeFetchUrl(rawUrl) {
   let u;
-  try { u = new URL(url); } catch { throw new Error('invalid URL'); }
+  try { u = new URL(rawUrl); } catch { throw new Error('invalid URL'); }
   if (u.protocol !== 'https:') throw new Error('only https:// URLs are allowed');
   const host = u.hostname.toLowerCase();
   if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.localhost')) {
@@ -141,15 +167,39 @@ async function fetchTextSafe(url) {
   }
   // IPv6 [::1] and friends
   if (host.startsWith('[')) throw new Error('IPv6 literals not allowed in sample URLs');
-
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), SAMPLE_FETCH_TIMEOUT_MS);
-  try {
-    const r = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: 'follow',
-      headers: { Accept: 'application/json, text/csv;q=0.95, text/plain;q=0.9' }
-    });
+  return u;
+}
+async function fetchTextSafe(url) {
+  let currentUrl = url;
+  let u = assertSafeFetchUrl(currentUrl);
+  for (let hop = 0; hop <= SAFE_FETCH_MAX_HOPS; hop++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), SAMPLE_FETCH_TIMEOUT_MS);
+    let r;
+    try {
+      r = await fetch(currentUrl, {
+        signal: ctrl.signal,
+        redirect: 'manual',
+        headers: { Accept: 'application/json, text/csv;q=0.95, text/plain;q=0.9' }
+      });
+    } finally {
+      clearTimeout(t);
+    }
+    // Manual redirect handling — undici returns status 0 (opaqueredirect) when
+    // redirect:'manual' sees a 3xx, but the Node fetch impl exposes 3xx + the
+    // Location header. Handle both.
+    if ((r.status >= 300 && r.status < 400) || r.type === 'opaqueredirect') {
+      if (hop === SAFE_FETCH_MAX_HOPS) throw new Error('too many redirects');
+      const loc = r.headers.get('location');
+      if (!loc) throw new Error('redirect response missing Location header');
+      let nextUrl;
+      try { nextUrl = new URL(loc, u.href).href; }
+      catch { throw new Error('redirect target is not a valid URL'); }
+      // Re-run the SSRF checks before chasing the redirect.
+      u = assertSafeFetchUrl(nextUrl);
+      currentUrl = nextUrl;
+      continue;
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status + ' from ' + u.host);
     // Stream-limit the response.
     const reader = r.body.getReader();
@@ -168,9 +218,9 @@ async function fetchTextSafe(url) {
       contentType: (r.headers.get('content-type') || '').toLowerCase(),
       url: u.href
     };
-  } finally {
-    clearTimeout(t);
   }
+  // The loop only exits via return or throw above; this is defensive.
+  throw new Error('too many redirects');
 }
 
 async function fetchJsonSafe(url) {
@@ -1343,7 +1393,12 @@ function parseCookies(header) {
     if (eq < 0) return;
     const k = part.slice(0, eq).trim();
     const v = part.slice(eq + 1).trim();
-    out[k] = decodeURIComponent(v);
+    // decodeURIComponent throws URIError on malformed `%` sequences. Treat the
+    // raw value as-is in that case — the downstream cookie verifier will
+    // simply reject it. Without this catch a single bad cookie would crash
+    // the WS upgrade handler and (via uncaughtException) the whole process.
+    try { out[k] = decodeURIComponent(v); }
+    catch { out[k] = v; }
   });
   return out;
 }
@@ -1405,13 +1460,25 @@ let HOST_MAGIC  = mintMagicToken('host');
 let ADMIN_MAGIC = mintMagicToken('admin');
 
 // --- Login rate limiter (A04-2 / A07-3) ---
-const loginFailures = new Map(); // ip -> { count, blockedUntil }
+// 5 failures inside LOGIN_WINDOW_MS triggers a LOGIN_BLOCK_MS cooldown. The
+// firstAt field gates the window-reset: without it, a freshly-created entry
+// (blockedUntil=0, which is always < now) would be reset on every failure
+// and the limiter would never bite. See the matching shape on recordJoinFailure.
+const LOGIN_FAILURE_MAX = 5;
+const LOGIN_BLOCK_MS    = 5 * 60 * 1000;
+const LOGIN_WINDOW_MS   = 15 * 60 * 1000;
+const loginFailures = new Map(); // ip -> { count, firstAt, blockedUntil }
 function recordLoginFailure(ip) {
   const now = Date.now();
   let entry = loginFailures.get(ip);
-  if (!entry || entry.blockedUntil < now) entry = { count: 0, blockedUntil: 0 };
+  // Reset only when there's no entry, OR the block expired AND the failure
+  // window has elapsed since firstAt. Without the firstAt guard, blockedUntil=0
+  // is always < now and we'd zero the counter on every call.
+  if (!entry || (entry.blockedUntil < now && (now - entry.firstAt) > LOGIN_WINDOW_MS)) {
+    entry = { count: 0, firstAt: now, blockedUntil: 0 };
+  }
   entry.count++;
-  if (entry.count >= 5) entry.blockedUntil = now + 5 * 60 * 1000; // 5 min
+  if (entry.count >= LOGIN_FAILURE_MAX) entry.blockedUntil = now + LOGIN_BLOCK_MS;
   loginFailures.set(ip, entry);
 }
 function isBlocked(ip) {
@@ -1556,6 +1623,33 @@ function isCloudflareEdgeIp(ip) {
   return CLOUDFLARE_EDGE_CIDRS.some(cidr => ipMatchesCidr(normalized, cidr));
 }
 
+// "Looks like a reverse proxy" — true if the socket peer is in a range that
+// can't be a public-internet client. Used by the 'auto' TRUST_PROXY mode to
+// decide whether to honour X-Forwarded-For. Railway, Render and Fly all front
+// the app from a private/CGN range; legitimate browser clients never connect
+// from one. False positives cost very little (an attacker who somehow makes a
+// direct connection from a private network gets to spoof their own rate-limit
+// bucket); false negatives break rate limits entirely (the v1.1.0 bug).
+function isPrivateOrLoopbackIp(ip) {
+  const bytes = ipToBytes(ip);
+  if (!bytes) return false;
+  if (bytes.length === 4) {
+    if (bytes[0] === 10) return true;                                      // 10.0.0.0/8
+    if (bytes[0] === 127) return true;                                     // 127.0.0.0/8 (loopback)
+    if (bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31) return true; // 172.16.0.0/12
+    if (bytes[0] === 192 && bytes[1] === 168) return true;                 // 192.168.0.0/16
+    if (bytes[0] === 169 && bytes[1] === 254) return true;                 // 169.254.0.0/16 (link-local)
+    if (bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127) return true; // 100.64.0.0/10 (CGN, Railway-ish)
+    return false;
+  }
+  // IPv6: loopback ::1, ULA fc00::/7, link-local fe80::/10
+  if (bytes.every(b => b === 0)) return true; // unspecified treated as loopback-ish
+  if (bytes.slice(0, 15).every(b => b === 0) && bytes[15] === 1) return true; // ::1
+  if ((bytes[0] & 0xfe) === 0xfc) return true; // fc00::/7
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10
+  return false;
+}
+
 function firstValidIpHeader(value) {
   if (value == null) return '';
   const raw = Array.isArray(value) ? value.join(',') : String(value);
@@ -1566,9 +1660,17 @@ function firstValidIpHeader(value) {
   return '';
 }
 
+// Returns the client IP we'll use for rate-limit / audit-log purposes. The
+// trust decision is per-request, driven by TRUST_PROXY env var. See the
+// TRUST_PROXY_MODE block at the top of this file for the contract.
 function getClientIp(req) {
   const remote = normalizeIp(req && req.socket && req.socket.remoteAddress);
-  if (isCloudflareEdgeIp(remote)) {
+  if (TRUST_PROXY_MODE === 'never') {
+    return remote || 'unknown';
+  }
+  const cfIp = isCloudflareEdgeIp(remote);
+  const proxyIp = TRUST_PROXY_MODE === 'always' || cfIp || isPrivateOrLoopbackIp(remote);
+  if (proxyIp) {
     return firstValidIpHeader(req.headers['cf-connecting-ip'])
       || firstValidIpHeader(req.headers['x-forwarded-for'])
       || remote
@@ -1585,7 +1687,17 @@ function getClientIp(req) {
 // (CSS-based exfiltration is a far narrower attack class than JS injection).
 app.use((req, res, next) => {
   if (process.env.NODE_ENV === 'production' && !isHttps(req)) {
-    return res.redirect(301, 'https://' + req.headers.host + req.url);
+    // Build the redirect target from a *trusted* canonical base, never from
+    // req.headers.host. An attacker who can deliver a forged Host header (or
+    // bypass the proxy on a misconfigured deploy) would otherwise get a
+    // 301-to-evil.com redirect for free.
+    const base = (branding && branding.publicBaseUrl) || ENV_PUBLIC_BASE_URL;
+    if (!base) {
+      return res.status(400).type('text/plain').send(
+        'HTTPS required. Configure PUBLIC_BASE_URL (or set it via the admin Branding tab) so the redirect target is unambiguous.'
+      );
+    }
+    return res.redirect(301, base + req.url);
   }
   // Per-response nonce. 16 random bytes → 24-char base64 string. Stash on
   // res.locals so the HTML-serving helper can read it.
@@ -1899,7 +2011,13 @@ function hostAction(action, payload = {}) {
         const remove = wrongs.sort(()=>Math.random()-0.5).slice(0,2);
         game.eliminatedOptions = remove;
       } else if (type === 'askit') {
-        broadcast({ type: 'lifeline:askit', correctLetter: 'ABCD'[q.correct], hint: (q.lesson || '').split('.')[0] + '.' });
+        // Filter to authenticated roles — unauthenticated WS connections (no
+        // join code, just an open socket) would otherwise learn the correct
+        // letter for every question where askit fires.
+        broadcast(
+          { type: 'lifeline:askit', correctLetter: 'ABCD'[q.correct], hint: (q.lesson || '').split('.')[0] + '.' },
+          c => c.role === 'player' || c.role === 'host' || c.role === 'admin'
+        );
       } else if (type === 'skip') {
         game.phase = 'reveal';
         game.revealedCorrect = q.correct;
@@ -2546,10 +2664,20 @@ wss.on('connection', (ws, req) => {
 // ----------------------------------------------------------------------------
 
 // --- Auth flow (A01-1, A07-1) ---
+// `next` is a post-login redirect target. We constrain it to same-origin paths
+// only — rejecting `//evil.com` (scheme-relative URL → open redirect), `\\evil`
+// (UNC paths some browsers normalise), and anything that doesn't start with a
+// single `/` followed by URL-safe characters.
+function isSafeNext(s) {
+  if (typeof s !== 'string' || s.length === 0 || s.length > 512) return false;
+  if (!s.startsWith('/')) return false;
+  if (s.startsWith('//') || s.startsWith('/\\')) return false;
+  return /^\/[A-Za-z0-9_\-./?=&%]*$/.test(s);
+}
 app.get('/auth/login', (req, res) => {
   const role = req.query.role === 'admin' ? 'admin' : 'host';
   const nextRaw = typeof req.query.next === 'string' ? req.query.next : ('/' + role);
-  const safeNext = /^\/[A-Za-z0-9_\-./?=&%]*$/.test(nextRaw) ? nextRaw : ('/' + role);
+  const safeNext = isSafeNext(nextRaw) ? nextRaw : ('/' + role);
   const error = req.query.error ? '<p class="err">Invalid token. Try again.</p>' : '';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2643,7 +2771,7 @@ app.post('/auth/login', (req, res) => {
   setSessionCookie(req, res, sid);
   logEvent('auth-ok', `Signed in as ${role} from ${ip}`);
   logJson('info', 'auth.login.ok', { ip, role });
-  const next = typeof req.body.next === 'string' && /^\/[A-Za-z0-9_\-./?=&%]*$/.test(req.body.next) ? req.body.next : ('/' + role);
+  const next = isSafeNext(req.body && req.body.next) ? req.body.next : ('/' + role);
   res.redirect(302, next);
 });
 
@@ -3043,6 +3171,23 @@ app.use((req, res, next) => {
   next();
 });
 
+// Tail error handler. Catches any synchronous throw from middleware/routes —
+// notably the URIError that older parseCookies() would emit on malformed
+// cookies. Returns a generic 500 in every NODE_ENV so we don't leak stacks via
+// the Express default error page.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  try {
+    logJson('error', 'request error', {
+      method: req && req.method,
+      path: req && req.path,
+      error: err && err.message ? err.message : String(err)
+    });
+  } catch {}
+  res.status(500).type('text/plain').send('Server error');
+});
+
 // ----------------------------------------------------------------------------
 // Start (only when invoked directly — the test harness imports this file)
 // ----------------------------------------------------------------------------
@@ -3252,7 +3397,11 @@ module.exports = {
   DEFAULT_CONSENT_TEXT,
   mintMagicToken, consumeMagicToken,
   recordJoinFailure, isJoinBlocked, clearJoinFailures,
-  getClientIp, isCloudflareEdgeIp, ipMatchesCidr, normalizeIp,
+  recordLoginFailure, isBlocked, clearLoginFailures,
+  LOGIN_FAILURE_MAX, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS,
+  getClientIp, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp,
+  parseCookies, isSafeNext,
+  TRUST_PROXY_MODE,
   parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow,
   PLAYER_RECONNECT_WINDOW_MS,
   JOIN_FAILURE_MAX,

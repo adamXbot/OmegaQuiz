@@ -25,7 +25,7 @@ const os = require('os');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-test-'));
 
 const srv = require('../server.js');
-const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, getClientIp, isCloudflareEdgeIp, ipMatchesCidr, normalizeIp, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS } = srv;
+const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, recordLoginFailure, isBlocked, clearLoginFailures, LOGIN_FAILURE_MAX, getClientIp, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp, parseCookies, isSafeNext, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS } = srv;
 
 // ----------------------------------------------------------------------------
 // Tiny test runner
@@ -183,16 +183,35 @@ function unitTests() {
   catch (e) { bankRejected = /bonus question 1/.test(e.message) && /non-empty q/.test(e.message); }
   ok(bankRejected, 'normalizeQuestionBank rejects malformed bonus rows');
 
-  section('Unit: Cloudflare-aware client IP detection');
+  section('Unit: reverse-proxy aware client IP detection');
   const fakeReq = (remoteAddress, headers = {}) => ({ socket: { remoteAddress }, headers });
   ok(normalizeIp('::ffff:127.0.0.1') === '127.0.0.1', 'normalizeIp unwraps IPv4-mapped IPv6');
   ok(isCloudflareEdgeIp('173.245.48.1') === true, 'Cloudflare IPv4 edge range is recognised');
   ok(isCloudflareEdgeIp('2606:4700::1') === true, 'Cloudflare IPv6 edge range is recognised');
   ok(isCloudflareEdgeIp('127.0.0.1') === false, 'localhost is not treated as a Cloudflare edge');
   ok(ipMatchesCidr('173.245.48.1', '173.245.48.0/20') === true, 'ipMatchesCidr handles IPv4 ranges');
-  ok(getClientIp(fakeReq('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })) === '127.0.0.1', 'direct clients cannot spoof X-Forwarded-For');
+  // Cloudflare edge → CF-Connecting-IP / XFF are trusted (unchanged from v1.1.0).
   ok(getClientIp(fakeReq('173.245.48.1', { 'cf-connecting-ip': '203.0.113.7' })) === '203.0.113.7', 'Cloudflare CF-Connecting-IP is trusted from edge IPs');
   ok(getClientIp(fakeReq('173.245.48.1', { 'x-forwarded-for': '198.51.100.10, 173.245.48.1' })) === '198.51.100.10', 'Cloudflare X-Forwarded-For fallback uses first valid client IP');
+  // F3 (v1.1.1): non-CF reverse proxies (Railway / Render / Fly / Docker / nginx
+  // on localhost) appear to us as loopback / RFC1918 / 100.64-CGN sockets. We
+  // trust X-Forwarded-For in those cases — otherwise every visitor would share
+  // the proxy's IP and per-IP rate limits would collapse.
+  ok(isPrivateOrLoopbackIp('127.0.0.1') === true, 'isPrivateOrLoopbackIp: 127.0.0.1');
+  ok(isPrivateOrLoopbackIp('10.0.0.5') === true, 'isPrivateOrLoopbackIp: 10/8');
+  ok(isPrivateOrLoopbackIp('172.16.5.5') === true, 'isPrivateOrLoopbackIp: 172.16/12');
+  ok(isPrivateOrLoopbackIp('192.168.1.1') === true, 'isPrivateOrLoopbackIp: 192.168/16');
+  ok(isPrivateOrLoopbackIp('100.64.0.1') === true, 'isPrivateOrLoopbackIp: 100.64/10 CGN (Railway-shape)');
+  ok(isPrivateOrLoopbackIp('169.254.0.1') === true, 'isPrivateOrLoopbackIp: 169.254/16 link-local');
+  ok(isPrivateOrLoopbackIp('8.8.8.8') === false, 'isPrivateOrLoopbackIp: public IPv4 rejected');
+  ok(isPrivateOrLoopbackIp('::1') === true, 'isPrivateOrLoopbackIp: IPv6 loopback');
+  ok(isPrivateOrLoopbackIp('fd00::1') === true, 'isPrivateOrLoopbackIp: IPv6 ULA fc00::/7');
+  ok(isPrivateOrLoopbackIp('fe80::1') === true, 'isPrivateOrLoopbackIp: IPv6 link-local fe80::/10');
+  ok(isPrivateOrLoopbackIp('2606:4700::1') === false, 'isPrivateOrLoopbackIp: public IPv6 rejected');
+  ok(getClientIp(fakeReq('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'loopback peer (local proxy) → trust XFF');
+  ok(getClientIp(fakeReq('100.64.0.1', { 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'CGN peer (Railway-shape) → trust XFF');
+  ok(getClientIp(fakeReq('8.8.8.8', { 'x-forwarded-for': '203.0.113.9' })) === '8.8.8.8', 'public-IP peer → DO NOT trust XFF (direct client cannot spoof)');
+  ok(getClientIp(fakeReq('127.0.0.1', {})) === '127.0.0.1', 'no XFF → socket IP returned even from loopback');
 
   section('Unit: player reconnect window');
   ok(parseReconnectWindowSeconds(undefined) === 300, 'reconnect window: missing env defaults to 300s');
@@ -2608,6 +2627,229 @@ async function dataWipeTests() {
 }
 
 // ----------------------------------------------------------------------------
+// v1.1.1 security-audit regression tests (F1, F2, F4, F5, F6, F7).
+// Each section maps to a finding in the 2026-05-19 Railway-targeted review.
+// ----------------------------------------------------------------------------
+async function v111SecurityFixTests() {
+  // -- F1: parseCookies must not crash on malformed `%` sequences.
+  section('F1: malformed cookie does not crash the server (URIError swallowed)');
+  // Direct parseCookies smoke first — was throwing URIError pre-fix.
+  let threw = null;
+  try { parseCookies('omegaquiz_sess=%X'); } catch (e) { threw = e; }
+  ok(threw === null, 'parseCookies tolerates malformed % encoding');
+  threw = null;
+  try { parseCookies('omegaquiz_sess=%'); } catch (e) { threw = e; }
+  ok(threw === null, 'parseCookies tolerates a trailing %');
+  // End-to-end via WS upgrade — pre-fix this triggered uncaughtException →
+  // gracefulShutdown. Now we expect a normal connection that ignores the bad
+  // cookie (ws.role === null).
+  const ws = await openWs({ cookie: 'omegaquiz_sess=%X' });
+  ws.send(JSON.stringify({ type: 'admin:hello' }));
+  // We should get an "error: Not signed in" rather than a torn-down server.
+  const m = await waitMessage(ws, x => x && x.type === 'error', 2000).catch(() => null);
+  ok(m !== null, 'WS upgrade survives a malformed session cookie');
+  try { ws.close(); } catch {}
+  // And the HTTP path no longer leaks Express's default stack page.
+  const httpRes = await request('GET', '/host', { headers: { Cookie: 'omegaquiz_sess=%X' } });
+  ok(httpRes.status === 302 || httpRes.status === 500, 'HTTP auth-required path responds (302 redirect OR 500)');
+  ok(!/URIError|at parseCookies|at sessionFromReq/.test(httpRes.body || ''), 'response body does not leak a JS stack');
+
+  // -- F2: login rate-limit window guard.
+  section('F2: login rate-limit blocks after 5 failures (was broken pre-fix)');
+  const ip = '198.51.100.42'; // RFC 5737 documentation address
+  clearLoginFailures(ip);
+  ok(!isBlocked(ip), 'fresh IP starts unblocked');
+  for (let i = 0; i < LOGIN_FAILURE_MAX - 1; i++) recordLoginFailure(ip);
+  ok(!isBlocked(ip), `${LOGIN_FAILURE_MAX - 1} failures stays below threshold`);
+  recordLoginFailure(ip);
+  ok(isBlocked(ip), `${LOGIN_FAILURE_MAX} failures triggers block`);
+  // Counter must NOT reset on the next failure (this is the bug we fixed).
+  recordLoginFailure(ip);
+  ok(isBlocked(ip), 'block persists across subsequent failures (counter not reset)');
+  clearLoginFailures(ip);
+  ok(!isBlocked(ip), 'clearLoginFailures unblocks');
+  // End-to-end through POST /auth/login (uses 127.0.0.1 which TRUST_PROXY=auto
+  // treats as a reverse-proxy peer — so we'll spoof XFF to use the test IP
+  // and avoid stomping other tests' rate-limit bucket).
+  clearLoginFailures(ip);
+  let blockedAt = null;
+  for (let i = 1; i <= LOGIN_FAILURE_MAX + 1; i++) {
+    const r = await request('POST', '/auth/login', {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Forwarded-For': ip
+      },
+      body: 'role=admin&token=wrong' + i + '&next=' + encodeURIComponent('/admin')
+    });
+    if (r.status === 429) { blockedAt = i; break; }
+  }
+  ok(blockedAt !== null && blockedAt <= LOGIN_FAILURE_MAX + 1, `live POST blocked by attempt ${blockedAt}`);
+  clearLoginFailures(ip);
+
+  // -- F4: tightened `next` regex rejects scheme-relative URLs.
+  section('F4: /auth/login?next= rejects scheme-relative open-redirect targets');
+  ok(isSafeNext('/admin') === true, 'isSafeNext accepts /admin');
+  ok(isSafeNext('/host?ref=qr') === true, 'isSafeNext accepts a benign path with query');
+  ok(isSafeNext('//evil.example/path') === false, 'isSafeNext rejects // scheme-relative');
+  ok(isSafeNext('/\\evil.example') === false, 'isSafeNext rejects /\\ Windows UNC shape');
+  ok(isSafeNext('http://evil.example/x') === false, 'isSafeNext rejects http:// absolute');
+  ok(isSafeNext('javascript:alert(1)') === false, 'isSafeNext rejects javascript:');
+  ok(isSafeNext('') === false, 'isSafeNext rejects empty');
+  ok(isSafeNext('a'.repeat(513)) === false, 'isSafeNext rejects oversized values');
+  // GET reflection: the form field for an open-redirect next is sanitized to /<role>.
+  const loginPage = await request('GET', '/auth/login?role=admin&next=' + encodeURIComponent('//evil.example/path'));
+  ok(loginPage.status === 200, 'GET /auth/login returns 200');
+  ok(!/value="\/\/evil\.example/.test(loginPage.body), 'form does NOT reflect //evil.example');
+  ok(/name="next" value="\/admin"/.test(loginPage.body), 'form falls back to /admin');
+  // POST: a valid token + malicious next should redirect to /admin, not //evil.example.
+  clearLoginFailures(ip);
+  const goodPost = await request('POST', '/auth/login', {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Forwarded-For': ip },
+    body: 'role=admin&token=' + encodeURIComponent(process.env.ADMIN_TOKEN) + '&next=' + encodeURIComponent('//evil.example/owned')
+  });
+  ok(goodPost.status === 302, 'valid login returns 302');
+  ok(goodPost.headers.location === '/admin', `Location is /admin (got "${goodPost.headers.location}")`);
+  clearLoginFailures(ip);
+
+  // -- F5: lifeline:askit only reaches authenticated WS roles.
+  section('F5: lifeline:askit does not leak to unauthenticated WS clients');
+  // Reset to known-good state and prepare an admin who will fire askit.
+  const adminLogin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const adminWs = await openWs({ cookie: adminLogin.cookie });
+  adminWs.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(adminWs, m => m.type === 'admin:init');
+  // Drain the post-hello admin:state push so it doesn't shadow later waits.
+  await waitMessage(adminWs, m => m.type === 'admin:state').catch(() => null);
+  // Reset and seed a fresh game with one player.
+  adminWs.send(JSON.stringify({
+    type: 'admin:action',
+    action: 'game:host-action',
+    payload: { hostAction: 'reset-game' }
+  }));
+  await new Promise(r => setTimeout(r, 60));
+  // Pull the current join code from a fresh state push.
+  let joinCode = null;
+  adminWs.send(JSON.stringify({ type: 'admin:hello' }));
+  const initAgain = await waitMessage(adminWs, m => m.type === 'admin:state');
+  joinCode = initAgain.state.joinCode;
+  // Open one player + one unauthenticated eavesdropper.
+  const player = await openWs();
+  clearJoinFailures('127.0.0.1');
+  player.send(JSON.stringify({ type: 'player:join', name: 'F5P', email: 'f5@example.test', joinCode }));
+  await waitMessage(player, m => m.type === 'player:joined');
+  const eavesdropper = await openWs();
+  // Track every message the eavesdropper receives.
+  const evilMsgs = [];
+  eavesdropper.on('message', raw => { try { evilMsgs.push(JSON.parse(raw)); } catch {} });
+  // Start the game + fire askit.
+  adminWs.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: 'start-game' } }));
+  await new Promise(r => setTimeout(r, 60));
+  adminWs.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: 'apply-lifeline', hostPayload: { type: 'askit' } } }));
+  // Player should receive askit; eavesdropper should not.
+  const playerSawAskit = await waitMessage(player, m => m.type === 'lifeline:askit', 1500).catch(() => null);
+  ok(playerSawAskit !== null && typeof playerSawAskit.correctLetter === 'string', 'authenticated player receives lifeline:askit');
+  await new Promise(r => setTimeout(r, 250)); // give time for any stray broadcast
+  const evilSawAskit = evilMsgs.some(m => m && m.type === 'lifeline:askit');
+  ok(!evilSawAskit, 'unauthenticated WS did NOT receive lifeline:askit');
+  try { adminWs.close(); player.close(); eavesdropper.close(); } catch {}
+  // Reset state so we don't leak into later tests.
+  const reset = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const reAdmin = await openWs({ cookie: reset.cookie });
+  reAdmin.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(reAdmin, m => m.type === 'admin:init');
+  reAdmin.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: 'reset-game' } }));
+  await new Promise(r => setTimeout(r, 60));
+  try { reAdmin.close(); } catch {}
+
+  // -- F6: SSRF redirect re-validation.
+  section('F6: fetchTextSafe re-validates every redirect hop');
+  // Monkey-patch globalThis.fetch to simulate a 302 from a public host to
+  // either a private IP or http://. Restore the original at the end so other
+  // tests are unaffected.
+  const realFetch = globalThis.fetch;
+  function fakeRespond(status, headers, body = '') {
+    const headerMap = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      type: 'basic',
+      headers: { get: k => headerMap.get(String(k).toLowerCase()) || null },
+      body: {
+        getReader() {
+          let sent = false;
+          return {
+            async read() {
+              if (sent) return { done: true };
+              sent = true;
+              return { value: new TextEncoder().encode(body), done: false };
+            }
+          };
+        }
+      }
+    };
+  }
+  const fakeFetchSeqs = {
+    'https://safe.example/manifest.json': [{ status: 302, headers: { location: 'http://safe.example/manifest.json' } }],
+    'https://safe.example/private-redirect': [{ status: 302, headers: { location: 'https://10.0.0.5/secret' } }],
+    'https://safe.example/loop': Array.from({ length: 10 }, () => ({ status: 302, headers: { location: 'https://safe.example/loop' } })),
+    'https://safe.example/no-location': [{ status: 302, headers: {} }],
+    'https://safe.example/ok': [{ status: 200, headers: { 'content-type': 'application/json' }, body: '{"ok":true}' }]
+  };
+  globalThis.fetch = async (urlStr /* , opts */) => {
+    const seq = fakeFetchSeqs[urlStr];
+    if (!seq) throw new Error('unexpected fetch URL in test: ' + urlStr);
+    const step = seq.shift() || seq[seq.length - 1] || { status: 500, headers: {} };
+    return fakeRespond(step.status, step.headers, step.body);
+  };
+  try {
+    let err = null;
+    try { await srv.fetchTextSafe('https://safe.example/manifest.json'); }
+    catch (e) { err = e; }
+    ok(err && /only https/i.test(err.message), 'redirect to http:// is refused after re-validation');
+    err = null;
+    try { await srv.fetchTextSafe('https://safe.example/private-redirect'); }
+    catch (e) { err = e; }
+    ok(err && /loopback|private/i.test(err.message), 'redirect to private IP is refused after re-validation');
+    err = null;
+    try { await srv.fetchTextSafe('https://safe.example/loop'); }
+    catch (e) { err = e; }
+    ok(err && /too many redirects/i.test(err.message), 'redirect loop is capped');
+    err = null;
+    try { await srv.fetchTextSafe('https://safe.example/no-location'); }
+    catch (e) { err = e; }
+    ok(err && /Location/i.test(err.message), 'redirect without Location header is refused');
+    // Happy path: 200 OK passes through unchanged.
+    const ok200 = await srv.fetchTextSafe('https://safe.example/ok');
+    ok(ok200 && ok200.text === '{"ok":true}', 'non-redirect 200 still works');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  // -- F7: HTTPS redirect uses a trusted base, not req.headers.host.
+  section('F7: production HTTPS redirect uses configured base URL, not Host header');
+  // Toggle NODE_ENV for one request. The middleware reads it at request time.
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    // No publicBaseUrl configured yet → expect 400 (not a redirect to Host header).
+    const cleared = await request('POST', '/auth/branding-clear', {});  // probe endpoint may not exist — fall through harmlessly.
+    cleared; // silence unused warning
+    // Use a fresh request with a malicious Host header. We have no real
+    // publicBaseUrl set in this test env, so we expect 400.
+    const r = await request('GET', '/', { headers: { 'Host': 'evil.example' } });
+    if (r.status === 400) {
+      ok(true, 'no PUBLIC_BASE_URL → 400 (refuses to redirect to attacker-controlled Host)');
+    } else if (r.status === 301) {
+      ok(!/evil\.example/.test(String(r.headers.location || '')), 'redirect Location does not contain attacker Host');
+    } else {
+      ok(false, `unexpected status ${r.status} — expected 400 or 301 with safe Location`);
+    }
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+  }
+}
+
+// ----------------------------------------------------------------------------
 // SSRF guard (T1 supplementary): explicit loopback / private-IP refusals on
 // fetchTextSafe (the seed-URL fetcher). Code path is the same one that admin
 // "Browse sample packs" uses, so this protects both flows.
@@ -2664,6 +2906,7 @@ async function ssrfGuardTests() {
     await joinRateLimitTests();
     await healthEndpointTests();
     await ssrfGuardTests();
+    await v111SecurityFixTests();
     await dataWipeTests();   // run last — it removes data files
   } catch (e) {
     console.error('\nTest run aborted by exception:', e);
