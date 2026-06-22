@@ -23,7 +23,7 @@ jobs:
         # GitHub Actions runners default to Node 24 from June 2026 onward.
         node: ['18', '20', '22', '24']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -58,7 +58,7 @@ jobs:
     # forks don't have write access). Still runs on push to main + nightly.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -t omegaquiz:ci .
@@ -86,7 +86,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
