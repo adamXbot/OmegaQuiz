@@ -65,23 +65,73 @@ const wss = new WebSocketServer({ server, maxPayload: 4 * 1024 * 1024 });
 const PORT = process.env.PORT || 3000;
 
 // --- Tokens / secrets (A01-4 / A02-3) ---
-// Use CSPRNG for any auto-generated default. Refuse to start in prod without env vars.
+// Use CSPRNG for any auto-generated default. Refuse to start in prod without
+// env vars — unless AUTO_PROVISION_SECRETS is enabled, in which case missing
+// values are generated once and persisted to DATA_DIR/secrets.json so they
+// survive restarts (DATA_DIR must be on a mounted volume for that to hold).
+// Env vars ALWAYS win over the file, and env-provided values are never
+// written to disk — the file only ever holds values we generated ourselves.
 function cryptoToken(prefix) {
   return prefix + '-' + crypto.randomBytes(24).toString('hex');
 }
-const HOST_TOKEN  = process.env.HOST_TOKEN  || cryptoToken('host');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || cryptoToken('admin');
-const COOKIE_SECRET = process.env.COOKIE_SECRET || crypto.randomBytes(32).toString('hex');
-const TOKENS_AUTO_GENERATED = !process.env.HOST_TOKEN || !process.env.ADMIN_TOKEN;
+const AUTO_PROVISION_SECRETS =
+  ['1', 'true', 'yes', 'on'].includes(String(process.env.AUTO_PROVISION_SECRETS || '').toLowerCase());
+const SECRETS_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'secrets.json');
+let storedSecrets = {};
+if (AUTO_PROVISION_SECRETS) {
+  try { storedSecrets = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8')) || {}; }
+  catch { /* first boot — nothing provisioned yet */ }
+}
+
+const HOST_TOKEN    = process.env.HOST_TOKEN    || storedSecrets.hostToken    || cryptoToken('host');
+const ADMIN_TOKEN   = process.env.ADMIN_TOKEN   || storedSecrets.adminToken   || cryptoToken('admin');
+const COOKIE_SECRET = process.env.COOKIE_SECRET || storedSecrets.cookieSecret || crypto.randomBytes(32).toString('hex');
+
+// Which values did this boot invent (vs env var / secrets file)?
+const SECRET_GENERATED = {
+  host:   !process.env.HOST_TOKEN    && !storedSecrets.hostToken,
+  admin:  !process.env.ADMIN_TOKEN   && !storedSecrets.adminToken,
+  cookie: !process.env.COOKIE_SECRET && !storedSecrets.cookieSecret,
+};
+// Ephemeral dev tokens: regenerated every boot, banner prints them.
+const TOKENS_AUTO_GENERATED =
+  !AUTO_PROVISION_SECRETS && (!process.env.HOST_TOKEN || !process.env.ADMIN_TOKEN);
+// Auto-provisioned tokens minted this boot: persisted below, banner prints them once.
+const TOKENS_PROVISIONED_THIS_BOOT =
+  AUTO_PROVISION_SECRETS && (SECRET_GENERATED.host || SECRET_GENERATED.admin);
+// Tokens loaded back from a previous boot's secrets.json.
+const TOKENS_FROM_SECRETS_FILE =
+  AUTO_PROVISION_SECRETS && !TOKENS_PROVISIONED_THIS_BOOT &&
+  (!process.env.HOST_TOKEN || !process.env.ADMIN_TOKEN);
+
+if (AUTO_PROVISION_SECRETS &&
+    (SECRET_GENERATED.host || SECRET_GENERATED.admin || SECRET_GENERATED.cookie)) {
+  const toStore = { ...storedSecrets };
+  if (SECRET_GENERATED.host)   toStore.hostToken    = HOST_TOKEN;
+  if (SECRET_GENERATED.admin)  toStore.adminToken   = ADMIN_TOKEN;
+  if (SECRET_GENERATED.cookie) toStore.cookieSecret = COOKIE_SECRET;
+  toStore.generatedAt = new Date().toISOString();
+  try {
+    fs.mkdirSync(path.dirname(SECRETS_PATH), { recursive: true });
+    fs.writeFileSync(SECRETS_PATH, JSON.stringify(toStore, null, 2) + '\n', { mode: 0o600 });
+    console.log(`Auto-provisioned missing secrets → ${SECRETS_PATH}`);
+  } catch (err) {
+    // If the file can't persist, tokens rotate every restart and recovery
+    // sign-in silently breaks. Refuse to run production like that.
+    console.error(`FATAL: AUTO_PROVISION_SECRETS is set but ${SECRETS_PATH} is not writable: ${err.message}`);
+    if (process.env.NODE_ENV === 'production') process.exit(1);
+  }
+}
+
 if (process.env.NODE_ENV === 'production' && TOKENS_AUTO_GENERATED) {
-  console.error('FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production.');
+  console.error('FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production (or set AUTO_PROVISION_SECRETS=true to generate them once and persist under DATA_DIR).');
   process.exit(1);
 }
-if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_SECRET) {
+if (process.env.NODE_ENV === 'production' && !AUTO_PROVISION_SECRETS && !process.env.COOKIE_SECRET) {
   // Without a stable secret every restart invalidates every active session —
   // not catastrophic, but operators expect "deploy a fix" not "log everyone
   // out." Force the env var so the choice is intentional.
-  console.error('FATAL: COOKIE_SECRET must be set in production.');
+  console.error('FATAL: COOKIE_SECRET must be set in production (or set AUTO_PROVISION_SECRETS=true).');
   process.exit(1);
 }
 
@@ -3225,6 +3275,16 @@ function printBanner(reason) {
     console.log(' (Dev mode — recovery tokens were auto-generated this boot. Save them somewhere safe:)');
     console.log(' HOST_TOKEN  = ' + HOST_TOKEN);
     console.log(' ADMIN_TOKEN = ' + ADMIN_TOKEN);
+  } else if (TOKENS_PROVISIONED_THIS_BOOT && !reason) {
+    // First boot with AUTO_PROVISION_SECRETS: print ONLY the values we
+    // generated (env-provided ones stay unlogged), then never print again —
+    // later boots load them from the secrets file and take the branch below.
+    console.log('');
+    console.log(` (Auto-provisioned this boot and saved to ${SECRETS_PATH} — record them somewhere safe:)`);
+    if (SECRET_GENERATED.host)  console.log(' HOST_TOKEN  = ' + HOST_TOKEN);
+    if (SECRET_GENERATED.admin) console.log(' ADMIN_TOKEN = ' + ADMIN_TOKEN);
+  } else if (TOKENS_FROM_SECRETS_FILE && !reason) {
+    console.log(` (Recovery tokens loaded from ${SECRETS_PATH} — not logged.)`);
   } else if (!reason) {
     console.log(' (Recovery tokens configured via HOST_TOKEN / ADMIN_TOKEN env vars — not logged.)');
   }

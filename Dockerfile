@@ -34,5 +34,6 @@ ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
 
-ENTRYPOINT ["/sbin/tini", "--"]
+# -s: register as child subreaper — Fly's init runs as PID 1, not tini.
+ENTRYPOINT ["/sbin/tini", "-s", "--"]
 CMD ["node", "server.js"]

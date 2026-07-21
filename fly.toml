@@ -5,9 +5,13 @@
 #   2. Sign in:               fly auth login
 #   3. Launch (skips deploy): fly launch --no-deploy --name omegaquiz --copy-config
 #   4. Create the volume:     fly volumes create omegaquiz_data --region <your-region> --size 1
-#   5. Set secrets:           fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
-#   6. Set the public URL:    fly secrets set PUBLIC_BASE_URL=https://omegaquiz.fly.dev
-#   7. Deploy:                fly deploy
+#   5. Deploy:                fly deploy
+#
+# Secrets: AUTO_PROVISION_SECRETS below makes the app generate HOST_TOKEN /
+# ADMIN_TOKEN / COOKIE_SECRET on first boot and persist them on the volume
+# (data/secrets.json). The first-boot log prints the tokens once — save them.
+# To supply your own instead (env always wins over the file):
+#   fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
 
 app = "omegaquiz"
 primary_region = "syd"   # change to your nearest region (sjc, lhr, fra, etc.)
@@ -19,6 +23,11 @@ primary_region = "syd"   # change to your nearest region (sjc, lhr, fra, etc.)
   NODE_ENV = "production"
   PORT = "3000"
   DATA_DIR = "/app/data"
+  # Generate-and-persist missing secrets on the volume (see header note).
+  AUTO_PROVISION_SECRETS = "true"
+  # Drives QR codes + magic links. Not sensitive — fine as plain env. Change
+  # it if your app name or custom domain differs.
+  PUBLIC_BASE_URL = "https://omegaquiz.fly.dev"
 
 [[mounts]]
   source = "omegaquiz_data"
