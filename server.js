@@ -1686,7 +1686,10 @@ function getClientIp(req) {
 // `'unsafe-inline'` because we use plenty of inline style="..." attributes
 // (CSS-based exfiltration is a far narrower attack class than JS injection).
 app.use((req, res, next) => {
-  if (process.env.NODE_ENV === 'production' && !isHttps(req)) {
+  // /health is exempt from HTTPS enforcement: platform health checkers
+  // (Fly, Render, load balancers) probe the internal port over plain HTTP
+  // with no X-Forwarded-Proto, and a 301/400 there fails the check.
+  if (process.env.NODE_ENV === 'production' && !isHttps(req) && req.path !== '/health') {
     // Build the redirect target from a *trusted* canonical base, never from
     // req.headers.host. An attacker who can deliver a forged Host header (or
     // bypass the proxy on a misconfigured deploy) would otherwise get a

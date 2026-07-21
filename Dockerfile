@@ -1,16 +1,16 @@
 # Minimal production image for omegaquiz.
-# Node 22 LTS Alpine — small, current, pnpm via Corepack.
-FROM node:26-alpine AS deps
+# Node 24 LTS Alpine. pnpm is installed via npm, not Corepack — Corepack is
+# no longer bundled with Node 25+.
+FROM node:24-alpine AS deps
 WORKDIR /app
 
 # Install only production deps for a leaner final image.
 COPY package.json pnpm-lock.yaml ./
-RUN corepack enable \
-  && corepack prepare pnpm@11.0.6 --activate \
+RUN npm install -g pnpm@11.0.6 \
   && pnpm install --prod --frozen-lockfile
 
 # ---- Runtime stage ----
-FROM node:26-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 # Tiny init so signals propagate correctly to Node.
 RUN apk add --no-cache tini
