@@ -6,7 +6,8 @@ WORKDIR /app
 
 # Install only production deps for a leaner final image.
 COPY package.json pnpm-lock.yaml ./
-RUN npm install -g pnpm@11.0.6 \
+# Keep this version in lockstep with "packageManager" in package.json.
+RUN npm install -g pnpm@11.1.3 \
   && pnpm install --prod --frozen-lockfile
 
 # ---- Runtime stage ----
