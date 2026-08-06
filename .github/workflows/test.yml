@@ -11,27 +11,36 @@ on:
   schedule:
     - cron: '17 4 * * *'   # 04:17 UTC daily
 
+permissions:
+  contents: read
+
 jobs:
   unit-and-integration:
     name: pnpm test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         # 18 is the minimum supported (matches engines in package.json).
         # 20 is maintenance-LTS, 22 is active-LTS, 24 is current.
         # GitHub Actions runners default to Node 24 from June 2026 onward.
+        # The default dev/deploy version lives in .nvmrc; this matrix
+        # intentionally tests the whole supported range.
         node: ['18', '20', '22', '24']
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No version here on purpose: reads "packageManager" from package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
-
-      - name: Enable pnpm
-        run: corepack enable
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -54,11 +63,14 @@ jobs:
   container-scan:
     name: Trivy container scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Skip on PR forks (Trivy needs to push results to the security tab and
     # forks don't have write access). Still runs on push to main + nightly.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Build image
         run: docker build -t omegaquiz:ci .
@@ -85,15 +97,19 @@ jobs:
     # Only on manual dispatch — runs ~45s and we don't need it on every PR.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No version here on purpose: reads "packageManager" from package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
-
-      - name: Enable pnpm
-        run: corepack enable
+          node-version-file: .nvmrc
 
       - run: pnpm install --frozen-lockfile
 
