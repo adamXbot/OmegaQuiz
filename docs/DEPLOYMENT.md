@@ -7,9 +7,9 @@ A short, opinionated guide for getting `omegaquiz` running on a real public host
 | Target | Compatible? | Why |
 |---|---|---|
 | **Railway** | ✅ | WebSocket-native, persistent processes, mountable volumes. |
-| **Render** | ✅ | `render.yaml` blueprint included. Persistent disk supported. |
+| **Render** | ✅ | `render.yaml` blueprint included; it declares the persistent disk at `/opt/render/project/src/data`. The free tier sleeps when idle, which is fine for occasional sessions but makes the first load slow. |
 | **Fly.io** | ✅ | `fly.toml` included. Best for low-latency global hosting. |
-| **DigitalOcean App Platform** | ✅ | Standard Node.js app spec works. |
+| **DigitalOcean App Platform** | ✅ | Standard Node.js app spec works. Add persistent storage in the App spec; the entry-level tier is enough for this workload. |
 | **Docker on a VPS / your own server** | ✅ | `Dockerfile` is the most flexible path. |
 | **Vercel / Netlify / Cloudflare Pages** | ❌ **Do not deploy** | Serverless/edge platforms can't host this app. It's a long-lived stateful Node process with persistent WebSocket connections and a writable file-system volume; serverless function lifetimes can't satisfy that. Vercel's Edge Runtime supports WS but with execution-time caps unsuited to multi-minute training sessions. **Use Railway, Render, Fly.io, or Docker instead.** |
 
@@ -83,6 +83,24 @@ docker logs -f omegaquiz
 
 Putting this behind Cloudflare (orange-cloud, with WAF + rate-limit rules on `/auth/login` and `/player:join`) is the recommended public-facing posture.
 
+### Cloudflare setup
+
+You get free TLS, DDoS protection, optional Access SSO on `/admin`, and edge rate-limiting on the
+join endpoint.
+
+1. DNS: an `A` or `CNAME` record for `quiz.your-domain.com` pointing at your origin, orange-cloud
+   proxied.
+2. Set `PUBLIC_BASE_URL=https://quiz.your-domain.com` on the origin so QR codes and magic links
+   carry the public hostname.
+3. Cloudflare Access (free tier) → a policy on `/admin` requiring your corporate IdP. This means
+   that even if the admin token leaks, an attacker still needs SSO.
+4. Cloudflare Rate Limiting → 10 requests per minute per IP on `/auth/login`, enforced at the edge
+   before any traffic reaches your app.
+
+The app's CSP works through the Cloudflare proxy with no changes, **provided you disable Rocket
+Loader and Email Obfuscation** for this hostname (dashboard → Speed → Optimization → Content
+Optimization). Both inject scripts that the CSP nonce policy will block.
+
 ---
 
 ## Step 3 — Find your sign-in links
@@ -146,7 +164,15 @@ This is event-driven software. The recommended posture is:
 3. **Scale the service to zero** between events (Railway / Render / Fly all support this with one click) **or** stop the Docker container.
 4. **Rotate `HOST_TOKEN` and `ADMIN_TOKEN`** after each event — they're recovery tokens, not permanent passwords.
 
-The README's "operational hygiene" section explains the threat model in more detail.
+### Why bother — the threat model
+
+There's **no good reason for this to be reachable on the public internet 24/7** between training
+sessions. The join code is short and, while rate-limited, not impossible to guess, and PII
+accumulates in `data/` over time. Scaling to zero is the real off-switch; the in-app **Session
+control → Close session** button rejects new joins and shows a goodbye screen, but it does not take
+the process off the network.
+
+Treat this like a pop-up shop, not a permanent storefront.
 
 ---
 
