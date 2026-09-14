@@ -37,7 +37,7 @@ There is no database, no third-party SaaS, and no telemetry. One Node process, o
 
 **Tamper-resistant by design.** Questions can only be edited while the lobby is open or after a game ends; mid-game edits are blocked server-side. The bank is sanitised on save, and CSV exports escape leading `=`, `+`, `-`, and `@` so a spreadsheet will not evaluate player-supplied text as a formula.
 
-**Magic-link sign-in.** The boot banner prints single-use, 10-minute sign-in URLs for the host and admin roles. `HOST_TOKEN` and `ADMIN_TOKEN` are long-lived recovery tokens for when every magic link has expired — treat them as password-manager entries, not daily passwords.
+**Magic-link sign-in.** The boot banner prints single-use, 10-minute sign-in URLs for the host and admin roles. `HOST_TOKEN` and `ADMIN_TOKEN` are long-lived recovery tokens for when every magic link has expired — treat them as password-manager entries, not daily passwords. Lost a link or a token after deploy? Admin → Settings → Sign-in & keys mints new links and rotates tokens in place, and `node server.js links` / `node server.js remint <role>` do the same from a shell on the server — no restart, nobody signed out. See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#keys--lost-expired-or-compromised).
 
 ## Get it
 

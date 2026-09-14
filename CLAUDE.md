@@ -4,15 +4,16 @@ This file is read by Claude at the start of every session in this repo. It captu
 
 ## Project shape
 
-`omegaquiz` is a self-hosted Millionaire-style live cybersecurity training quiz. Node 18+, Express 5, `ws`, vanilla HTML. One single-file backend (`server.js` ~2700 lines), three plain HTML pages in `public/`, on-disk state only for branding and question bank (`data/config.json`, `data/questions.json`). No database, no build step, no framework. One game per server.
+`omegaquiz` is a self-hosted Millionaire-style live cybersecurity training quiz. Node 18+, Express 5, `ws`, vanilla HTML. One single-file backend (`server.js` ~3700 lines), three plain HTML pages in `public/`, on-disk state only for branding and question bank (`data/config.json`, `data/questions.json`). No database, no build step, no framework. One game per server.
 
-Tests: `pnpm test` runs ~414 in-process integration checks against the live server. Keep this passing on every change.
+Tests: `pnpm test` runs ~576 in-process integration checks against the live server. Keep this passing on every change.
 
 Important architectural choices to preserve unless explicitly discussed:
 - Single-file `server.js` — don't split.
 - Vanilla HTML, no framework, no transpiler.
 - One game per server — no multi-tenancy.
 - Auth is magic-link + recovery-token + signed session cookie. No external IdP.
+- Re-keying (`node server.js remint|links`, admin Settings → Sign-in & keys) goes through `DATA_DIR/secrets.json` and `signin-links.json`; the live server re-reads them lazily on the auth paths. Don't add polling, signals, or IPC for this.
 - Inline `<style>` is fine. Inline `<script>` is fine **only with the CSP nonce** (`nonce="__CSP_NONCE__"` placeholder, substituted server-side).
 - Inline `onclick=` attributes are **forbidden** — CSP nonces don't cover them. Use `addEventListener` from a nonce-tagged `<script>` block instead.
 

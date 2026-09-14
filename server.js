@@ -61,8 +61,45 @@ const server = http.createServer(app);
 // run several MB once images are inlined as data URIs; 4 MiB covers ~15
 // questions at the per-image cap and leaves DoS surface small (admin-only).
 const wss = new WebSocketServer({ server, maxPayload: 4 * 1024 * 1024 });
+// Everyone except the admin (players, host, unauthenticated visitors) only
+// ever sends tiny JSON. Anything bigger than this is dropped unparsed.
+const NON_ADMIN_MAX_WS_MESSAGE_BYTES = 16 * 1024;
 
 const PORT = process.env.PORT || 3000;
+
+// Where config.json / questions.json / secrets.json live. Point at a mounted
+// volume in production so all three survive restarts.
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+
+// ----------------------------------------------------------------------------
+// Operator subcommands — `node server.js remint <role>` and
+// `node server.js links` — run in a *separate* process against the same
+// DATA_DIR as the live server. That shared directory is how they hand the
+// running process new credentials without a restart (see "Re-keying" further
+// down). Detect them before anything touches disk so the module-load side
+// effects that only make sense for a real boot (secret auto-provisioning,
+// production fatals, pending-link import) can be skipped. parseStartupArgs
+// is a hoisted function declaration, so calling it this early is fine.
+// ----------------------------------------------------------------------------
+const CLI = require.main === module ? parseStartupArgs(process.argv) : { command: null, commandArgs: [] };
+
+// `fly ssh console` and `docker exec` land you as root while the server runs
+// as an unprivileged user. Files a root shell creates in DATA_DIR would be
+// unreadable by the server, so a subcommand first becomes whoever owns
+// DATA_DIR. No-op when not root or when DATA_DIR itself is root-owned; a
+// failure is reported, not fatal (writePrivateJson also chowns as a fallback).
+function dropToDataDirOwner(dir) {
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return;
+  try {
+    const st = fs.statSync(dir);
+    if (st.uid === 0) return;
+    process.setgid(st.gid);
+    process.setuid(st.uid);
+  } catch (e) {
+    console.warn(`warning: could not switch to the owner of ${dir}: ${e.message}`);
+  }
+}
+if (CLI.command) dropToDataDirOwner(DATA_DIR);
 
 // --- Tokens / secrets (A01-4 / A02-3) ---
 // Use CSPRNG for any auto-generated default. Refuse to start in prod without
@@ -76,15 +113,51 @@ function cryptoToken(prefix) {
 }
 const AUTO_PROVISION_SECRETS =
   ['1', 'true', 'yes', 'on'].includes(String(process.env.AUTO_PROVISION_SECRETS || '').toLowerCase());
-const SECRETS_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'secrets.json');
+const SECRETS_PATH = path.join(DATA_DIR, 'secrets.json');
 let storedSecrets = {};
+// mtime of the secrets file as last read. reloadSecretsFromDisk() compares
+// against it so a `remint` from another process is noticed without polling.
+let secretsFileMtimeMs = 0;
+function readSecretsFile() {
+  const st = fs.statSync(SECRETS_PATH);
+  const parsed = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8'));
+  return { parsed: (parsed && typeof parsed === 'object') ? parsed : {}, mtimeMs: st.mtimeMs };
+}
+// Private JSON write: 0600, atomic (tmp + rename, so a concurrent reader
+// never sees a half-written file), and owned by whoever owns DATA_DIR when
+// we happen to be root (see dropToDataDirOwner).
+function writePrivateJson(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+  try { fs.chmodSync(tmp, 0o600); } catch {}
+  matchDataDirOwner(tmp);
+  try { fs.renameSync(tmp, file); }
+  catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+}
+function matchDataDirOwner(file) {
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return;
+  try {
+    const st = fs.statSync(DATA_DIR);
+    if (st.uid !== 0) fs.chownSync(file, st.uid, st.gid);
+  } catch {}
+}
+function writeSecretsFile(obj) {
+  writePrivateJson(SECRETS_PATH, obj);
+  try { secretsFileMtimeMs = fs.statSync(SECRETS_PATH).mtimeMs; } catch {}
+}
 if (AUTO_PROVISION_SECRETS) {
-  try { storedSecrets = JSON.parse(fs.readFileSync(SECRETS_PATH, 'utf8')) || {}; }
-  catch { /* first boot — nothing provisioned yet */ }
+  try {
+    const r = readSecretsFile();
+    storedSecrets = r.parsed;
+    secretsFileMtimeMs = r.mtimeMs;
+  } catch { /* first boot — nothing provisioned yet */ }
 }
 
-const HOST_TOKEN    = process.env.HOST_TOKEN    || storedSecrets.hostToken    || cryptoToken('host');
-const ADMIN_TOKEN   = process.env.ADMIN_TOKEN   || storedSecrets.adminToken   || cryptoToken('admin');
+// `let`, not `const`: rotateRecoveryToken / reloadSecretsFromDisk replace
+// these at runtime. COOKIE_SECRET stays fixed for the life of the process.
+let HOST_TOKEN    = process.env.HOST_TOKEN    || storedSecrets.hostToken    || cryptoToken('host');
+let ADMIN_TOKEN   = process.env.ADMIN_TOKEN   || storedSecrets.adminToken   || cryptoToken('admin');
 const COOKIE_SECRET = process.env.COOKIE_SECRET || storedSecrets.cookieSecret || crypto.randomBytes(32).toString('hex');
 
 // Which values did this boot invent (vs env var / secrets file)?
@@ -104,7 +177,9 @@ const TOKENS_FROM_SECRETS_FILE =
   AUTO_PROVISION_SECRETS && !TOKENS_PROVISIONED_THIS_BOOT &&
   (!process.env.HOST_TOKEN || !process.env.ADMIN_TOKEN);
 
-if (AUTO_PROVISION_SECRETS &&
+// Subcommands never provision: a `links` / `remint` run on a fresh volume must
+// not invent a whole secrets file behind the server's back.
+if (AUTO_PROVISION_SECRETS && !CLI.command &&
     (SECRET_GENERATED.host || SECRET_GENERATED.admin || SECRET_GENERATED.cookie)) {
   const toStore = { ...storedSecrets };
   if (SECRET_GENERATED.host)   toStore.hostToken    = HOST_TOKEN;
@@ -112,8 +187,8 @@ if (AUTO_PROVISION_SECRETS &&
   if (SECRET_GENERATED.cookie) toStore.cookieSecret = COOKIE_SECRET;
   toStore.generatedAt = new Date().toISOString();
   try {
-    fs.mkdirSync(path.dirname(SECRETS_PATH), { recursive: true });
-    fs.writeFileSync(SECRETS_PATH, JSON.stringify(toStore, null, 2) + '\n', { mode: 0o600 });
+    writeSecretsFile(toStore);
+    storedSecrets = toStore;
     console.log(`Auto-provisioned missing secrets → ${SECRETS_PATH}`);
   } catch (err) {
     // If the file can't persist, tokens rotate every restart and recovery
@@ -123,11 +198,11 @@ if (AUTO_PROVISION_SECRETS &&
   }
 }
 
-if (process.env.NODE_ENV === 'production' && TOKENS_AUTO_GENERATED) {
+if (process.env.NODE_ENV === 'production' && TOKENS_AUTO_GENERATED && !CLI.command) {
   console.error('FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production (or set AUTO_PROVISION_SECRETS=true to generate them once and persist under DATA_DIR).');
   process.exit(1);
 }
-if (process.env.NODE_ENV === 'production' && !AUTO_PROVISION_SECRETS && !process.env.COOKIE_SECRET) {
+if (process.env.NODE_ENV === 'production' && !AUTO_PROVISION_SECRETS && !process.env.COOKIE_SECRET && !CLI.command) {
   // Without a stable secret every restart invalidates every active session —
   // not catastrophic, but operators expect "deploy a fix" not "log everyone
   // out." Force the env var so the choice is intentional.
@@ -291,7 +366,7 @@ async function fetchJsonSafe(url) {
 // DATA_DIR.
 let questions = [];
 let bonusQuestions = [];
-const QUESTIONS_PATH = path.join(process.env.DATA_DIR || path.join(__dirname, 'data'), 'questions.json');
+const QUESTIONS_PATH = path.join(DATA_DIR, 'questions.json');
 function loadQuestionsFromDisk() {
   try {
     const raw = fs.readFileSync(QUESTIONS_PATH, 'utf8');
@@ -320,7 +395,9 @@ function saveQuestionsToDisk() {
 // ----------------------------------------------------------------------------
 // Startup CLI args — `-u <URL>` / `--seed-url <URL>` seeds the question bank
 // from a JSON or CSV at first run (when the bank is empty). The same value
-// can also come from the QUESTIONS_SEED_URL env var.
+// can also come from the QUESTIONS_SEED_URL env var. The positional
+// `remint` / `links` subcommands are recognised here too; they are handled
+// by runRemintCommand / runLinksCommand near the bottom of the file.
 //
 // Example:
 //   node server.js -u https://raw.githubusercontent.com/me/quiz/main/pack.json
@@ -332,7 +409,7 @@ function saveQuestionsToDisk() {
 function parseStartupArgs(argv) {
   // Parse a small, focused subset — keeps the surface tiny and predictable.
   // We deliberately don't pull in a dep here.
-  const out = { seedUrl: '' };
+  const out = { seedUrl: '', command: null, commandArgs: [] };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '-u' || a === '--seed-url' || a === '--url') {
@@ -342,6 +419,11 @@ function parseStartupArgs(argv) {
       out.seedUrl = a.split('=').slice(1).join('=');
     } else if (a === '-h' || a === '--help') {
       out.help = true;
+    } else if (!out.command && (a === 'remint' || a === 'links')) {
+      // Operator subcommand; the bare words that follow are its arguments.
+      out.command = a;
+    } else if (out.command && !a.startsWith('-')) {
+      out.commandArgs.push(a);
     }
   }
   // Env var fallback (only when the flag isn't present).
@@ -402,7 +484,8 @@ async function seedQuestionsFromUrl(url) {
 // Disable when tests are running (keeps test output uncluttered) or when an
 // operator explicitly opts out via LOG_DISABLE_JSON=1.
 const LOG_DISABLE = String(process.env.LOG_DISABLE_JSON || '').toLowerCase() === '1'
-  || process.env.NODE_ENV === 'test';
+  || process.env.NODE_ENV === 'test'
+  || !!CLI.command; // subcommand output is for a human at a terminal
 function logJson(level, msg, fields) {
   if (LOG_DISABLE) return;
   const entry = { ts: new Date().toISOString(), level, msg };
@@ -1004,7 +1087,7 @@ function tokensEqual(a, b) {
 // ----------------------------------------------------------------------------
 // Branding (company name, domain, logo) — persists to data/config.json
 // ----------------------------------------------------------------------------
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+// (DATA_DIR itself is defined near the top of the file — the secrets block needs it first.)
 const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 
 // Logo size cap. The data URI prefix is small; we cap the whole string at ~256 KB.
@@ -1501,6 +1584,7 @@ function consumeMagicToken(token) {
 function pruneExpiredMagic() {
   const now = Date.now();
   for (const [t, e] of magicLinks.entries()) if (e.expiresAt < now) magicLinks.delete(t);
+  for (const [t, exp] of importedSignInTokens.entries()) if (exp < now) importedSignInTokens.delete(t);
 }
 setInterval(pruneExpiredMagic, 60_000).unref?.();
 
@@ -1508,6 +1592,146 @@ setInterval(pruneExpiredMagic, 60_000).unref?.();
 // before server.listen fires the boot banner.
 let HOST_MAGIC  = mintMagicToken('host');
 let ADMIN_MAGIC = mintMagicToken('admin');
+
+// --- Pending sign-in links (written by `node server.js links`) ---
+// That subcommand runs in its own process and can't reach the magicLinks
+// Map, so it drops freshly minted tokens into DATA_DIR/signin-links.json.
+// We import the file at boot and again the moment /auth/magic sees a token
+// it doesn't know — i.e. when the operator clicks the link. Imported tokens
+// are remembered until they expire so a stale (or undeletable) file can
+// never resurrect one that has already been consumed.
+const SIGNIN_LINKS_PATH = path.join(DATA_DIR, 'signin-links.json');
+const importedSignInTokens = new Map(); // token -> expiresAt
+function importPendingSignInLinks() {
+  let raw;
+  try { raw = fs.readFileSync(SIGNIN_LINKS_PATH, 'utf8'); }
+  catch { return 0; } // ENOENT is the normal case
+  let list = null;
+  try { list = JSON.parse(raw); } catch {}
+  if (!Array.isArray(list)) list = [];
+  const now = Date.now();
+  let imported = 0;
+  for (const e of list) {
+    if (!e || typeof e.token !== 'string' || !e.token || e.token.length > 128) continue;
+    if (e.role !== 'host' && e.role !== 'admin') continue;
+    const expiresAt = Number(e.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
+    if (importedSignInTokens.has(e.token)) continue;
+    magicLinks.set(e.token, { role: e.role, expiresAt });
+    importedSignInTokens.set(e.token, expiresAt);
+    imported++;
+  }
+  // The tokens now live in memory; the file has done its job. Best-effort
+  // delete — if it fails, the importedSignInTokens guard keeps re-reads harmless.
+  try { fs.unlinkSync(SIGNIN_LINKS_PATH); } catch {}
+  if (imported) logJson('info', 'auth.signin-links.imported', { count: imported });
+  return imported;
+}
+if (!CLI.command) importPendingSignInLinks();
+
+// --- Re-keying without a restart ---
+// Where a role's recovery token comes from decides whether we may rotate it:
+//   env       — HOST_TOKEN / ADMIN_TOKEN in the environment (Fly secrets,
+//               Render env vars, docker -e). Always wins; rotate it there.
+//   file      — AUTO_PROVISION_SECRETS is on and the value lives in
+//               DATA_DIR/secrets.json. Rotatable in place, picked up live.
+//   ephemeral — dev mode: generated per boot and printed on the banner.
+function recoveryTokenSource(role) {
+  if (process.env[role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN']) return 'env';
+  return AUTO_PROVISION_SECRETS ? 'file' : 'ephemeral';
+}
+function recoveryTokenFor(role) { return role === 'admin' ? ADMIN_TOKEN : HOST_TOKEN; }
+function setRecoveryToken(role, value) { if (role === 'admin') ADMIN_TOKEN = value; else HOST_TOKEN = value; }
+
+// What the admin UI shows in Settings → Sign-in & keys. Never carries values.
+function keysStatus() {
+  const one = role => ({
+    source: recoveryTokenSource(role),
+    rotatedAt: recoveryTokenSource(role) === 'file'
+      ? ((storedSecrets.rotatedAt && storedSecrets.rotatedAt[role]) || storedSecrets.generatedAt || null)
+      : null
+  });
+  return {
+    host: one('host'),
+    admin: one('admin'),
+    autoProvision: AUTO_PROVISION_SECRETS,
+    secretsPath: AUTO_PROVISION_SECRETS ? SECRETS_PATH : null,
+    magicTtlMs: MAGIC_TTL_MS
+  };
+}
+
+// Notice a secrets.json rewritten by `node server.js remint` (or by hand)
+// without polling: one stat per recovery sign-in attempt, on a path that is
+// already rate-limited. Env-managed roles are never touched. Returns the
+// roles whose token changed.
+const MIN_RECOVERY_TOKEN_LENGTH = 16;
+function reloadSecretsFromDisk() {
+  if (!AUTO_PROVISION_SECRETS) return [];
+  let r;
+  try { r = readSecretsFile(); }
+  catch (e) {
+    if (e.code !== 'ENOENT') logJson('warn', 'auth.secrets.reload-failed', { error: e.message });
+    return [];
+  }
+  if (r.mtimeMs === secretsFileMtimeMs) return [];
+  secretsFileMtimeMs = r.mtimeMs;
+  storedSecrets = r.parsed;
+  const changed = [];
+  for (const role of ['host', 'admin']) {
+    if (recoveryTokenSource(role) !== 'file') continue;
+    const next = r.parsed[role + 'Token'];
+    if (typeof next !== 'string' || next === recoveryTokenFor(role)) continue;
+    if (next.length < MIN_RECOVERY_TOKEN_LENGTH) {
+      logJson('warn', 'auth.recovery-token.ignored', { role, reason: `shorter than ${MIN_RECOVERY_TOKEN_LENGTH} chars` });
+      continue;
+    }
+    setRecoveryToken(role, next);
+    changed.push(role);
+  }
+  if (changed.length) {
+    logJson('warn', 'auth.recovery-token.reloaded', { roles: changed });
+    logEvent('auth', `Recovery token reloaded from ${path.basename(SECRETS_PATH)} for ${changed.join(', ')}`);
+  }
+  return changed;
+}
+
+// Mint a new recovery token for `role`, persist it, and make it live at once.
+// Deliberately does NOT sign anyone out: the usual reason to rotate is a
+// lost token, and the admin doing it from the UI holds a session cookie,
+// not the token. Sessions live in memory, so a restart is the "everyone
+// out" switch. Refuses env-managed and dev-ephemeral tokens (rotating those
+// in memory would silently un-rotate on the next boot) and hands back a
+// fresh suggested value instead.
+function rotateRecoveryToken(role, { via = 'unknown' } = {}) {
+  if (role !== 'host' && role !== 'admin') return { ok: false, role, reason: 'unknown-role' };
+  const envName = role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN';
+  const source = recoveryTokenSource(role);
+  if (source !== 'file') {
+    return {
+      ok: false, role, source,
+      reason: source === 'env'
+        ? `${envName} is set in the server environment, which always wins over the secrets file. Change it there and restart.`
+        : 'Recovery tokens are regenerated on every boot in dev mode. Set AUTO_PROVISION_SECRETS=true (or the env var) to make them durable.',
+      suggested: cryptoToken(role)
+    };
+  }
+  // Re-read first so a rotation from the CLI and one from the admin UI
+  // can't clobber each other's writes.
+  reloadSecretsFromDisk();
+  const token = cryptoToken(role);
+  const rotatedAt = new Date().toISOString();
+  const next = {
+    ...storedSecrets,
+    [role + 'Token']: token,
+    rotatedAt: { ...(storedSecrets.rotatedAt && typeof storedSecrets.rotatedAt === 'object' ? storedSecrets.rotatedAt : {}), [role]: rotatedAt }
+  };
+  writeSecretsFile(next); // throws if DATA_DIR isn't writable — callers report it
+  storedSecrets = next;
+  setRecoveryToken(role, token);
+  logJson('warn', 'auth.recovery-token.rotated', { role, via });
+  logEvent('auth', `Recovery token rotated for role=${role} via ${via}. The previous token no longer works.`);
+  return { ok: true, role, source, token, rotatedAt };
+}
 
 // --- Login rate limiter (A04-2 / A07-3) ---
 // 5 failures inside LOGIN_WINDOW_MS triggers a LOGIN_BLOCK_MS cooldown. The
@@ -2439,6 +2663,25 @@ function adminAction(action, payload = {}, adminWs = null) {
       break;
     }
 
+    case 'auth:keys-status': {
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'auth:keys-status', keys: keysStatus() }));
+      break;
+    }
+
+    case 'auth:rotate-recovery-token': {
+      // Settings → Sign-in & keys → Rotate. The new value goes to the
+      // requesting socket only — never broadcast, never logged.
+      const wantRole = payload && payload.role === 'admin' ? 'admin' : 'host';
+      let result;
+      try { result = rotateRecoveryToken(wantRole, { via: 'admin-ui' }); }
+      catch (e) {
+        logJson('error', 'auth.recovery-token.rotate-failed', { role: wantRole, error: e.message });
+        result = { ok: false, role: wantRole, source: 'file', reason: 'Could not write the secrets file: ' + e.message };
+      }
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'auth:recovery-token', ...result, keys: keysStatus() }));
+      break;
+    }
+
     case 'branding:update': {
       try {
         const prevPublicBase = branding.publicBaseUrl;
@@ -2545,7 +2788,24 @@ wss.on('connection', (ws, req) => {
   // the lifetime of the WS, so we don't need to recompute per message.
   ws.clientIp = getClientIp(req);
 
+  // ws re-emits protocol errors (frame over maxPayload, invalid UTF-8) as an
+  // 'error' event on the socket. With no listener, EventEmitter throws it —
+  // straight into uncaughtException and a full graceful shutdown: one 5 MiB
+  // frame from an unauthenticated visitor restarted the server and dropped
+  // every player. ws already closes the offending socket (1009 / 1007); we
+  // only need to log and carry on.
+  ws.on('error', err => {
+    logJson('warn', 'ws.socket-error', { ip: ws.clientIp, role: ws.role || null, error: err && err.message ? err.message : String(err) });
+  });
+
   ws.on('message', raw => {
+    // maxPayload is sized for admin question-bank uploads; nobody else has a
+    // legitimate message anywhere near it, so don't even parse one.
+    if (ws.role !== 'admin' && raw.length > NON_ADMIN_MAX_WS_MESSAGE_BYTES) {
+      logJson('warn', 'ws.message-too-large', { ip: ws.clientIp, role: ws.role || null, bytes: raw.length });
+      try { ws.close(1009, 'Message too large'); } catch {}
+      return;
+    }
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
@@ -2565,7 +2825,7 @@ wss.on('connection', (ws, req) => {
         ws.close();
         return;
       }
-      ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog }));
+      ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus() }));
       pushAdminState();
       return;
     }
@@ -2812,6 +3072,9 @@ app.post('/auth/login', (req, res) => {
   const role = req.body && req.body.role === 'admin' ? 'admin' : 'host';
   // Trim incidental whitespace/newlines (e.g. from terminal copy-paste).
   const token = String((req.body && req.body.token) || '').replace(/[\s\r\n]+/g, '');
+  // A `remint` from another process may have rewritten the secrets file
+  // since we last looked — adopt it before comparing.
+  reloadSecretsFromDisk();
   const expected = role === 'admin' ? ADMIN_TOKEN : HOST_TOKEN;
   if (!tokensEqual(token, expected)) {
     recordLoginFailure(ip);
@@ -2836,7 +3099,10 @@ app.get('/auth/magic', (req, res) => {
     return res.status(429).type('text/plain').send('Too many failed sign-in attempts. Try again later.');
   }
   const t = typeof req.query.t === 'string' ? req.query.t : '';
-  const entry = consumeMagicToken(t);
+  let entry = consumeMagicToken(t);
+  // Unknown token? `node server.js links` may have minted it since the last
+  // import — pull the file in and try once more before counting a failure.
+  if (!entry && t && importPendingSignInLinks() > 0) entry = consumeMagicToken(t);
   if (!entry) {
     recordLoginFailure(ip);
     logEvent('auth-fail', `Magic-link login failed (expired/invalid/used) from ${ip}`);
@@ -3244,6 +3510,95 @@ app.use((err, req, res, next) => {
 // ----------------------------------------------------------------------------
 // Start (only when invoked directly — the test harness imports this file)
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Operator subcommands. Run them ON the server so they share DATA_DIR with
+// the live process:
+//
+//   fly ssh console -C "node /app/server.js links"          # Fly.io
+//   docker exec omegaquiz node server.js remint admin        # Docker
+//   node server.js links                                     # bare metal
+//
+//   remint <admin|host|all>   rotate a recovery token in place
+//   links  [admin|host|all]   mint fresh single-use magic sign-in links
+//
+// Neither restarts the server nor signs anyone out. The live process adopts
+// the new values lazily: on the next recovery sign-in (remint) or the first
+// click of the link (links). Output is for a human at a terminal.
+// ----------------------------------------------------------------------------
+function parseRoleArg(arg, fallback) {
+  const v = String(arg || fallback).toLowerCase();
+  if (v === 'all' || v === 'both') return ['host', 'admin'];
+  if (v === 'host' || v === 'admin') return [v];
+  return null;
+}
+function runRemintCommand(args) {
+  const roles = parseRoleArg(args[0], '');
+  if (!roles) {
+    console.error('Usage: node server.js remint <admin|host|all>');
+    return 2;
+  }
+  const base = getPublicBaseUrl(null);
+  let refused = 0;
+  for (const role of roles) {
+    const envName = role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN';
+    let r;
+    try { r = rotateRecoveryToken(role, { via: 'cli' }); }
+    catch (e) { r = { ok: false, role, source: 'file', reason: `could not write ${SECRETS_PATH}: ${e.message}` }; }
+    console.log('');
+    if (r.ok) {
+      console.log(` ${envName} rotated and saved to ${SECRETS_PATH}.`);
+      console.log(' The previous token stops working immediately. Signed-in devices are unaffected.');
+      console.log('');
+      console.log(`    ${envName} = ${r.token}`);
+      console.log(`    Sign in at ${base}/auth/login?role=${role}`);
+      continue;
+    }
+    refused++;
+    console.log(` ${envName} NOT rotated: ${r.reason}`);
+    if (r.source === 'env') {
+      console.log(' Rotate it where it is set, for example:');
+      console.log(`    fly secrets set ${envName}=${r.suggested}     # Fly.io — restarts the app`);
+      console.log(`    docker run ... -e ${envName}=${r.suggested}  # Docker`);
+    } else if (r.source === 'ephemeral') {
+      console.log(' Restart the server for a fresh token, or set AUTO_PROVISION_SECRETS=true to make tokens durable.');
+    }
+  }
+  console.log('');
+  return refused ? 1 : 0;
+}
+function runLinksCommand(args) {
+  const roles = parseRoleArg(args[0], 'all');
+  if (!roles) {
+    console.error('Usage: node server.js links [admin|host|all]');
+    return 2;
+  }
+  // Append to anything still pending so two invocations in a row both work.
+  let pending = [];
+  try {
+    const cur = JSON.parse(fs.readFileSync(SIGNIN_LINKS_PATH, 'utf8'));
+    if (Array.isArray(cur)) pending = cur;
+  } catch {}
+  const now = Date.now();
+  pending = pending.filter(e => e && Number(e.expiresAt) > now);
+  const minted = roles.map(role => ({ role, token: crypto.randomBytes(32).toString('base64url'), expiresAt: now + MAGIC_TTL_MS }));
+  try { writePrivateJson(SIGNIN_LINKS_PATH, pending.concat(minted)); }
+  catch (e) {
+    console.error(`Could not write ${SIGNIN_LINKS_PATH}: ${e.message}`);
+    return 1;
+  }
+  const base = getPublicBaseUrl(null);
+  const ttlMin = Math.round(MAGIC_TTL_MS / 60_000);
+  console.log('');
+  console.log(` Fresh sign-in links — single-use, valid ${ttlMin} min, honoured by the running server on first click:`);
+  for (const m of minted) console.log(`    ${m.role === 'admin' ? 'Admin' : 'Host '} →  ${base}/auth/magic?t=${m.token}`);
+  if (!branding.publicBaseUrl && !ENV_PUBLIC_BASE_URL) {
+    console.log('');
+    console.log(' (Links use localhost — set PUBLIC_BASE_URL or the admin "Public server URL" for a clickable host.)');
+  }
+  console.log('');
+  return 0;
+}
+
 // Re-usable: print the operator banner with the current public-base URL.
 // Called once at startup and again whenever the admin changes publicBaseUrl
 // (so deploy logs always reflect the URLs operators should click).
@@ -3270,6 +3625,10 @@ function printBanner(reason) {
   console.log(` Recovery sign-in (only needed if all magic links have expired):`);
   console.log(`    ${base}/auth/login?role=host    — enter HOST_TOKEN`);
   console.log(`    ${base}/auth/login?role=admin   — enter ADMIN_TOKEN`);
+  console.log('');
+  console.log(' Locked out? Run on the server — no restart needed (docs/DEPLOYMENT.md → Keys):');
+  console.log('    node server.js links           — fresh magic links');
+  console.log('    node server.js remint <role>   — rotate a recovery token');
   if (TOKENS_AUTO_GENERATED && !reason) {
     console.log('');
     console.log(' (Dev mode — recovery tokens were auto-generated this boot. Save them somewhere safe:)');
@@ -3408,11 +3767,18 @@ if (require.main === module) {
     console.log('                         Only runs when the on-disk bank is empty. https:// only.');
     console.log('  -h, --help             Show this help text.');
     console.log('');
+    console.log('Subcommands (run on the server — they share DATA_DIR with the live process):');
+    console.log('  remint <admin|host|all>  Rotate a recovery token in place. No restart: the');
+    console.log('                           running server adopts it on the next recovery sign-in.');
+    console.log('  links [admin|host|all]   Mint fresh single-use magic sign-in links (10 min).');
+    console.log('');
     console.log('Environment variables:');
     console.log('  QUESTIONS_SEED_URL     Same as --seed-url. CLI flag takes precedence.');
     console.log('  PORT, DATA_DIR, HOST_TOKEN, ADMIN_TOKEN, PUBLIC_BASE_URL, SAMPLE_PACKS_URL');
     process.exit(0);
   }
+  if (cli.command === 'remint') process.exit(runRemintCommand(cli.commandArgs));
+  if (cli.command === 'links')  process.exit(runLinksCommand(cli.commandArgs));
   server.listen(PORT, async () => {
     // Seed-on-first-run. We do this after listen() so the server is already
     // accepting traffic — slow fetches don't block the boot, and a failure
@@ -3459,6 +3825,8 @@ module.exports = {
   validateTheme, DEFAULT_THEME,
   DEFAULT_CONSENT_TEXT,
   mintMagicToken, consumeMagicToken,
+  rotateRecoveryToken, reloadSecretsFromDisk, recoveryTokenSource, keysStatus,
+  importPendingSignInLinks, SIGNIN_LINKS_PATH, SECRETS_PATH,
   recordJoinFailure, isJoinBlocked, clearJoinFailures,
   recordLoginFailure, isBlocked, clearLoginFailures,
   LOGIN_FAILURE_MAX, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS,

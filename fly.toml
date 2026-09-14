@@ -10,7 +10,11 @@
 # Secrets: AUTO_PROVISION_SECRETS below makes the app generate HOST_TOKEN /
 # ADMIN_TOKEN / COOKIE_SECRET on first boot and persist them on the volume
 # (data/secrets.json). The first-boot log prints the tokens once — save them.
-# To supply your own instead (env always wins over the file):
+# Lost or leaked one later? Re-key in place — no restart, nobody signed out:
+#   fly ssh console -C "node /app/server.js links"          # fresh magic links
+#   fly ssh console -C "node /app/server.js remint admin"   # new recovery token
+# (or Admin → Settings → Sign-in & keys). To supply your own values instead
+# (env always wins over the file, but rotating one then means a restart):
 #   fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
 
 app = "omegaquiz"
