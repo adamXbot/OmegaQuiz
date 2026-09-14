@@ -242,6 +242,21 @@ body{
 .audience-bar-row .sub-row .bar.alive{background:linear-gradient(90deg,#22c55e,#16a34a)}
 .audience-bar-row .sub-row .bar.elim{background:linear-gradient(90deg,#ef4444,#991b1b)}
 .audience-bar-row .sub-row .pct{min-width:34px;text-align:right;color:var(--gold);font-weight:bold;font-size:11px}
+/* --- Sign-in & keys (Settings tab) --- */
+.keys-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--gray-line);flex-wrap:wrap}
+.keys-row:first-child{border-top:none}
+.keys-desc{flex:1;min-width:220px}
+.keys-desc strong{color:var(--white)}
+.keys-meta{color:var(--gray-text);font-size:12px;margin-top:2px;line-height:1.45}
+.keys-actions{display:flex;gap:8px;flex-wrap:wrap}
+.keys-output{margin-top:12px;padding:12px 14px;border:1px solid var(--gold-dim);border-radius:8px;background:rgba(244,196,48,.06)}
+.keys-output-title{color:var(--gold);font-size:12px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px}
+.keys-value{display:block;word-break:break-all;font-family:'Courier New',monospace;font-size:13px;color:var(--white);background:rgba(0,0,0,.35);padding:8px 10px;border-radius:6px;margin:6px 0;user-select:all}
+.keys-note{color:var(--gray-text);font-size:12px;line-height:1.5}
+.keys-output.warn{border-color:var(--red);background:rgba(196,30,58,.08)}
+.keys-output.warn .keys-output-title{color:#fca5a5}
+/* A11Y: visually hidden but announced (table captions etc.). */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 </style>
 </head>
 <body>
@@ -615,6 +630,51 @@ body{
         </p>
       </div>
 
+      <!-- SIGN-IN & KEYS — hand a device a fresh magic link, or rotate a
+           recovery token, without touching the server. Values are shown once,
+           only to this admin socket, and never broadcast. -->
+      <div class="panel" style="margin-top:18px">
+        <h2>Sign-in &amp; keys</h2>
+        <p class="muted" style="font-size:13px;line-height:1.55">
+          <strong>Magic links</strong> sign a device in with one click — single-use, valid for
+          10 minutes. <strong>Recovery tokens</strong> are the long-lived fallback for the
+          <code>/auth/login</code> form; keep them in a password manager. Rotating a token
+          invalidates the old one immediately but does not sign anyone out.
+        </p>
+        <div style="margin-top:6px">
+          <div class="keys-row">
+            <div class="keys-desc"><strong>Host sign-in link</strong><div class="keys-meta">For the projector laptop, or a replacement host device mid-event.</div></div>
+            <div class="keys-actions"><button class="btn small" id="mintHostLinkBtn" type="button">New host link</button></div>
+          </div>
+          <div class="keys-row">
+            <div class="keys-desc"><strong>Admin sign-in link</strong><div class="keys-meta">For a second facilitator device. Anyone holding this link gets full admin control.</div></div>
+            <div class="keys-actions"><button class="btn small" id="mintAdminLinkBtn" type="button">New admin link</button></div>
+          </div>
+          <div class="keys-row">
+            <div class="keys-desc"><strong>Host recovery token</strong><div class="keys-meta" id="hostKeyMeta">Checking…</div></div>
+            <div class="keys-actions"><button class="btn small danger" id="rotateHostTokenBtn" type="button" disabled>Rotate token</button></div>
+          </div>
+          <div class="keys-row">
+            <div class="keys-desc"><strong>Admin recovery token</strong><div class="keys-meta" id="adminKeyMeta">Checking…</div></div>
+            <div class="keys-actions"><button class="btn small danger" id="rotateAdminTokenBtn" type="button" disabled>Rotate token</button></div>
+          </div>
+        </div>
+        <div class="keys-output" id="keysOutput" role="status" aria-live="polite" hidden>
+          <div class="keys-output-title" id="keysOutputTitle"></div>
+          <code class="keys-value" id="keysOutputValue"></code>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn small" id="keysCopyBtn" type="button">Copy</button>
+            <span class="keys-note" id="keysOutputNote"></span>
+          </div>
+        </div>
+        <p class="muted" style="font-size:12px;margin-top:12px;line-height:1.5">
+          Locked out of this page entirely? On the server, <code>node server.js links</code> prints
+          fresh magic links and <code>node server.js remint admin</code> rotates a token — no restart.
+          On Fly.io: <code>fly ssh console -C "node /app/server.js links"</code>.
+          See <em>docs/DEPLOYMENT.md → Keys</em>.
+        </p>
+      </div>
+
       <!-- SESSION CONTROL — the safe, reversible "off button". Close the
            storefront so new players see a goodbye screen; admin can still
            sign in and reopen. Shutdown/Restart live further down (Dev opts). -->
@@ -842,6 +902,13 @@ function connect() {
       eventLog = msg.eventLog || [];
       renderQuestions();
       renderLog();
+      if (msg.keys) renderKeys(msg.keys);
+    } else if (msg.type === 'auth:keys-status') {
+      renderKeys(msg.keys);
+    } else if (msg.type === 'auth:magic-link') {
+      showMintedLink(msg);
+    } else if (msg.type === 'auth:recovery-token') {
+      showRotatedToken(msg);
     } else if (msg.type === 'admin:state') {
       state = msg.state;
       renderAll();
@@ -1969,6 +2036,108 @@ function bindBrandingMessages(){
   };
 }
 bindBrandingMessages();
+
+/* =====================
+   SIGN-IN & KEYS (Settings tab)
+   ===================== */
+// Server tells us where each recovery token lives (env / file / ephemeral)
+// via admin:init and after every rotation. Only file-backed tokens can be
+// rotated from here; the others get an explanation instead of a button.
+let keysCopyValue = '';
+function describeKeySource(k) {
+  if (!k) return 'Unknown.';
+  if (k.source === 'env') return 'Set by an environment variable on the server, which always wins. Rotate it there (e.g. fly secrets set) and restart.';
+  if (k.source === 'file') {
+    const when = k.rotatedAt ? ' · last changed ' + new Date(k.rotatedAt).toLocaleString() : '';
+    return 'Stored on the server' + when + '. Rotating takes effect immediately.';
+  }
+  return 'Dev mode: regenerated on every restart and printed on the boot banner.';
+}
+function renderKeys(keys) {
+  for (const role of ['host', 'admin']) {
+    const k = keys && keys[role];
+    const meta = document.getElementById(role + 'KeyMeta');
+    const btn = document.getElementById('rotate' + (role === 'host' ? 'Host' : 'Admin') + 'TokenBtn');
+    if (meta) meta.textContent = describeKeySource(k);
+    if (btn) {
+      const rotatable = !!(k && k.source === 'file');
+      btn.disabled = !rotatable;
+      btn.title = rotatable ? '' : 'Only server-stored tokens can be rotated from here.';
+    }
+  }
+}
+function showKeysOutput({ title, value, note, warn }) {
+  const box = document.getElementById('keysOutput');
+  const copyBtn = document.getElementById('keysCopyBtn');
+  document.getElementById('keysOutputTitle').textContent = title;
+  document.getElementById('keysOutputValue').textContent = value || '';
+  document.getElementById('keysOutputNote').textContent = note || '';
+  keysCopyValue = value || '';
+  copyBtn.hidden = !value;
+  copyBtn.textContent = 'Copy';
+  box.classList.toggle('warn', !!warn);
+  box.hidden = false;
+}
+function showMintedLink(msg) {
+  const mins = Math.round((msg.ttlMs || 600000) / 60000);
+  showKeysOutput({
+    title: (msg.role === 'admin' ? 'Admin' : 'Host') + ' sign-in link',
+    value: msg.url,
+    note: `Single use · expires in ${mins} min · open it on the device you want signed in.`
+  });
+}
+function showRotatedToken(msg) {
+  if (msg.keys) renderKeys(msg.keys);
+  const envName = msg.role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN';
+  if (msg.ok) {
+    showKeysOutput({
+      title: 'New ' + envName + ' — shown once',
+      value: msg.token,
+      note: 'Save it in your password manager now. The old token has stopped working; signed-in devices stay signed in.'
+    });
+    return;
+  }
+  showKeysOutput({
+    title: envName + ' not rotated',
+    value: msg.suggested || '',
+    note: (msg.reason || 'Rotation refused.') + (msg.suggested ? ' A fresh value you can use is shown above.' : ''),
+    warn: true
+  });
+}
+(function wireKeysPanel(){
+  const mintHost = document.getElementById('mintHostLinkBtn');
+  const mintAdmin = document.getElementById('mintAdminLinkBtn');
+  const rotHost = document.getElementById('rotateHostTokenBtn');
+  const rotAdmin = document.getElementById('rotateAdminTokenBtn');
+  const copyBtn = document.getElementById('keysCopyBtn');
+  if (!mintHost || !mintAdmin || !rotHost || !rotAdmin || !copyBtn) return;
+  mintHost.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'host' }));
+  mintAdmin.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'admin' }));
+  const rotate = role => confirmAction(
+    'Rotate the ' + role + ' recovery token?',
+    'The current ' + (role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN') + ' stops working immediately. The new one is shown once — have your password manager ready.',
+    () => adminAction('auth:rotate-recovery-token', { role })
+  );
+  rotHost.addEventListener('click', () => rotate('host'));
+  rotAdmin.addEventListener('click', () => rotate('admin'));
+  copyBtn.addEventListener('click', async () => {
+    if (!keysCopyValue) return;
+    try {
+      await navigator.clipboard.writeText(keysCopyValue);
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    } catch {
+      // Clipboard API refused (plain-http origin or permissions): select the
+      // value so a plain Ctrl/Cmd+C works instead.
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById('keysOutputValue'));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      copyBtn.textContent = 'Selected — press Ctrl/⌘+C';
+    }
+  });
+})();
 
 // Maintenance: Export & Wipe form. Gates the submit button on a literal
 // "WIPE DATA" confirmation string. Browser handles the file download
