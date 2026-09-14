@@ -4,13 +4,26 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Re-key without a restart.** `node server.js remint <admin|host|all>` rotates a recovery token in place and `node server.js links [role]` mints fresh single-use magic sign-in links, both from a shell on the server (`fly ssh console -C "node /app/server.js links"`, `docker exec …`). The running server picks the new values up lazily — on the next recovery sign-in or the first click of the link — so nothing restarts and nobody is signed out. Works for tokens kept in `DATA_DIR/secrets.json` (`AUTO_PROVISION_SECRETS=true`, the `fly.toml` default); env-managed tokens are refused with a ready-to-paste `fly secrets set` line instead. Run as root (as `fly ssh console` does), the subcommands drop to the owner of `DATA_DIR` so the server can still read what they write.
+- **Admin → Settings → Sign-in & keys.** Mint a new host or admin magic link (the `auth:mint-magic-link` action existed but had no UI), rotate either recovery token (`auth:rotate-recovery-token`), and see where each token comes from (`admin:init` now carries `keys`; `auth:keys-status` on demand). Rotated values are shown once, to the requesting socket only.
+- `just remint`, `just links`, `just fly-remint`, `just fly-links` recipes, and a "Keys — lost, expired or compromised" section in `docs/DEPLOYMENT.md`.
+- **JSON import in the Questions tab.** *Import CSV* is now *Import CSV / JSON* and accepts the same `{ title?, category?, tagline?, main, bonus }` pack format as `samples/*.json` and *Export JSON*, so a pack downloaded from GitHub imports as-is. Pack metadata is applied to branding exactly as a sample-pack load would. New admin action `questions:import-json`; `questions:imported` now carries `format` (`csv` | `json`) and `brandingUpdated`; sample-pack errors carry `scope: "samples"`.
+
 ### Fixed
 
 - **Docker / Fly.io: "Browse sample packs" never loaded.** The Dockerfile did not copy `samples/` into the image, so the bundled manifest was missing at runtime. The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever and looked like a timeout. The image now ships `samples/`; a missing bundled pack produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all); and CI smoke-tests the built image for the packs. Render (native Node runtime) was never affected.
 
-### Added
+### Security
 
-- **JSON import in the Questions tab.** *Import CSV* is now *Import CSV / JSON* and accepts the same `{ title?, category?, tagline?, main, bonus }` pack format as `samples/*.json` and *Export JSON*, so a pack downloaded from GitHub imports as-is. Pack metadata is applied to branding exactly as a sample-pack load would. New admin action `questions:import-json`; `questions:imported` now carries `format` (`csv` | `json`) and `brandingUpdated`; sample-pack errors carry `scope: "samples"`.
+- **HIGH — One oversized WebSocket frame from an unauthenticated visitor crashed the server.** `ws` re-emits protocol errors (frame over `maxPayload`, invalid UTF-8) as an `'error'` event on the socket; no listener was registered, so the event became an `uncaughtException` and ran the full graceful shutdown. A single 5 MiB frame dropped every player and restarted the process (reproduced against `main`). Patched: per-socket `'error'` listener that logs `ws.socket-error`, plus a 16 KiB cap on messages from non-admin sockets, closed with 1009 before parsing.
+
+### Changed
+
+- `secrets.json` is written atomically (temp file + rename) and records `rotatedAt` per role. `HOST_TOKEN` / `ADMIN_TOKEN` are mutable inside the process; `COOKIE_SECRET` is not.
+- Structured JSON log lines are suppressed while a subcommand runs — its output is for a human.
+- Test suite: 519 → 592 checks (re-keying unit + WS + end-to-end child-process coverage, WS robustness; JSON import, missing-samples error and sample-error scope).
 
 ## [1.1.1] - 2026-05-19
 

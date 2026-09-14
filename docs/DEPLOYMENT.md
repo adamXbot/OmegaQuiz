@@ -27,9 +27,9 @@ node -e "console.log('ADMIN_TOKEN='   + require('crypto').randomBytes(32).toStri
 node -e "console.log('COOKIE_SECRET=' + require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Save the three lines somewhere safe — a password manager is ideal. These are your **recovery tokens**. You only need them if every active magic link has expired, but you cannot regenerate them after deploy without restarting the server and rotating sessions.
+Save the three lines somewhere safe — a password manager is ideal. These are your **recovery tokens**. You only need them if every active magic link has expired. Lost one after deploy? See [Keys — lost, expired or compromised](#keys--lost-expired-or-compromised): both tokens can be re-minted on the running server without a restart.
 
-> If you forget to set `HOST_TOKEN` and `ADMIN_TOKEN` when deploying with `NODE_ENV=production`, **the server refuses to start** and logs `FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production.` That's intentional — but it means a deploy will appear to "fail" if you skip this step. If your platform reports "container exited with code 1" or similar, this is almost always why.
+> If you forget to set `HOST_TOKEN` and `ADMIN_TOKEN` when deploying with `NODE_ENV=production`, **the server refuses to start** and logs `FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production.` That's intentional — but it means a deploy will appear to "fail" if you skip this step. If your platform reports "container exited with code 1" or similar, this is almost always why. The exception is `AUTO_PROVISION_SECRETS=true` (the bundled `fly.toml` sets it): the server then generates any missing secret on first boot, stores it in `DATA_DIR/secrets.json` on the volume, and prints the generated tokens once in the boot log.
 
 ---
 
@@ -53,17 +53,25 @@ Pick the path that matches your platform.
 
 ### Fly.io
 
+The bundled `fly.toml` sets `AUTO_PROVISION_SECRETS=true`, so you can skip Step 1 entirely: on first boot the app generates `HOST_TOKEN`, `ADMIN_TOKEN` and `COOKIE_SECRET`, stores them in `/app/data/secrets.json` on the volume, and prints the two tokens once in the boot log. Tokens kept this way can be rotated later without a restart — see [Keys](#keys--lost-expired-or-compromised).
+
 ```bash
 # One-time:
 brew install flyctl                              # or: curl -L https://fly.io/install.sh | sh
 fly auth login
 fly launch --no-deploy --copy-config             # accept defaults; do not deploy yet
 fly volumes create omegaquiz_data --size 1 --region <your-region>
-fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
-fly secrets set PUBLIC_BASE_URL=https://<your-app>.fly.dev
 fly deploy
-fly logs                                         # watch the boot banner
+fly logs                                         # boot banner: magic links + the generated tokens (save them)
 ```
+
+Prefer to manage the secrets yourself? Set them before deploying and they take precedence over the file — but rotating one then means `fly secrets set`, which restarts the app:
+
+```bash
+fly secrets set HOST_TOKEN=... ADMIN_TOKEN=... COOKIE_SECRET=...
+```
+
+`PUBLIC_BASE_URL` lives in `fly.toml` under `[env]` — change it there if your app name or custom domain differs.
 
 ### Docker (self-host)
 
@@ -134,6 +142,46 @@ If the boot banner never appeared, see [Common failures](#common-failures) below
 
 ---
 
+## Keys — lost, expired or compromised
+
+Two kinds of credential exist, and each has an in-place fix — no redeploy, no restart, nobody gets signed out:
+
+| Situation | Do this |
+|---|---|
+| A magic link expired before you clicked it | Already signed in as admin? **Settings → Sign-in & keys → New host / admin link.** Otherwise mint one on the server (below). |
+| You need to sign in another device (a replacement projector laptop, a co-facilitator) | Admin → **Settings → Sign-in & keys → New host link / New admin link**, then open the link on that device. |
+| You lost a recovery token, or it may have leaked | Admin → **Settings → Sign-in & keys → Rotate token**. The old value stops working immediately; the new one is shown once. |
+| You are locked out completely (links expired, tokens lost) | Run `links` on the server — it prints fresh magic links that the running server honours on first click. |
+
+The two server commands run **on the machine**, next to the live process, because they work through the data directory it already reads:
+
+```bash
+# Fly.io
+fly ssh console -C "node /app/server.js links"          # fresh magic links, printed in your terminal
+fly ssh console -C "node /app/server.js remint admin"   # new ADMIN_TOKEN  (host | admin | all)
+
+# Docker
+docker exec omegaquiz node server.js links
+docker exec omegaquiz node server.js remint host
+
+# Bare metal, Railway shell, Render shell
+node server.js links
+node server.js remint all
+```
+
+`just fly-links` and `just fly-remint admin` wrap the Fly versions. If `remint` replies that tokens are *regenerated on every boot*, the shell did not inherit the app’s environment — prefix the command with `AUTO_PROVISION_SECRETS=true` (and `DATA_DIR=/app/data` if you changed it).
+
+How it works: `remint` rewrites `secrets.json` (atomically, mode 0600) and the running server re-reads that file the next time someone submits the recovery form. `links` writes single-use tokens to `signin-links.json`; the server imports the file the moment one of them is clicked, then deletes it. Nothing else moves: `COOKIE_SECRET` stays put, sessions stay valid, players stay connected. When a root shell runs the command (as `fly ssh console` does) it switches to the owner of the data directory first, so the server can still read what it wrote.
+
+Two limits, both deliberate:
+
+- **Tokens set as environment variables win over the file.** If you manage `HOST_TOKEN` / `ADMIN_TOKEN` with `fly secrets set` (or `-e` in Docker), `remint` refuses and prints a ready-to-paste replacement instead — apply it with `fly secrets set ADMIN_TOKEN=…`, which restarts the app. Rotating an env-managed token in memory would silently undo itself on the next boot, so the tool won't.
+- **Rotating does not sign anyone out.** Sessions live in memory; if you need every device out (say the admin laptop was stolen), rotate the token *and* restart (**Settings → Developer options → Restart server**, or `fly machine restart`).
+
+Magic links printed by `links` or the boot banner are single-use and expire after 10 minutes, so their appearance in `fly logs` or your terminal history is harmless once clicked. Anyone with shell access to the machine could mint them anyway — the same people who can read `secrets.json`.
+
+---
+
 ## Step 4 — Load questions and brand the session
 
 In the admin tab:
@@ -162,7 +210,7 @@ This is event-driven software. The recommended posture is:
 1. **Export results** — admin → Players tab → "Download Results XLSX".
 2. **Wipe data** — admin → Settings tab → "Maintenance — Export & Wipe Data". Type `WIPE DATA` to confirm. The action downloads a final XLSX snapshot, deletes `data/config.json` + `data/questions.json` from the server, and resets the in-memory state.
 3. **Scale the service to zero** between events (Railway / Render / Fly all support this with one click) **or** stop the Docker container.
-4. **Rotate `HOST_TOKEN` and `ADMIN_TOKEN`** after each event — they're recovery tokens, not permanent passwords.
+4. **Rotate `HOST_TOKEN` and `ADMIN_TOKEN`** after each event — they're recovery tokens, not permanent passwords. `node server.js remint all` on the server (or Admin → Settings → Sign-in & keys) does it in place.
 
 ### Why bother — the threat model
 
@@ -182,7 +230,7 @@ Treat this like a pop-up shop, not a permanent storefront.
 |---|---|---|
 | Deployment "succeeds" but `/` returns no response and logs show `FATAL: HOST_TOKEN and ADMIN_TOKEN must be set in production` | You forgot Step 1, or didn't paste the secrets into the platform UI before deploying. | Set the env vars on the platform, redeploy. |
 | Boot banner appears but `Public URL` is `http://localhost:3000` | `PUBLIC_BASE_URL` not set. | Add `PUBLIC_BASE_URL=https://your-domain.example.com` as a platform env var, or set it via admin → Branding → Public server URL. Then the QR code and magic links will use the right host. |
-| Magic link returns `error=1` on click | Token already used / expired (10-min TTL) / server restarted since the boot banner. | Use the recovery URL — `/auth/login?role=admin` + the `ADMIN_TOKEN` from Step 1. |
+| Magic link returns `error=1` on click | Token already used / expired (10-min TTL) / server restarted since the boot banner. | Use the recovery URL — `/auth/login?role=admin` + your `ADMIN_TOKEN` — or mint a fresh link on the server: `fly ssh console -C "node /app/server.js links"` (see [Keys](#keys--lost-expired-or-compromised)). |
 | `/health` returns 503 | Server is mid-shutdown. | Wait 30s, retry. If it persists, check logs for `uncaughtException` or `unhandledRejection`. |
 | Player phones show "Wrong join code" but the code on the projector matches | A reset-game rotated the join code. Players need the QR or 6-digit code that's currently on the projector. | — |
 | Player phones show "Too many join attempts from this network" | Rate-limit guard kicked in (8 wrong codes / 60s from one IP, 5-minute cooldown). | Wait 5 minutes. If a corporate NAT puts everyone on one IP, expect this when a lot of players type the code wrong simultaneously — bump the rate-limit constants in `server.js` for high-NAT environments. |

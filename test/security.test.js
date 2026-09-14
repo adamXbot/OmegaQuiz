@@ -2951,6 +2951,253 @@ async function ssrfGuardTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Keys: re-keying without a restart (CLI remint / links, admin rotate)
+// ----------------------------------------------------------------------------
+const { spawn, execFile } = require('child_process');
+const net = require('net');
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
+  });
+}
+// Like request() but against an arbitrary port (the spawned child server).
+function rawRequest(port, method, urlPath, { headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const opts = { hostname: '127.0.0.1', port, method, path: urlPath, headers: { ...headers } };
+    if (body != null) opts.headers['Content-Length'] = Buffer.byteLength(body);
+    const req = http.request(opts, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({
+        status: res.statusCode, headers: res.headers,
+        body: Buffer.concat(chunks).toString('utf8'), setCookie: res.headers['set-cookie'] || []
+      }));
+    });
+    req.on('error', reject);
+    if (body != null) req.write(body);
+    req.end();
+  });
+}
+function runCli(args, env) {
+  return new Promise(resolve => {
+    execFile(process.execPath, [path.join(__dirname, '..', 'server.js'), ...args], { env, timeout: 20000 }, (err, stdout, stderr) => {
+      const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+      resolve({ code, stdout: String(stdout), stderr: String(stderr) });
+    });
+  });
+}
+
+async function keyRemintTests() {
+  const { rotateRecoveryToken, reloadSecretsFromDisk, recoveryTokenSource, keysStatus, importPendingSignInLinks, SIGNIN_LINKS_PATH } = srv;
+
+  section('Keys: parseStartupArgs recognises the remint / links subcommands');
+  {
+    const a = parseStartupArgs(['node', 'server.js', 'remint', 'admin']);
+    ok(a.command === 'remint' && a.commandArgs.length === 1 && a.commandArgs[0] === 'admin', 'remint admin → command + arg');
+    const b = parseStartupArgs(['node', 'server.js', 'links']);
+    ok(b.command === 'links' && b.commandArgs.length === 0, 'links → command, no args');
+    const c = parseStartupArgs(['node', 'server.js', '-u', 'https://example.com/q.json', 'links', 'host']);
+    ok(c.command === 'links' && c.commandArgs[0] === 'host' && c.seedUrl === 'https://example.com/q.json', 'flags and a subcommand coexist');
+    const d = parseStartupArgs(['node', 'server.js']);
+    ok(d.command === null && Array.isArray(d.commandArgs) && d.commandArgs.length === 0, 'no subcommand → command null');
+  }
+
+  section('Keys: env-managed tokens (this harness) are reported, never rotated in-process');
+  {
+    ok(recoveryTokenSource('host') === 'env' && recoveryTokenSource('admin') === 'env', 'source is env when HOST_TOKEN / ADMIN_TOKEN are set');
+    const before = srv.HOST_TOKEN;
+    const r = rotateRecoveryToken('host', { via: 'test' });
+    ok(r.ok === false && r.source === 'env', 'rotation refused for an env-managed token');
+    ok(typeof r.suggested === 'string' && r.suggested.startsWith('host-') && r.suggested.length > 40, 'a fresh suggested value is offered instead');
+    ok(srv.HOST_TOKEN === before, 'in-memory token unchanged after the refusal');
+    const bogus = rotateRecoveryToken('bogus');
+    ok(bogus.ok === false && bogus.reason === 'unknown-role', 'unknown role refused');
+    ok(Array.isArray(reloadSecretsFromDisk()) && reloadSecretsFromDisk().length === 0, 'reload is a no-op without AUTO_PROVISION_SECRETS');
+    const ks = keysStatus();
+    ok(ks.host.source === 'env' && ks.admin.source === 'env' && ks.autoProvision === false && ks.secretsPath === null, 'keysStatus reflects the env-managed setup');
+    const dump = JSON.stringify(ks);
+    ok(!dump.includes(process.env.ADMIN_TOKEN) && !dump.includes(process.env.HOST_TOKEN), 'keysStatus never carries token values');
+    const login = await loginAs('host', process.env.HOST_TOKEN);
+    ok(login.res.status === 302 && login.res.headers.location === '/host', 'the existing host token still signs in');
+  }
+
+  section('Keys: admin WS — keys in admin:init, rotate refused (env), no value leaks');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const ws = await openWs({ cookie: admin.cookie });
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+    const init = await waitMessage(ws, m => m.type === 'admin:init');
+    ok(init.keys && init.keys.host && init.keys.admin && init.keys.host.source === 'env', 'admin:init carries keys status');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:keys-status' }));
+    const ksMsg = await waitMessage(ws, m => m.type === 'auth:keys-status');
+    ok(ksMsg.keys && ksMsg.keys.admin.source === 'env', 'auth:keys-status answers on demand');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:rotate-recovery-token', payload: { role: 'admin' } }));
+    const rot = await waitMessage(ws, m => m.type === 'auth:recovery-token');
+    ok(rot.ok === false && rot.source === 'env' && rot.role === 'admin', 'rotate refused over WS for an env-managed token');
+    ok(!('token' in rot) && rot.keys && rot.keys.admin, 'refusal carries no token but does carry keys status');
+    try { ws.close(); } catch {}
+
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const hws = await openWs({ cookie: host.cookie });
+    hws.send(JSON.stringify({ type: 'admin:action', action: 'auth:rotate-recovery-token', payload: { role: 'admin' } }));
+    let answered = false;
+    try { await waitMessage(hws, m => m.type === 'auth:recovery-token', 500); answered = true; } catch {}
+    ok(!answered, 'a host session cannot trigger a rotation');
+    try { hws.close(); } catch {}
+  }
+
+  section('Keys: pending sign-in links file is imported lazily and honoured by /auth/magic');
+  {
+    const rnd = () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const good = 'good-' + rnd(), expired = 'expired-' + rnd(), hostLink = 'host-' + rnd();
+    fs.writeFileSync(SIGNIN_LINKS_PATH, JSON.stringify([
+      { role: 'admin', token: good, expiresAt: Date.now() + 60_000 },
+      { role: 'admin', token: expired, expiresAt: Date.now() - 1 },
+      { role: 'host', token: hostLink, expiresAt: Date.now() + 60_000 },
+      { role: 'superuser', token: 'nope', expiresAt: Date.now() + 60_000 },
+      'junk', null
+    ]));
+    const r1 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
+    ok(r1.status === 302 && r1.headers.location === '/admin', 'file-minted admin link signs in (imported on first click)');
+    ok((r1.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')), 'session cookie issued');
+    ok(!fs.existsSync(SIGNIN_LINKS_PATH), 'links file removed after import');
+    const r2 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
+    ok(r2.status === 302 && /error=1/.test(r2.headers.location || ''), 'imported link is single-use');
+    const r3 = await request('GET', '/auth/magic?t=' + encodeURIComponent(expired));
+    ok(r3.status === 302 && /error=1/.test(r3.headers.location || ''), 'expired entry was not imported');
+    const r4 = await request('GET', '/auth/magic?t=' + encodeURIComponent(hostLink));
+    ok(r4.status === 302 && r4.headers.location === '/host', 'host entry imported with the host role');
+    // A stale copy of the file must not resurrect a consumed token.
+    fs.writeFileSync(SIGNIN_LINKS_PATH, JSON.stringify([{ role: 'admin', token: good, expiresAt: Date.now() + 60_000 }]));
+    ok(importPendingSignInLinks() === 0, 're-import of an already-consumed token is ignored');
+    const r5 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
+    ok(r5.status === 302 && /error=1/.test(r5.headers.location || ''), 'consumed token stays dead after re-import');
+    clearLoginFailures('127.0.0.1');
+  }
+
+  section('Keys: end-to-end — remint + links from a separate process against a live server');
+  {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-keys-'));
+    const port = await freePort();
+    const env = { ...process.env, AUTO_PROVISION_SECRETS: 'true', DATA_DIR: dataDir, PORT: String(port), NODE_ENV: 'test', PUBLIC_BASE_URL: 'https://e2e.example.com' };
+    delete env.HOST_TOKEN; delete env.ADMIN_TOKEN; delete env.COOKIE_SECRET;
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let childOut = '';
+    child.stdout.on('data', d => { childOut += d; });
+    child.stderr.on('data', d => { childOut += d; });
+    let exited = null;
+    child.on('exit', (code, sig) => { exited = { code, sig }; });
+    let up = false;
+    for (let i = 0; i < 100 && !exited && !up; i++) {
+      try { const r = await rawRequest(port, 'GET', '/health'); if (r.status === 200) up = true; } catch {}
+      if (!up) await new Promise(r => setTimeout(r, 100));
+    }
+    ok(up, 'child server with AUTO_PROVISION_SECRETS=true came up' + (up ? '' : ' — output: ' + childOut.slice(-600)));
+    const secretsPath = path.join(dataDir, 'secrets.json');
+    let s0 = {};
+    try { s0 = JSON.parse(fs.readFileSync(secretsPath, 'utf8')); } catch {}
+    ok(typeof s0.hostToken === 'string' && typeof s0.adminToken === 'string' && typeof s0.cookieSecret === 'string', 'secrets.json auto-provisioned with all three values');
+    if (process.platform !== 'win32') ok((fs.statSync(secretsPath).mode & 0o777) === 0o600, 'secrets.json is mode 0600');
+
+    const form = (role, token) => `role=${role}&token=${encodeURIComponent(token)}&next=${encodeURIComponent('/' + role)}`;
+    const hdr = { 'Content-Type': 'application/x-www-form-urlencoded' };
+    const l0 = await rawRequest(port, 'POST', '/auth/login', { headers: hdr, body: form('host', s0.hostToken) });
+    ok(l0.status === 302 && l0.headers.location === '/host', 'original host token signs in');
+
+    // --- remint host from a separate process ---
+    const re = await runCli(['remint', 'host'], env);
+    ok(re.code === 0, 'remint host exits 0' + (re.code === 0 ? '' : ' — ' + re.stdout + re.stderr));
+    const m = re.stdout.match(/HOST_TOKEN = (\S+)/);
+    const newHost = m ? m[1] : '';
+    ok(newHost.startsWith('host-') && newHost !== s0.hostToken, 'remint printed a new HOST_TOKEN');
+    ok(!re.stdout.includes(s0.adminToken) && !/^\s*\{"ts"/m.test(re.stdout), 'remint output is human text and never shows the admin token');
+    const s1 = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+    ok(s1.hostToken === newHost && s1.adminToken === s0.adminToken && s1.cookieSecret === s0.cookieSecret, 'secrets.json: host rotated, admin + cookie untouched');
+    ok(s1.rotatedAt && typeof s1.rotatedAt.host === 'string', 'rotatedAt.host recorded');
+    if (process.platform !== 'win32') ok((fs.statSync(secretsPath).mode & 0o777) === 0o600, 'secrets.json still 0600 after rotation');
+    ok(!fs.readdirSync(dataDir).some(f => f.endsWith('.tmp')), 'no temp file left behind');
+
+    const lOld = await rawRequest(port, 'POST', '/auth/login', { headers: hdr, body: form('host', s0.hostToken) });
+    ok(lOld.status === 302 && /error=1/.test(lOld.headers.location || ''), 'old host token rejected by the RUNNING server (no restart)');
+    const lNew = await rawRequest(port, 'POST', '/auth/login', { headers: hdr, body: form('host', newHost) });
+    ok(lNew.status === 302 && lNew.headers.location === '/host', 'new host token accepted by the running server');
+    const lAdmin = await rawRequest(port, 'POST', '/auth/login', { headers: hdr, body: form('admin', s0.adminToken) });
+    ok(lAdmin.status === 302 && lAdmin.headers.location === '/admin', 'admin token unaffected');
+
+    // --- links from a separate process ---
+    const li = await runCli(['links', 'admin'], env);
+    ok(li.code === 0, 'links admin exits 0' + (li.code === 0 ? '' : ' — ' + li.stdout + li.stderr));
+    const um = li.stdout.match(/https:\/\/e2e\.example\.com\/auth\/magic\?t=([A-Za-z0-9_-]+)/);
+    ok(!!um, 'links printed a magic URL on the configured public base');
+    ok(fs.existsSync(path.join(dataDir, 'signin-links.json')), 'signin-links.json written');
+    const li2 = await runCli(['links', 'host'], env);
+    const um2 = li2.stdout.match(/\/auth\/magic\?t=([A-Za-z0-9_-]+)/);
+    ok(li2.code === 0 && !!um2, 'a second links invocation works (appends, does not clobber)');
+    const g1 = await rawRequest(port, 'GET', '/auth/magic?t=' + (um ? um[1] : 'x'));
+    ok(g1.status === 302 && g1.headers.location === '/admin' && (g1.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')), 'file-minted admin link signs in on the running server');
+    const g2 = await rawRequest(port, 'GET', '/auth/magic?t=' + (um2 ? um2[1] : 'x'));
+    ok(g2.status === 302 && g2.headers.location === '/host', 'file-minted host link (second invocation) also signs in');
+    ok(!fs.existsSync(path.join(dataDir, 'signin-links.json')), 'signin-links.json consumed');
+
+    // --- refusals ---
+    const rf = await runCli(['remint', 'admin'], { ...env, ADMIN_TOKEN: 'forced-by-env-' + 'x'.repeat(20) });
+    ok(rf.code === 1 && /environment/i.test(rf.stdout) && /fly secrets set ADMIN_TOKEN=admin-/.test(rf.stdout), 'remint refuses an env-managed token and prints the fly command');
+    const s2 = JSON.parse(fs.readFileSync(secretsPath, 'utf8'));
+    ok(s2.adminToken === s0.adminToken, 'refused rotation did not touch the file');
+    const rb = await runCli(['remint', 'bogus'], env);
+    ok(rb.code === 2, 'remint with an unknown role exits 2');
+    const rh = await runCli(['--help'], env);
+    ok(rh.code === 0 && /remint <admin\|host\|all>/.test(rh.stdout) && /links \[admin\|host\|all\]/.test(rh.stdout), '--help documents the subcommands');
+
+    // --- a subcommand on a fresh volume must not provision a secrets file ---
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-fresh-'));
+    const lf = await runCli(['links'], { ...env, DATA_DIR: freshDir });
+    ok(lf.code === 0 && !fs.existsSync(path.join(freshDir, 'secrets.json')), 'links on a fresh DATA_DIR does not create secrets.json');
+
+    child.kill('SIGTERM');
+    await new Promise(r => { if (exited) return r(); child.on('exit', r); setTimeout(r, 4000); });
+    ok(exited && exited.code === 0, 'child server shut down cleanly');
+  }
+}
+
+// ----------------------------------------------------------------------------
+// WS robustness: protocol errors must not escape as uncaughtException
+// ----------------------------------------------------------------------------
+async function wsRobustnessTests() {
+  section('WS: oversized frame from an unauthenticated socket is dropped, not fatal');
+  {
+    const ws = await openWs();
+    ws.on('error', () => {});
+    const closed = new Promise(r => ws.on('close', code => r(code)));
+    ws.send(Buffer.alloc(5 * 1024 * 1024, 0x41));
+    const code = await Promise.race([closed, new Promise(r => setTimeout(() => r('timeout'), 4000))]);
+    ok(code === 1009, `socket closed with 1009 (got ${code})`);
+    const h = await request('GET', '/health');
+    ok(h.status === 200, 'server still healthy after the oversized frame');
+  }
+  section('WS: non-admin messages above 16 KiB are dropped before parsing');
+  {
+    const ws = await openWs();
+    ws.on('error', () => {});
+    const closed = new Promise(r => ws.on('close', code => r(code)));
+    ws.send(JSON.stringify({ type: 'player:join', pad: 'x'.repeat(20000) }));
+    const code = await Promise.race([closed, new Promise(r => setTimeout(() => r('timeout'), 2000))]);
+    ok(code === 1009, `20 KB unauthenticated message → close 1009 (got ${code})`);
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const aws = await openWs({ cookie: admin.cookie });
+    aws.send(JSON.stringify({ type: 'admin:hello' }));
+    await waitMessage(aws, m => m.type === 'admin:init');
+    aws.send(JSON.stringify({ type: 'noop', pad: 'x'.repeat(20000) }));
+    await new Promise(r => setTimeout(r, 300));
+    ok(aws.readyState === 1, 'an admin socket may send larger messages');
+    try { aws.close(); } catch {}
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -2981,6 +3228,8 @@ async function ssrfGuardTests() {
     await healthEndpointTests();
     await ssrfGuardTests();
     await v111SecurityFixTests();
+    await keyRemintTests();
+    await wsRobustnessTests();
     await dataWipeTests();   // run last — it removes data files
   } catch (e) {
     console.error('\nTest run aborted by exception:', e);
