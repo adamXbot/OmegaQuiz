@@ -4,17 +4,31 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 
-# Install only production deps for a leaner final image.
-COPY package.json pnpm-lock.yaml ./
-# Keep this version in lockstep with "packageManager" in package.json.
-RUN npm install -g pnpm@11.1.3 \
+# Install only production deps for a leaner final image. pnpm-workspace.yaml
+# holds the pnpm overrides the lockfile was resolved with; --frozen-lockfile
+# refuses to run without it.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# The pnpm version has one source of truth: "packageManager" in package.json.
+# Resolve it here instead of hard-coding it (see the header for why not
+# Corepack). A "+sha512.…" integrity suffix is stripped; an empty result fails
+# the build rather than silently installing whatever "latest" is.
+RUN PNPM_VERSION="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")" \
+  && test -n "$PNPM_VERSION" \
+  && npm install -g "pnpm@${PNPM_VERSION}" \
   && pnpm install --prod --frozen-lockfile
 
 # ---- Runtime stage ----
 FROM node:24-alpine AS runtime
 
-# Tiny init so signals propagate correctly to Node.
-RUN apk add --no-cache tini
+# Pick up Alpine security patches released since the base image was built —
+# CI's Trivy scan fails on any fixed HIGH/CRITICAL OS CVE — then add a tiny
+# init so signals propagate correctly to Node.
+RUN apk upgrade --no-cache && apk add --no-cache tini
+
+# The runtime never runs npm: pnpm installed everything in the deps stage and
+# the CLI is `node server.js …`. Dropping it removes npm's bundled dependencies
+# from the container scan and shrinks the attack surface.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Run as an unprivileged user.
 RUN addgroup -S app && adduser -S app -G app
