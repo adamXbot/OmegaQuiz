@@ -4,6 +4,22 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- **Re-key without a restart.** `node server.js remint <admin|host|all>` rotates a recovery token in place and `node server.js links [role]` mints fresh single-use magic sign-in links, both from a shell on the server (`fly ssh console -C "node /app/server.js links"`, `docker exec …`). The running server picks the new values up lazily — on the next recovery sign-in or the first click of the link — so nothing restarts and nobody is signed out. Works for tokens kept in `DATA_DIR/secrets.json` (`AUTO_PROVISION_SECRETS=true`, the `fly.toml` default); env-managed tokens are refused with a ready-to-paste `fly secrets set` line instead. Run as root (as `fly ssh console` does), the subcommands drop to the owner of `DATA_DIR` so the server can still read what they write.
+- **Admin → Settings → Sign-in & keys.** Mint a new host or admin magic link (the `auth:mint-magic-link` action existed but had no UI), rotate either recovery token (`auth:rotate-recovery-token`), and see where each token comes from (`admin:init` now carries `keys`; `auth:keys-status` on demand). Rotated values are shown once, to the requesting socket only.
+- `just remint`, `just links`, `just fly-remint`, `just fly-links` recipes, and a "Keys — lost, expired or compromised" section in `docs/DEPLOYMENT.md`.
+
+### Security
+
+- **HIGH — One oversized WebSocket frame from an unauthenticated visitor crashed the server.** `ws` re-emits protocol errors (frame over `maxPayload`, invalid UTF-8) as an `'error'` event on the socket; no listener was registered, so the event became an `uncaughtException` and ran the full graceful shutdown. A single 5 MiB frame dropped every player and restarted the process (reproduced against `main`). Patched: per-socket `'error'` listener that logs `ws.socket-error`, plus a 16 KiB cap on messages from non-admin sockets, closed with 1009 before parsing.
+
+### Changed
+
+- `secrets.json` is written atomically (temp file + rename) and records `rotatedAt` per role. `HOST_TOKEN` / `ADMIN_TOKEN` are mutable inside the process; `COOKIE_SECRET` is not.
+- Structured JSON log lines are suppressed while a subcommand runs — its output is for a human.
+- Test suite: 519 → 576 checks (re-keying unit + WS + end-to-end child-process coverage, WS robustness).
+
 ## [1.1.1] - 2026-05-19
 
 Blue-hat security audit follow-up. Closes nine findings raised in a Railway-targeted review, none of which were caught by the existing 487-check suite.
