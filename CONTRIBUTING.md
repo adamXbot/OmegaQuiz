@@ -9,7 +9,7 @@ git clone https://github.com/<your-fork>/omegaquiz
 cd omegaquiz
 npm install -g pnpm # any recent pnpm; it switches itself to the version pinned in package.json
 pnpm install --frozen-lockfile
-pnpm test          # ~576 checks, should be green
+pnpm test          # ~646 checks, should be green
 pnpm start         # http://localhost:3000
 ```
 

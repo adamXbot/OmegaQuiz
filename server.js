@@ -252,14 +252,35 @@ const SAMPLE_PACKS_URL = process.env.SAMPLE_PACKS_URL
 const SAMPLE_FETCH_TIMEOUT_MS = 8000;
 const SAMPLE_MAX_BYTES = 1024 * 1024;          // 1 MB max payload
 
+const BUNDLED_SAMPLES_DIR = path.join(__dirname, 'samples');
+
+// True when the bundled catalogue is actually on disk. A container image that
+// forgot to COPY samples/ boots fine and only fails the moment an admin opens
+// "Browse sample packs" — the boot banner uses this to warn up front.
+function bundledSamplesAvailable() {
+  return fs.existsSync(path.join(BUNDLED_SAMPLES_DIR, 'manifest.json'));
+}
+
 function loadBundledSampleJson(url) {
   if (typeof url !== 'string' || !url.startsWith(BUNDLED_SAMPLE_PREFIX)) {
     throw new Error('not a bundled sample URL');
   }
   const name = url.slice(BUNDLED_SAMPLE_PREFIX.length);
   if (!/^[A-Za-z0-9._-]+\.json$/.test(name)) throw new Error('invalid bundled sample path');
-  const full = path.join(__dirname, 'samples', name);
-  return JSON.parse(fs.readFileSync(full, 'utf8'));
+  const full = path.join(BUNDLED_SAMPLES_DIR, name);
+  let raw;
+  try {
+    raw = fs.readFileSync(full, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') {
+      // Almost always a deployment that shipped without samples/ (e.g. a
+      // Dockerfile that never copied it). Say that plainly instead of
+      // surfacing a raw ENOENT + absolute path in the admin UI.
+      throw new Error(`bundled sample "${name}" is missing from this deployment — the samples/ directory was not shipped with the app`);
+    }
+    throw e;
+  }
+  return JSON.parse(raw);
 }
 async function fetchSampleJson(url) {
   if (typeof url === 'string' && url.startsWith(BUNDLED_SAMPLE_PREFIX)) {
@@ -2513,6 +2534,30 @@ function hostAction(action, payload = {}) {
   }
 }
 
+// Apply a question pack's optional metadata (title / category / tagline) to
+// branding. Shared by sample-pack loads and JSON imports so that importing a
+// pack downloaded from GitHub behaves exactly like loading it from the
+// browser. Returns true when at least one field was applied and saved.
+function applyPackBranding(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const next = { ...branding };
+  let touched = false;
+  if (typeof data.title === 'string')    { next.quizTitle    = data.title;    touched = true; }
+  if (typeof data.category === 'string') { next.quizCategory = data.category; touched = true; }
+  if (typeof data.tagline === 'string')  { next.tagline      = data.tagline;  touched = true; }
+  if (!touched) return false;
+  try {
+    const validated = validateBranding(next, { tolerant: true });
+    saveBranding(validated);
+    branding = validated;
+    broadcast({ type: 'branding:updated' });
+    return true;
+  } catch (e) {
+    // Branding failures never block a question load.
+    return false;
+  }
+}
+
 // --- Admin actions ---
 function adminAction(action, payload = {}, adminWs = null) {
   switch (action) {
@@ -2555,9 +2600,40 @@ function adminAction(action, payload = {}, adminWs = null) {
         logEvent('admin', `Questions imported from CSV (${questions.length} main, ${bonusQuestions.length} bonus)`);
         broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
         pushAll();
-        if (adminWs) adminWs.send(JSON.stringify({ type: 'questions:imported', mainCount: questions.length, bonusCount: bonusQuestions.length }));
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'questions:imported', format: 'csv', mainCount: questions.length, bonusCount: bonusQuestions.length, brandingUpdated: false }));
       } catch (e) {
         if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'CSV import failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'questions:import-json': {
+      // Same flow as the CSV import, for the JSON pack format used by
+      // samples/*.json and Export JSON: { title?, category?, tagline?, main,
+      // bonus }. A pack downloaded from GitHub therefore imports as-is, and
+      // its metadata is applied to branding exactly like a sample-pack load.
+      if (game.phase !== 'lobby' && game.phase !== 'end') {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'JSON import only allowed in lobby or after game end.' }));
+        return;
+      }
+      try {
+        let parsed;
+        try { parsed = JSON.parse(String(payload.json || '')); }
+        catch { throw new Error('file is not valid JSON'); }
+        const bank = normalizeQuestionBank(parsed, {
+          label: 'JSON import',
+          requireMain: true,
+          allowQuestionsAlias: true
+        });
+        questions = bank.main;
+        bonusQuestions = bank.bonus;
+        saveQuestionsToDisk();
+        const brandingUpdated = applyPackBranding(parsed);
+        logEvent('admin', `Questions imported from JSON (${questions.length} main, ${bonusQuestions.length} bonus)`);
+        broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
+        pushAll();
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'questions:imported', format: 'json', mainCount: questions.length, bonusCount: bonusQuestions.length, brandingUpdated }));
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'JSON import failed: ' + e.message }));
       }
       break;
     }
@@ -2583,7 +2659,9 @@ function adminAction(action, payload = {}, adminWs = null) {
             }));
           if (adminWs) adminWs.send(JSON.stringify({ type: 'samples:list', sourceUrl: SAMPLE_PACKS_URL, packs }));
         } catch (e) {
-          if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'Sample browse failed: ' + e.message }));
+          // scope lets the admin UI render this inside the packs modal — the
+          // generic banner area sits underneath the modal overlay.
+          if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'samples', error: 'Sample browse failed: ' + e.message }));
         }
       })();
       break;
@@ -2619,16 +2697,7 @@ function adminAction(action, payload = {}, adminWs = null) {
           saveQuestionsToDisk();
           // Update branding category/title/tagline from the pack metadata —
           // gives operators a one-click "load nature quiz" experience.
-          const next = { ...branding };
-          if (typeof data.title === 'string')    next.quizTitle    = data.title;
-          if (typeof data.category === 'string') next.quizCategory = data.category;
-          if (typeof data.tagline === 'string')  next.tagline      = data.tagline;
-          try {
-            const validated = validateBranding(next, { tolerant: true });
-            saveBranding(validated);
-            branding = validated;
-            broadcast({ type: 'branding:updated' });
-          } catch (e) { /* ignore branding update failures, questions still load */ }
+          applyPackBranding(data);
           logEvent('admin', `Loaded sample pack "${pack.title}" (${questions.length} main, ${bonusQuestions.length} bonus)`);
           broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
           pushAll();
@@ -2639,7 +2708,7 @@ function adminAction(action, payload = {}, adminWs = null) {
             bonusCount: bonusQuestions.length,
           }));
         } catch (e) {
-          if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'Pack load failed: ' + e.message }));
+          if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'samples', error: 'Pack load failed: ' + e.message }));
         }
       })();
       break;
@@ -3681,7 +3750,10 @@ function printBanner(reason) {
   console.log(` Public URL:  ${base}    (source: ${urlSource})`);
   console.log(` Player URL:  ${base}/`);
   console.log(` Join code:   ${game.joinCode}`);
-  console.log(` Questions:   ${questions.length} main + ${bonusQuestions.length} bonus${questions.length === 0 ? '   (empty — import a CSV or load samples from the admin Questions tab)' : ''}`);
+  console.log(` Questions:   ${questions.length} main + ${bonusQuestions.length} bonus${questions.length === 0 ? '   (empty — import a CSV / JSON file or load a sample pack from the admin Questions tab)' : ''}`);
+  if (SAMPLE_PACKS_URL.startsWith(BUNDLED_SAMPLE_PREFIX) && !bundledSamplesAvailable()) {
+    console.log(` Samples:     NOT FOUND — ${BUNDLED_SAMPLES_DIR} is missing, so "Browse sample packs" will fail. Ship samples/ with the app (the Dockerfile must COPY it) or set SAMPLE_PACKS_URL.`);
+  }
   console.log('');
   console.log(` ──  Sign in  ─────────────────────────`);
   console.log(` Click one of these magic links from your terminal (single-use, ${ttlMin} min):`);
@@ -3884,7 +3956,7 @@ module.exports = {
   createSession, deleteSession, getSession, packCookie, unpackCookie,
   loadBranding, saveBranding, validateBranding,
   parsePublicBaseUrl, getPublicBaseUrl, printBanner,
-  fetchJsonSafe, fetchTextSafe, fetchSampleJson, loadBundledSampleJson,
+  fetchJsonSafe, fetchTextSafe, fetchSampleJson, loadBundledSampleJson, bundledSamplesAvailable,
   parseStartupArgs, parseSeedBody, seedQuestionsFromUrl,
   loadDotenv, brandingFromEnv,
   gracefulShutdown,

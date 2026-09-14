@@ -404,16 +404,20 @@ body{
         <p class="muted" style="font-size:13px;line-height:1.55;max-width:520px;margin:6px auto 16px">Pick one of the options below to populate your question bank. The game can't start until at least one question is loaded.</p>
         <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
           <button class="btn primary" id="qEmptyBrowsePacks">🌐 Browse sample packs</button>
-          <button class="btn" id="qEmptyImportCsv">Import CSV</button>
+          <button class="btn" id="qEmptyImportFile">Import CSV / JSON</button>
           <a class="btn ghost" href="/questions-template.csv" download>Download template</a>
           <button class="btn ghost" id="qEmptyAddOne">Add a question manually</button>
         </div>
+        <p class="muted" style="font-size:12px;line-height:1.5;max-width:520px;margin:14px auto 0">
+          Import takes the CSV template or a JSON pack — the same format as the packs in the
+          <code>samples/</code> folder of the GitHub repo, so a downloaded pack loads as-is.
+        </p>
       </div>
 
       <div class="panel">
         <h2>Question Bank
           <span class="panel-actions">
-            <button class="btn small" id="importCsvBtn">Import CSV</button>
+            <button class="btn small" id="importBankBtn" title="Import a CSV (template format) or a JSON pack (samples/*.json format)">Import CSV / JSON</button>
             <a class="btn small" href="/questions.csv" download>Export CSV</a>
             <a class="btn small ghost" href="/questions-template.csv" download>Template CSV</a>
             <button class="btn small" id="browsePacksBtn" title="Browse sample question packs published on GitHub">🌐 Browse sample packs</button>
@@ -437,7 +441,7 @@ body{
         <button class="btn small ghost" id="addBonusBtn">+ Add Bonus Question</button>
 
         <input type="file" id="importFile" accept=".json" style="display:none">
-        <input type="file" id="importCsvFile" accept=".csv,text/csv" style="display:none">
+        <input type="file" id="importBankFile" accept=".csv,.json,text/csv,application/json" style="display:none">
       </div>
     </div>
 
@@ -634,7 +638,7 @@ body{
         <p class="muted" style="font-size:13px;line-height:1.55;margin-bottom:8px">
           Operational tools for managing the question bank, integrations, and developer-facing
           import/export options. Most operators never need to touch these — Browse sample packs
-          (in the Questions tab) and CSV import/export should cover normal use.
+          (in the Questions tab) and CSV / JSON import and export should cover normal use.
         </p>
       </div>
 
@@ -932,9 +936,11 @@ function connect() {
       renderQuestions();
       showBanner('success', 'Questions saved successfully.');
     } else if (msg.type === 'questions:imported') {
-      // CSV import succeeded — admin:questions has already fired and re-rendered.
-      // Replace the success banner with a more specific one.
-      showBanner('success', `CSV imported: ${msg.mainCount} main + ${msg.bonusCount} bonus question${msg.bonusCount === 1 ? '' : 's'} loaded.`);
+      // CSV / JSON import succeeded — admin:questions has already fired and
+      // re-rendered. Replace the success banner with a more specific one.
+      const fmt = msg.format === 'json' ? 'JSON' : 'CSV';
+      const extra = msg.brandingUpdated ? ' Quiz title and category updated from the pack.' : '';
+      showBanner('success', `${fmt} imported: ${msg.mainCount} main + ${msg.bonusCount} bonus question${msg.bonusCount === 1 ? '' : 's'} loaded.${extra}`);
     } else if (msg.type === 'samples:list') {
       renderPacksList(msg.packs, msg.sourceUrl);
     } else if (msg.type === 'samples:loaded') {
@@ -947,6 +953,10 @@ function connect() {
       setTimeout(() => location.reload(), 1500);
     } else if (msg.type === 'error') {
       showBanner('warn', msg.error);
+      // Sample-pack failures also render inside the packs modal — the banner
+      // area sits underneath the modal overlay, so on its own it is invisible
+      // while the modal is open and the operator only ever sees "Loading…".
+      if (msg.scope === 'samples') showPacksError(msg.error);
     }
   };
   ws.onclose = scheduleReconnect;
@@ -1161,7 +1171,7 @@ function renderGameControl() {
       label: empty ? 'Start Game (no questions loaded)' : 'Start Game',
       primary: !empty,
       disabled: empty,
-      title: empty ? 'Import a CSV or click "Load sample questions" in the Questions tab first.' : '',
+      title: empty ? 'Import a CSV / JSON file or load a sample pack in the Questions tab first.' : '',
       action: () => hostActionFromAdmin('start-game')
     });
   } else if (state.phase === 'question') {
@@ -1374,8 +1384,8 @@ function renderQuestions() {
 // the primary path. The bundled-samples shortcut still lives in Settings →
 // Developer options for anyone who needs it.
 document.addEventListener('DOMContentLoaded', () => {
-  const importCsvBtn = document.getElementById('qEmptyImportCsv');
-  if (importCsvBtn) importCsvBtn.onclick = () => document.getElementById('importCsvFile').click();
+  const importFileBtn = document.getElementById('qEmptyImportFile');
+  if (importFileBtn) importFileBtn.onclick = () => document.getElementById('importBankFile').click();
   const addOneBtn = document.getElementById('qEmptyAddOne');
   if (addOneBtn) addOneBtn.onclick = () => document.getElementById('addMainBtn').click();
   const browsePacksBtnEmpty = document.getElementById('qEmptyBrowsePacks');
@@ -1569,20 +1579,68 @@ document.getElementById('resetDefaultsBtn').onclick = () => {
    SAMPLE PACKS BROWSER
    ===================== */
 let _packsDetach = null;
+let packsPending = false;       // true while the catalogue request is in flight
+let packsTimer = null;
+// The server caps its own manifest fetch at 8s and always replies (list or
+// error). This only catches a lost WS round-trip, so the modal can never sit
+// on "Loading…" indefinitely.
+const PACKS_TIMEOUT_MS = 15000;
 function openPacksModal() {
   const modal = document.getElementById('packsModal');
   modal.classList.add('active');
   document.getElementById('packsSource').textContent = 'Fetching catalogue…';
   document.getElementById('packsBody').innerHTML = '<div class="muted" style="padding:24px;text-align:center;font-style:italic">Loading…</div>';
+  packsPending = true;
+  clearTimeout(packsTimer);
+  packsTimer = setTimeout(() => {
+    if (packsPending) showPacksError('No reply from the server. Check the connection and try again.');
+  }, PACKS_TIMEOUT_MS);
   adminAction('samples:list');
   if (_packsDetach) _packsDetach();
   _packsDetach = trapModal(modal, { onEscape: closePacksModal });
 }
 function closePacksModal() {
+  packsPending = false;
+  clearTimeout(packsTimer);
   document.getElementById('packsModal').classList.remove('active');
   if (_packsDetach) { _packsDetach(); _packsDetach = null; }
 }
+// Render a sample-pack failure inside the modal (see the 'error' handler for
+// why the banner alone isn't enough). While the catalogue is still pending
+// the spinner is replaced with the reason and a Retry button; once a list is
+// showing, a failed pack load is reported in a strip above it.
+function showPacksError(message) {
+  const modal = document.getElementById('packsModal');
+  if (!modal.classList.contains('active')) return;
+  const body = document.getElementById('packsBody');
+  clearTimeout(packsTimer);
+  if (packsPending) {
+    packsPending = false;
+    document.getElementById('packsSource').textContent = 'Catalogue unavailable';
+    body.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'banner warn';
+    box.setAttribute('role', 'alert');
+    box.style.margin = '12px 0';
+    box.innerHTML = `<span>${escapeHtml(message)}</span><button class="btn small" data-act="retry-packs">Retry</button>`;
+    box.querySelector('[data-act="retry-packs"]').addEventListener('click', openPacksModal);
+    body.appendChild(box);
+    return;
+  }
+  let strip = document.getElementById('packsError');
+  if (!strip) {
+    strip = document.createElement('div');
+    strip.id = 'packsError';
+    strip.className = 'banner warn';
+    strip.setAttribute('role', 'alert');
+    strip.style.margin = '0 0 10px';
+    body.prepend(strip);
+  }
+  strip.innerHTML = `<span>${escapeHtml(message)}</span>`;
+}
 function renderPacksList(packs, sourceUrl) {
+  packsPending = false;
+  clearTimeout(packsTimer);
   const body = document.getElementById('packsBody');
   document.getElementById('packsSource').textContent = 'Source: ' + (sourceUrl || '(unknown)');
   if (!packs || packs.length === 0) {
@@ -1634,17 +1692,29 @@ document.getElementById('exportBtn').onclick = () => {
 document.getElementById('importBtn').onclick = () => {
   document.getElementById('importFile').click();
 };
-document.getElementById('importCsvBtn').onclick = () => {
-  document.getElementById('importCsvFile').click();
+document.getElementById('importBankBtn').onclick = () => {
+  document.getElementById('importBankFile').click();
 };
-document.getElementById('importCsvFile').onchange = e => {
+// A JSON pack is anything named *.json, or whose first non-blank character
+// opens an object/array. A valid CSV always starts with the "section" header,
+// so the sniff can't misroute it.
+function looksLikeJsonPack(name, text) {
+  if (/\.json$/i.test(name || '')) return true;
+  const head = String(text || '').replace(/^﻿/, '').trimStart();
+  return head.startsWith('{') || head.startsWith('[');
+}
+document.getElementById('importBankFile').onchange = e => {
   const f = e.target.files[0];
   if (!f) return;
   const reader = new FileReader();
   reader.onload = ev => {
     // The server does the heavy lifting: parses, validates per row, sanitises,
-    // and replaces both banks. We just ship the file content over WS.
-    adminAction('questions:import-csv', { csv: ev.target.result });
+    // and replaces both banks. We just ship the file content over WS, routed
+    // by format — JSON packs (samples/*.json on GitHub, Export JSON output)
+    // go to the JSON importer, everything else is treated as CSV.
+    const text = ev.target.result;
+    if (looksLikeJsonPack(f.name, text)) adminAction('questions:import-json', { json: text });
+    else adminAction('questions:import-csv', { csv: text });
   };
   reader.readAsText(f);
   e.target.value = '';

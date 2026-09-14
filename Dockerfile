@@ -25,10 +25,13 @@ FROM node:24-alpine AS runtime
 # init so signals propagate correctly to Node.
 RUN apk upgrade --no-cache && apk add --no-cache tini
 
-# The runtime never runs npm: pnpm installed everything in the deps stage and
-# the CLI is `node server.js …`. Dropping it removes npm's bundled dependencies
-# from the container scan and shrinks the attack surface.
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+# The runtime never runs a package manager: pnpm installed everything in the
+# deps stage and the CLI is `node server.js …` (plus its `links` / `remint`
+# subcommands). Dropping npm, npx, corepack and yarn removes their bundled
+# dependencies (tar, brace-expansion, ip-address, …) from the container scan
+# and shrinks the attack surface. The app's own deps live in /app/node_modules.
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
 # Run as an unprivileged user.
 RUN addgroup -S app && adduser -S app -G app

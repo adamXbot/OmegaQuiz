@@ -32,7 +32,7 @@ const os = require('os');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-test-'));
 
 const srv = require('../server.js');
-const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, recordLoginFailure, isBlocked, clearLoginFailures, LOGIN_FAILURE_MAX, getClientIp, forwardedIpFromRight, TRUST_PROXY_POLICY, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp, parseCookies, isSafeNext, pruneExpiredState, inMemoryStateSizes, getSession, SESSION_TTL_MS, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS, JOIN_BLOCK_MS, JOIN_WINDOW_MS, MAGIC_TTL_MS, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS } = srv;
+const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, recordLoginFailure, isBlocked, clearLoginFailures, LOGIN_FAILURE_MAX, getClientIp, forwardedIpFromRight, TRUST_PROXY_POLICY, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp, parseCookies, isSafeNext, pruneExpiredState, inMemoryStateSizes, getSession, SESSION_TTL_MS, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS, JOIN_BLOCK_MS, JOIN_WINDOW_MS, MAGIC_TTL_MS, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS, bundledSamplesAvailable } = srv;
 
 // ----------------------------------------------------------------------------
 // Tiny test runner
@@ -161,6 +161,10 @@ function unitTests() {
   let bundledRejected = false;
   try { loadBundledSampleJson('bundled:samples/../package.json'); } catch { bundledRejected = true; }
   ok(bundledRejected, 'bundled sample loader rejects path traversal');
+  ok(bundledSamplesAvailable() === true, 'bundled samples directory detected on disk');
+  let missingMsg = '';
+  try { loadBundledSampleJson('bundled:samples/does-not-exist.json'); } catch (e) { missingMsg = e.message; }
+  ok(/missing from this deployment/.test(missingMsg) && !/ENOENT/.test(missingMsg), 'missing bundled sample reports a deployment problem, not a raw ENOENT');
 
   section('Unit: question-bank validation');
   const goodQuestion = { q: 'Valid?', options: ['A','B','C','D'], correct: 0, lesson: 'Because.' };
@@ -743,6 +747,74 @@ async function csvTests() {
   try { questionsFromCsv('section,question,optionA,optionB,optionC,optionD,correct,lesson\nmain,Q,a,b,c,,A,L\n'); } catch { threw = true; }
   ok(threw, 'missing option rejected');
 
+  section('JSON: import via admin WS replaces the bank and applies pack metadata');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const ws = await openWs({ cookie: admin.cookie });
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+    await waitMessage(ws, m => m.type === 'admin:init');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+    await waitMessage(ws, m => m.type === 'admin:questions');
+    const before = JSON.parse((await request('GET', '/branding.json')).body);
+
+    // Same shape as samples/*.json — i.e. the file an operator downloads from
+    // GitHub and drops on "Import CSV / JSON".
+    const pack = {
+      title: 'Imported JSON Quiz',
+      category: 'json-test',
+      tagline: 'Straight from GitHub',
+      main: [
+        { q: 'JSON Q1', options: ['a', 'b', 'c', 'd'], correct: 1, lesson: 'L1' },
+        { q: 'JSON Q2', options: ['e', 'f', 'g', 'h'], correct: 0, lesson: 'L2' },
+      ],
+      bonus: [{ q: 'JSON tiebreaker', options: ['w', 'x', 'y', 'z'], correct: 2, lesson: 'LB' }],
+    };
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:import-json', payload: { json: JSON.stringify(pack) } }));
+    const result = await waitMessage(ws, m => m.type === 'questions:imported' || m.type === 'error', 3000);
+    ok(result.type === 'questions:imported', `JSON import succeeded (no error: ${result.error || ''})`);
+    ok(result.format === 'json', 'questions:imported reports format=json');
+    ok(result.mainCount === 2 && result.bonusCount === 1, 'counts match the JSON pack');
+    ok(result.brandingUpdated === true, 'pack metadata reported as applied');
+
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+    const init = await waitMessage(ws, m => m.type === 'admin:init', 2000);
+    ok(init.questions.length === 2 && init.questions[0].q === 'JSON Q1', 'banks now reflect the JSON pack');
+    const after = JSON.parse((await request('GET', '/branding.json')).body);
+    ok(after.quizTitle === 'Imported JSON Quiz' && after.quizCategory === 'json-test', '/branding.json title + category updated from the pack');
+    ok(after.tagline === 'Straight from GitHub', '/branding.json tagline updated from the pack');
+
+    // A bare { main, bonus } file (Export JSON output) must not touch branding.
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:import-json', payload: { json: JSON.stringify({ main: pack.main, bonus: pack.bonus }) } }));
+    const bare = await waitMessage(ws, m => m.type === 'questions:imported' || m.type === 'error', 3000);
+    ok(bare.type === 'questions:imported' && bare.brandingUpdated === false, 'metadata-less JSON import leaves branding alone');
+
+    // Leave branding the way we found it for the tests that follow.
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { quizTitle: before.quizTitle, quizCategory: before.quizCategory, tagline: before.tagline } } }));
+    await waitMessage(ws, m => m.type === 'branding:saved' || m.type === 'error', 2000);
+    try { ws.close(); } catch {}
+  }
+
+  section('JSON: import rejects malformed input');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const ws = await openWs({ cookie: admin.cookie });
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+    await waitMessage(ws, m => m.type === 'admin:init');
+    const attempt = async (json) => {
+      ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:import-json', payload: { json } }));
+      return waitMessage(ws, m => m.type === 'questions:imported' || m.type === 'error', 3000);
+    };
+    const notJson = await attempt('section,question,optionA\nmain,this is a CSV,not JSON');
+    ok(notJson.type === 'error' && /not valid JSON/i.test(notJson.error || ''), 'non-JSON body rejected');
+    const bonusOnly = await attempt(JSON.stringify({ main: [], bonus: [{ q: 'Only bonus', options: ['a', 'b', 'c', 'd'], correct: 0, lesson: 'x' }] }));
+    ok(bonusOnly.type === 'error' && /at least one main/i.test(bonusOnly.error || ''), 'bonus-only JSON import rejected');
+    const malformed = await attempt(JSON.stringify({ main: [{ q: 'Three options', options: ['a', 'b', 'c'], correct: 0, lesson: 'x' }] }));
+    ok(malformed.type === 'error' && /4 options/i.test(malformed.error || ''), 'malformed question in JSON import rejected');
+    const notObject = await attempt('[1,2,3]');
+    ok(notObject.type === 'error' && /must be an object/i.test(notObject.error || ''), 'array body rejected');
+    try { ws.close(); } catch {}
+  }
+
   section('CSV: import via admin WS replaces the bank');
   {
     const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
@@ -762,6 +834,7 @@ async function csvTests() {
     const result = await waitMessage(ws, m => m.type === 'questions:imported' || m.type === 'error', 3000);
     ok(result.type === 'questions:imported', `import succeeded (no error: ${result.error || ''})`);
     ok(result.mainCount === 2 && result.bonusCount === 1, 'counts match the CSV');
+    ok(result.format === 'csv', 'questions:imported reports format=csv');
 
     // Also confirm via admin:questions push that the new content arrived.
     // (admin:questions fires before questions:imported, so re-pull current state.)
@@ -1467,6 +1540,7 @@ async function liveTallyTests() {
       ws.send(JSON.stringify({ type: 'admin:action', action: 'samples:load', payload: { packId: 'nonexistent' } }));
       const err = await waitMessage(ws, m => m.type === 'error' || m.type === 'samples:loaded', 2000);
       ok(err.type === 'error' && /not found/.test(err.error || ''), 'unknown pack id rejected');
+      ok(err.scope === 'samples', 'sample-pack errors carry scope=samples so the modal can show them');
 
       // 6. Malformed and empty-main sample packs are rejected instead of partially sanitised.
       ws.send(JSON.stringify({ type: 'admin:action', action: 'samples:load', payload: { packId: 'bad' } }));
