@@ -13,8 +13,18 @@ RUN npm install -g pnpm@11.1.3 \
 # ---- Runtime stage ----
 FROM node:24-alpine AS runtime
 
-# Tiny init so signals propagate correctly to Node.
-RUN apk add --no-cache tini
+# Pull in the latest Alpine package fixes (CI gates on HIGH/CRITICAL CVEs and
+# the base image's openssl lags the repo), then add a tiny init so signals
+# propagate correctly to Node.
+RUN apk upgrade --no-cache && apk add --no-cache tini
+
+# The runtime only ever runs `node server.js` (plus its `links` / `remint`
+# subcommands). Drop the package managers the base image bundles — npm, npx,
+# corepack, yarn — so their vendored dependencies (tar, brace-expansion,
+# ip-address, …) can neither fail the container scan nor widen the attack
+# surface. The app's own dependencies live in /app/node_modules.
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
+           /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 
 # Run as an unprivileged user.
 RUN addgroup -S app && adduser -S app -G app
