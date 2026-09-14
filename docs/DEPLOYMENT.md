@@ -19,7 +19,7 @@ If you're shipping this internally and one of those platforms isn't on your menu
 
 ## Step 1 — Generate three secrets
 
-Open a terminal anywhere with Node 18+ installed and run:
+Open a terminal anywhere with Node 22.13+ installed and run:
 
 ```bash
 node -e "console.log('HOST_TOKEN='    + require('crypto').randomBytes(32).toString('hex'))"

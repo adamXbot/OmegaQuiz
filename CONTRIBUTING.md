@@ -41,7 +41,7 @@ If you're unsure whether a change fits, open an issue describing the problem bef
 
 1. **Open an issue first** for anything beyond a small bug fix or doc tweak. It saves time on both sides.
 2. **Fork**, branch, commit, push, open a PR against `main`.
-3. **CI must be green** — `pnpm test` runs across Node 18 / 20 / 22 with `pnpm audit --prod` gated on HIGH severity.
+3. **CI must be green** — `pnpm test` runs across Node 22 / 24 with `pnpm audit --prod` gated on HIGH severity.
 4. **Write a test** for new behaviour. The suite in `test/security.test.js` exercises the live server in-process; follow the existing patterns.
 5. **Keep the diff focused** — one PR per concern. Refactors mixed with bug fixes are hard to review.
 6. **Update CHANGELOG.md** under `[Unreleased]` if your change is user-visible.

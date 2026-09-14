@@ -41,7 +41,7 @@ There is no database, no third-party SaaS, and no telemetry. One Node process, o
 
 ## Get it
 
-Requires Node 18 or newer. The package manager is pnpm, pinned in `package.json`; npm and yarn are not supported here.
+Requires Node 22.13 or newer (the pinned pnpm 11 will not run on older releases, and Node 18 and 20 are end-of-life). The package manager is pnpm, pinned in `package.json`; npm and yarn are not supported here.
 
 ```bash
 git clone https://github.com/adamXbot/OmegaQuiz.git
@@ -76,7 +76,7 @@ pnpm test
 
 A [`justfile`](justfile) wraps the common ones — `just setup`, `just test`, `just run`. There is also a 50-player stress run, `pnpm stress`.
 
-The [`Test` workflow](.github/workflows/test.yml) defines the same three commands across Node 18, 20, 22 and 24, plus a Trivy container scan. **It is currently disabled, so nothing runs automatically on push or pull request** — please run the commands locally until it is switched back on.
+The [`Test` workflow](.github/workflows/test.yml) runs the same three commands across Node 22 and 24, plus a Trivy container scan (which also smoke-tests the built image for the bundled sample packs), on every push and pull request. Please still run the commands locally before opening a PR.
 
 ## Licence
 

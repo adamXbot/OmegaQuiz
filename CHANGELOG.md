@@ -13,6 +13,7 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ### Fixed
 
+- **CI was red on `main` for reasons unrelated to any change.** The Trivy container-scan job failed at "Set up job" because the action was pinned to `0.36.0` while its release tags are `vX.Y.Z`; it is now SHA-pinned like the other actions. The Node 18 and 20 matrix jobs failed at `pnpm install` because the pinned pnpm 11 requires Node 22.13+; see *Changed*.
 - **Docker / Fly.io: "Browse sample packs" never loaded.** The Dockerfile did not copy `samples/` into the image, so the bundled manifest was missing at runtime. The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever and looked like a timeout. The image now ships `samples/`; a missing bundled pack produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all); and CI smoke-tests the built image for the packs. Render (native Node runtime) was never affected.
 
 ### Security
@@ -23,6 +24,7 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 - `secrets.json` is written atomically (temp file + rename) and records `rotatedAt` per role. `HOST_TOKEN` / `ADMIN_TOKEN` are mutable inside the process; `COOKIE_SECRET` is not.
 - Structured JSON log lines are suppressed while a subcommand runs — its output is for a human.
+- **Node 22.13 is now the minimum supported version** (was 18). The pinned pnpm 11 refuses to run on older Node, so 18 / 20 could not install the project anyway, and both are end-of-life. `engines.node`, the CI matrix (now 22 and 24) and the docs are aligned; `.nvmrc` and the Docker base image were already on 24.
 - Test suite: 519 → 592 checks (re-keying unit + WS + end-to-end child-process coverage, WS robustness; JSON import, missing-samples error and sample-error scope).
 
 ## [1.1.1] - 2026-05-19
