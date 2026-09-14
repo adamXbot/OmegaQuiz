@@ -75,6 +75,21 @@ jobs:
       - name: Build image
         run: docker build -t omegaquiz:ci .
 
+      # Regression guard for the Dockerfile runtime stage. The admin "Browse
+      # sample packs" flow resolves the default SAMPLE_PACKS_URL
+      # (bundled:samples/manifest.json) on disk, so every sample file in the
+      # checkout must be inside the image and readable by the unprivileged
+      # `app` user the container runs as. A missing samples/ only showed up
+      # in production as "Sample browse failed: ENOENT" on Fly.io / Docker.
+      - name: Assert bundled sample packs are inside the image
+        run: |
+          docker run --rm --entrypoint sh omegaquiz:ci -c '
+            for f in "$@"; do
+              test -r "/app/$f" || { echo "::error::$f is missing from the image"; exit 1; }
+            done
+            echo "ok: $# sample-pack files present in /app/samples"
+          ' sh samples/*.json
+
       # Note: aquasecurity/trivy-action has had supply-chain incidents in the
       # past (compromised releases in 2024 and 2025). Pin to a tag, not `@main`,
       # and consider switching to a SHA pin if you want extra protection — see
