@@ -78,18 +78,6 @@ jobs:
       - name: Build image
         run: docker build -t omegaquiz:ci .
 
-      # The bundled sample packs are read from disk at runtime; an image built
-      # without samples/ boots fine and only fails when an admin opens
-      # "Browse sample packs". Catch that here rather than in production.
-      - name: Smoke-test image (bundled sample packs present)
-        run: |
-          docker run --rm --entrypoint node omegaquiz:ci -e '
-            const m = require("/app/samples/manifest.json");
-            if (!Array.isArray(m.packs) || m.packs.length === 0) throw new Error("manifest has no packs");
-            for (const p of m.packs) require("/app/samples/" + p.url.replace("bundled:samples/", ""));
-            console.log("bundled sample packs present: " + m.packs.length);
-          '
-
       # aquasecurity/trivy-action has had supply-chain incidents in the past
       # (compromised releases in 2024 and 2025), so it is pinned to a commit
       # SHA like every other action here — never a tag or `@main`. The trailing
@@ -107,6 +95,37 @@ jobs:
           # OS packages + Node deps + secrets. Misconfig scanning is noisy for
           # this tiny image; leaving it off keeps the signal-to-noise high.
           scanners: vuln,secret
+
+  image-contents:
+    name: Docker image contents
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Kept separate from the Trivy job on purpose: this is a functional check
+    # on the built image, not a vulnerability scan, so it has no reason to be
+    # skipped on fork PRs or to go dark when the scanner (or its action pin)
+    # fails at setup.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t omegaquiz:ci .
+
+      # Regression guard for the Dockerfile runtime stage. The admin "Browse
+      # sample packs" flow resolves the default SAMPLE_PACKS_URL
+      # (bundled:samples/manifest.json) on disk, so every sample file in the
+      # checkout must be inside the image and readable by the unprivileged
+      # `app` user the container runs as. A missing samples/ only showed up
+      # in production as "Sample browse failed: ENOENT" on Fly.io / Docker.
+      - name: Assert bundled sample packs are inside the image
+        run: |
+          docker run --rm --entrypoint sh omegaquiz:ci -c '
+            for f in "$@"; do
+              test -r "/app/$f" || { echo "::error::$f is missing from the image"; exit 1; }
+            done
+            echo "ok: $# sample-pack files present in /app/samples"
+          ' sh samples/*.json
 
   stress:
     name: 50-player stress run

@@ -13,7 +13,8 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ### Fixed
 
-- **Docker / Fly.io: "Browse sample packs" never loaded.** The Dockerfile did not copy `samples/` into the image, so the bundled manifest was missing at runtime. The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever and looked like a timeout. The image now ships `samples/`; a missing bundled pack produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all); and CI smoke-tests the built image for the packs. Render (native Node runtime) was never affected.
+- **Bundled sample packs were missing from the Docker image.** The `Dockerfile` runtime stage copied `server.js`, `questions.js`, `package.json` and `public/` but never `samples/`, while the default `SAMPLE_PACKS_URL` (`bundled:samples/manifest.json`) resolves that directory on disk next to `server.js`. On every Dockerfile-based deploy (Fly.io, Railway, self-hosted Docker) Admin → Questions → **Browse sample packs** failed with `Sample browse failed: ENOENT: no such file or directory, open '/app/samples/manifest.json'` — the exact first-boot flow `docs/DEPLOYMENT.md` points operators at. Render's native Node runtime was unaffected. The runtime stage now copies `samples/`, and a new `image-contents` CI job builds the image and fails if any `samples/*.json` from the checkout is missing from `/app/samples` (checked as the unprivileged `app` user, on every PR including forks).
+- **"Browse sample packs" looked like a timeout when the packs were missing.** The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever. A missing bundled pack now produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; and the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all).
 
 ### Security
 
@@ -31,6 +32,7 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 - **Supported Node is now 22.13 or newer** (`engines.node`), and the CI matrix is Node 22 / 24 / 26 instead of 18 / 20 / 22 / 24. pnpm 11 refuses to run on older Node, which is why the Node 18 and 20 jobs had failed at `pnpm install` on every run since May; both versions are also end-of-life.
 - **The `Test` workflow is enabled again.** It had been disabled manually while every run was red for the two reasons above. It runs on push, pull request and nightly.
 - Docs: README and CONTRIBUTING quick-starts use `npm install -g pnpm` instead of `corepack enable`; the test count and Node matrix are current; CONTRIBUTING records that Renovate (shared `privacykey/renovate-config` preset) is the only dependency bot and that Dependabot was retired.
+- `pnpm-lock.yaml` is no longer copied into the Docker runtime stage. Nothing reads it at runtime; the `deps` stage still uses it for `pnpm install --frozen-lockfile`.
 
 ## [1.1.1] - 2026-05-19
 
