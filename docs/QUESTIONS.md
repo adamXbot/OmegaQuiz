@@ -16,10 +16,10 @@ Admin → **Questions** tab → **Browse sample packs**. Three packs ship in [`.
 The packs are listed from [`../samples/manifest.json`](../samples/manifest.json). Bundled packs use
 the `bundled:samples/` URL scheme; a hosted manifest can use public `https://` pack URLs instead.
 
-## 2. CSV import (recommended for most authors)
+## 2. CSV or JSON import (recommended for most authors)
 
 Admin → **Questions** tab → **Download template** (gives you `omegaquiz-template.csv`) → fill it in
-in Excel → drag the saved file onto **Import CSV**.
+in Excel → drag the saved file onto **Import CSV / JSON**.
 
 The columns are:
 
@@ -44,6 +44,27 @@ multiple players are tied at the end.
 To export what is currently loaded, use Admin → Questions → **Export CSV**, which downloads
 `omegaquiz-questions.csv` in the same format.
 
+### JSON packs
+
+The same **Import CSV / JSON** button also takes a JSON pack — the format used by the bundled packs
+in [`../samples/`](../samples) and by Admin → Settings → Developer options → **Export JSON**:
+
+```json
+{
+  "title": "Nature Quiz",
+  "category": "nature",
+  "tagline": "Wildlife and Ecosystems",
+  "main":  [ { "q": "…", "options": ["…", "…", "…", "…"], "correct": 1, "lesson": "…" } ],
+  "bonus": [ { "q": "…", "options": ["…", "…", "…", "…"], "correct": 0, "lesson": "…" } ]
+}
+```
+
+`main` is required (at least one question); `bonus` defaults to empty. `correct` is the zero-based
+index into `options`. `title`, `category` and `tagline` are optional — when present they update the
+quiz title, category and tagline under Branding, exactly as loading the pack from **Browse sample
+packs** would. A pack downloaded straight from the GitHub repo therefore imports as-is; there is no
+need to convert it to CSV first.
+
 ## 3. Type them into the admin UI
 
 Admin → **Questions** tab → **Add a question manually**. Useful for small edits between sessions,
@@ -62,8 +83,8 @@ QUESTIONS_SEED_URL=https://example.internal/quiz-content/q1-2026-pack.csv pnpm s
 
 The CLI flag takes precedence over the environment variable.
 
-JSON shape is `{ "main": [...], "bonus": [...] }` where each item is `{ q, options, correct, lesson }`.
-CSV uses the same columns as the template above.
+JSON uses the pack format described under [JSON packs](#json-packs) above; CSV uses the same columns
+as the template above.
 
 ## Editing rules
 

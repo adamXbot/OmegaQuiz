@@ -138,7 +138,7 @@ If the boot banner never appeared, see [Common failures](#common-failures) below
 
 In the admin tab:
 
-- **Questions tab → Browse sample packs** loads a curated phishing / nature / pop-culture pack. Or **Import CSV** for your own bank (download the template first).
+- **Questions tab → Browse sample packs** loads a curated phishing / nature / pop-culture pack. Or **Import CSV / JSON** for your own bank — download the CSV template first, or download one of the [`samples/*.json`](../samples) packs from GitHub and import it as-is.
 - **Branding tab** — set company name, email domain (with optional join restriction), logo, tagline, and the **Privacy notice** that appears on the player join screen.
 - The Privacy notice ships with an Australian-Privacy-Act–compatible default. **Rewrite it for your jurisdiction** before sharing the join URL publicly.
 
@@ -188,4 +188,5 @@ Treat this like a pop-up shop, not a permanent storefront.
 | Player phones show "Too many join attempts from this network" | Rate-limit guard kicked in (8 wrong codes / 60s from one IP, 5-minute cooldown). | Wait 5 minutes. If a corporate NAT puts everyone on one IP, expect this when a lot of players type the code wrong simultaneously — bump the rate-limit constants in `server.js` for high-NAT environments. |
 | Behind Cloudflare: scripts blocked, page broken | Cloudflare Rocket Loader injected a script the CSP refuses. | Cloudflare dashboard → Speed → Optimization → turn **Rocket Loader** off for this hostname. |
 | Behind Cloudflare: WebSocket disconnects every 100s | Cloudflare default WS idle timeout. | Players will auto-reconnect; the host/admin pages now do too. Or upgrade to a Cloudflare plan with higher limits. |
-| First boot: data/questions.json missing | Expected — a fresh deploy boots with an empty bank. | Admin → Questions tab → Browse sample packs or Import CSV. |
+| First boot: data/questions.json missing | Expected — a fresh deploy boots with an empty bank. | Admin → Questions tab → Browse sample packs or Import CSV / JSON. |
+| **Browse sample packs** shows `bundled sample "manifest.json" is missing from this deployment` (older builds instead sat on "Loading…" forever) | The container image was built without the `samples/` directory. The boot banner prints a `Samples: NOT FOUND` line when this is the case. | Rebuild from a Dockerfile that includes `COPY samples ./samples` (the repo's Dockerfile does; older forks may not) and redeploy, e.g. `fly deploy`. Or set `SAMPLE_PACKS_URL` to a hosted manifest. **Import CSV / JSON** works regardless. |

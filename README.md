@@ -29,9 +29,9 @@ There is no database, no third-party SaaS, and no telemetry. One Node process, o
 
 **Three screens, one game.** The player screen (`/`) runs on each staff member's phone. The host screen (`/host`) is the big board for the projector: question, answer choices, survivor count, prize ladder. The admin screen (`/admin`) is the facilitator's control panel: roster, live answer tally, question editor, branding, report download, and session close/reopen.
 
-**Starts empty, and you load the questions.** Four ways to fill the bank: the bundled sample packs, a CSV import, typing them into the admin UI, or seeding from a URL at deploy time. See [`docs/QUESTIONS.md`](docs/QUESTIONS.md).
+**Starts empty, and you load the questions.** Four ways to fill the bank: the bundled sample packs, a CSV or JSON import, typing them into the admin UI, or seeding from a URL at deploy time. See [`docs/QUESTIONS.md`](docs/QUESTIONS.md).
 
-**Three sample packs are bundled** in [`samples/`](samples) — a 10-question phishing-awareness round with 5 tiebreakers (the default), plus shorter nature and pop-culture packs.
+**Three sample packs are bundled** in [`samples/`](samples) — a 10-question phishing-awareness round with 5 tiebreakers (the default), plus shorter nature and pop-culture packs. Load one from **Browse sample packs** in the admin, or download the JSON from GitHub and drop it on **Import CSV / JSON**.
 
 **Reports come out as XLSX or CSV**, one row per player, with per-question answers and results. The XLSX is colour-coded so a printout is scannable. See [`docs/REPORTS.md`](docs/REPORTS.md).
 

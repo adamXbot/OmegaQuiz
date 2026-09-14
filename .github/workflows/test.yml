@@ -75,6 +75,18 @@ jobs:
       - name: Build image
         run: docker build -t omegaquiz:ci .
 
+      # The bundled sample packs are read from disk at runtime; an image built
+      # without samples/ boots fine and only fails when an admin opens
+      # "Browse sample packs". Catch that here rather than in production.
+      - name: Smoke-test image (bundled sample packs present)
+        run: |
+          docker run --rm --entrypoint node omegaquiz:ci -e '
+            const m = require("/app/samples/manifest.json");
+            if (!Array.isArray(m.packs) || m.packs.length === 0) throw new Error("manifest has no packs");
+            for (const p of m.packs) require("/app/samples/" + p.url.replace("bundled:samples/", ""));
+            console.log("bundled sample packs present: " + m.packs.length);
+          '
+
       # Note: aquasecurity/trivy-action has had supply-chain incidents in the
       # past (compromised releases in 2024 and 2025). Pin to a tag, not `@main`,
       # and consider switching to a SHA pin if you want extra protection — see

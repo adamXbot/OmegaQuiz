@@ -23,6 +23,10 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --chown=app:app server.js questions.js package.json pnpm-lock.yaml ./
 COPY --chown=app:app public ./public
+# Bundled sample question packs. The admin "Browse sample packs" modal reads
+# samples/manifest.json from disk, so the directory has to ship in the image —
+# without it every pack browse fails. CI smoke-tests the built image for this.
+COPY --chown=app:app samples ./samples
 
 # Branding config and the question bank are written at runtime — mount a
 # volume here for persistence across container restarts.

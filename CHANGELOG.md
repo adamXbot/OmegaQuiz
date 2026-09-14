@@ -4,6 +4,14 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Fixed
+
+- **Docker / Fly.io: "Browse sample packs" never loaded.** The Dockerfile did not copy `samples/` into the image, so the bundled manifest was missing at runtime. The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever and looked like a timeout. The image now ships `samples/`; a missing bundled pack produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all); and CI smoke-tests the built image for the packs. Render (native Node runtime) was never affected.
+
+### Added
+
+- **JSON import in the Questions tab.** *Import CSV* is now *Import CSV / JSON* and accepts the same `{ title?, category?, tagline?, main, bonus }` pack format as `samples/*.json` and *Export JSON*, so a pack downloaded from GitHub imports as-is. Pack metadata is applied to branding exactly as a sample-pack load would. New admin action `questions:import-json`; `questions:imported` now carries `format` (`csv` | `json`) and `brandingUpdated`; sample-pack errors carry `scope: "samples"`.
+
 ## [1.1.1] - 2026-05-19
 
 Blue-hat security audit follow-up. Closes nine findings raised in a Railway-targeted review, none of which were caught by the existing 487-check suite.
