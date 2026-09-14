@@ -22,12 +22,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 18 is the minimum supported (matches engines in package.json).
-        # 20 is maintenance-LTS, 22 is active-LTS, 24 is current.
+        # 22 is the minimum supported (matches engines in package.json):
+        # pnpm 11, pinned via packageManager, refuses to run on Node < 22.13,
+        # and Node 18 / 20 are end-of-life. 22 is maintenance-LTS, 24 is
+        # active-LTS, 26 is current.
         # GitHub Actions runners default to Node 24 from June 2026 onward.
         # The default dev/deploy version lives in .nvmrc; this matrix
         # intentionally tests the whole supported range.
-        node: ['18', '20', '22', '24']
+        node: ['22', '24', '26']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -46,7 +48,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # Blocking: fail the build for any HIGH-or-above advisory. Lower-severity
-      # advisories surface via Dependabot PRs instead of breaking CI.
+      # advisories are picked up by Renovate's weekly lock-file maintenance, or
+      # by an override floor in pnpm-workspace.yaml, instead of breaking CI.
       - name: Audit production dependencies (high+)
         run: pnpm audit --prod --audit-level=high
 
@@ -75,13 +78,14 @@ jobs:
       - name: Build image
         run: docker build -t omegaquiz:ci .
 
-      # Note: aquasecurity/trivy-action has had supply-chain incidents in the
-      # past (compromised releases in 2024 and 2025). Pin to a tag, not `@main`,
-      # and consider switching to a SHA pin if you want extra protection — see
-      # https://github.com/aquasecurity/trivy-action/releases for the current
-      # release. Dependabot config will keep this fresh.
+      # aquasecurity/trivy-action has had supply-chain incidents in the past
+      # (compromised releases in 2024 and 2025), so it is pinned to a commit
+      # SHA like every other action here — never a tag or `@main`. The trailing
+      # comment is the human-readable version; Renovate (the shared preset
+      # enables helpers:pinGitHubActionDigests) bumps SHA and comment together.
+      # Upstream tags carry a `v` prefix: https://github.com/aquasecurity/trivy-action/releases
       - name: Run Trivy
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: omegaquiz:ci
           format: table

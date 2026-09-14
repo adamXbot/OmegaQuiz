@@ -1,0 +1,11 @@
+# pnpm settings live here (pnpm 10+ no longer reads a "pnpm" field in
+# package.json). This is a single-package repo, so there is no "packages:" list.
+#
+# Overrides are floors for transitive dependencies that express's own ranges
+# allow but the lockfile had resolved below the patched versions:
+#   qs          GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g
+#   body-parser GHSA-v422-hmwv-36x6
+# Remove an override once the lockfile resolves past it on its own.
+overrides:
+  qs: '>=6.16.0'
+  body-parser: '>=2.3.0'
