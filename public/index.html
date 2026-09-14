@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Omega Quiz — Player</title>
 <style>
 :root{
@@ -57,6 +57,9 @@ input{
   font-family:'Georgia',serif;font-size:16px;
 }
 input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
+/* A11Y: field flagged by the join validation (aria-invalid) gets a red ring in
+   addition to the error text + focus move. */
+input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,30,58,.35)}
 .code-input{font-family:'Courier New',monospace;font-size:32px;text-align:center;letter-spacing:.4em;font-weight:bold;color:var(--gold)}
 
 .btn{
@@ -120,14 +123,25 @@ input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
 }
 .answer-btn .letter{color:var(--gold);font-weight:bold;min-width:22px}
 .answer-btn:active:not(:disabled){transform:scale(.98)}
-.answer-btn.selected{background:linear-gradient(180deg,#d97706,#b45309);border-color:var(--gold-bright);box-shadow:0 0 20px rgba(255,165,0,.6)}
-.answer-btn.correct{background:linear-gradient(180deg,#16a34a,#0f7a36);border-color:#4ade80}
-.answer-btn.wrong{background:linear-gradient(180deg,#dc2626,#991b1b);border-color:#f87171;opacity:.7}
-.answer-btn.eliminated{opacity:.3;pointer-events:none}
+/* A11Y: state fills are dark enough for white text at 4.5:1+ (WCAG 1.4.3):
+   selected #9a3412 → 6.6:1, correct #15803d → 5.0:1, wrong #b91c1c → 5.8:1.
+   (The old #d97706 / #16a34a / #dc2626 + opacity sat at 2.9–4.3:1.) The gold
+   letter fails on all three fills, so it turns white in those states. Each
+   state also shows a text tag (Your answer / ✓ / ✗ / Removed) so the state is
+   never conveyed by colour alone (WCAG 1.4.1). */
+.answer-btn.selected{background:linear-gradient(180deg,#9a3412,#7c2d12);border-color:var(--gold-bright);box-shadow:0 0 20px rgba(255,165,0,.6)}
+.answer-btn.correct{background:linear-gradient(180deg,#15803d,#166534);border-color:#4ade80;color:#fff}
+.answer-btn.wrong{background:linear-gradient(180deg,#b91c1c,#991b1b);border-color:#f87171;color:#fff}
+.answer-btn.selected .letter,.answer-btn.correct .letter,.answer-btn.wrong .letter{color:#fff}
+/* Removed by 50/50: the button is really disabled (pointer-events:none alone
+   still let keyboard users activate it) and the text is struck through. */
+.answer-btn.eliminated{opacity:.55}
+.answer-btn.eliminated .opt-text{text-decoration:line-through}
 .answer-btn:disabled{cursor:default}
+.answer-btn .state-tag{margin-left:auto;flex-shrink:0;font-size:10px;font-weight:bold;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
 /* Pending state — option selected in confirm mode, not yet locked. */
 .answer-btn.pending{
-  background:linear-gradient(180deg,#d97706,#b45309);
+  background:linear-gradient(180deg,#9a3412,#7c2d12);
   border-style:dashed;border-color:var(--gold-bright);
   animation:pendingPulse 1.4s ease-in-out infinite;
 }
@@ -137,7 +151,8 @@ input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
 }
 .lock-in-btn{
   width:100%;padding:14px;margin-top:14px;
-  background:linear-gradient(180deg,#22c55e,#0f7a36);
+  /* A11Y: white on #22c55e was 2.3:1; on #15803d it is 5.0:1. */
+  background:linear-gradient(180deg,#15803d,#166534);
   color:#fff;font-weight:bold;font-size:15px;letter-spacing:.2em;
   text-transform:uppercase;border:2px solid #4ade80;border-radius:10px;
   cursor:pointer;font-family:'Georgia',serif;
@@ -163,7 +178,9 @@ input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
 .audience-row .pct{min-width:30px;text-align:right;font-weight:bold;color:var(--gold);font-size:11px}
 .audience-row .pct.zero{opacity:.4}
 .answer-btn.correct .audience-row .grp-label,
-.answer-btn.correct .audience-row .pct{color:#fff}
+.answer-btn.correct .audience-row .pct,
+.answer-btn.wrong .audience-row .grp-label,
+.answer-btn.wrong .audience-row .pct{color:#fff}
 .answer-btn .answer-body{display:flex;flex-direction:column;gap:0;width:100%}
 .answer-btn .answer-body .answer-top{display:flex;align-items:center;gap:12px}
 
@@ -231,18 +248,22 @@ input:focus{border-color:var(--gold);box-shadow:0 0 12px rgba(244,196,48,.3)}
 
   <!-- JOIN VIEW -->
   <div id="joinView">
-    <div class="join-card">
+    <!-- A11Y: a real form, so Enter / the phone keyboard's Go submits.
+         novalidate keeps validation in JS (one consistent message, aria-invalid,
+         focus moves to the first problem field); `required` still tells
+         assistive tech the fields are mandatory. -->
+    <form class="join-card" id="joinForm" novalidate>
       <h2>Join the Game</h2>
       <label for="joinCodeInput">Join Code</label>
-      <input id="joinCodeInput" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000">
+      <input id="joinCodeInput" class="code-input" maxlength="6" inputmode="numeric" placeholder="000000" required aria-describedby="errorMsg">
       <label for="nameInput">Your Name</label>
-      <input id="nameInput" type="text" placeholder="e.g. Alex Chen" autocomplete="name">
+      <input id="nameInput" type="text" placeholder="e.g. Alex Chen" autocomplete="name" required aria-describedby="errorMsg">
       <label for="emailInput">Work Email</label>
-      <input id="emailInput" type="email" placeholder="alex@company.com" autocomplete="email">
+      <input id="emailInput" type="email" placeholder="alex@company.com" autocomplete="email" required aria-describedby="errorMsg">
       <p class="consent-text" id="consentText" style="display:none"></p>
-      <button class="btn" id="joinBtn">Join</button>
+      <button class="btn" id="joinBtn" type="submit">Join</button>
       <div class="error" id="errorMsg" role="alert"></div>
-    </div>
+    </form>
   </div>
 
   <!-- LOBBY -->
@@ -457,6 +478,7 @@ function connect(){
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'player:joined'){
+      hideError();
       playerId = msg.playerId;
       localStorage.setItem('omegaquiz_pid', playerId);
       const code = document.getElementById('joinCodeInput').value.trim();
@@ -470,7 +492,7 @@ function connect(){
       applySessionClosedView();
       render();
     } else if (msg.type === 'error'){
-      showError(msg.error);
+      showError(msg.error, fieldsForServerError(msg.error));
     } else if (msg.type === 'kicked'){
       localStorage.removeItem('omegaquiz_pid');
       alert('You were removed from the game' + (msg.reason ? ': ' + msg.reason : '.'));
@@ -514,30 +536,61 @@ connect();
 /* =====================
    JOIN
    ===================== */
-document.getElementById('joinBtn').onclick = () => {
-  const code = document.getElementById('joinCodeInput').value.trim();
-  const name = document.getElementById('nameInput').value.trim();
-  const email = document.getElementById('emailInput').value.trim();
-  if (!code || !name || !email){
-    showError('All fields required.');
+// A11Y: submit handler on the <form> (not a click handler on the button) so
+// Enter and the phone keyboard's Go key join too.
+const JOIN_FIELDS = ['joinCodeInput', 'nameInput', 'emailInput'].map(id => document.getElementById(id));
+// Editing a flagged field clears its invalid mark; the message itself stays
+// until the next submit so it can be re-read at leisure.
+JOIN_FIELDS.forEach(f => f.addEventListener('input', () => f.removeAttribute('aria-invalid')));
+document.getElementById('joinForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const [codeEl, nameEl, emailEl] = JOIN_FIELDS;
+  const code = codeEl.value.trim();
+  const name = nameEl.value.trim();
+  const email = emailEl.value.trim();
+  const empty = JOIN_FIELDS.filter(f => !f.value.trim());
+  if (empty.length){
+    showError('All fields required.', empty);
     return;
   }
   if (!email.includes('@')){
-    showError('Please enter a valid email.');
+    showError('Please enter a valid email.', [emailEl]);
     return;
   }
+  hideError();
   localStorage.setItem('omegaquiz_name', name);
   localStorage.setItem('omegaquiz_email', email);
   savedJoinCode = code;
   localStorage.setItem('omegaquiz_join_code', code);
   ws.send(JSON.stringify({ type: 'player:join', name, email, joinCode: code }));
-};
+});
 
-function showError(msg){
+// Shows the error until the next submit / successful join — no auto-hide (the
+// old 4 s timer was too short for screen-reader and magnifier users).
+// `invalidFields` get aria-invalid="true" and the first one takes focus.
+function showError(msg, invalidFields){
   const el = document.getElementById('errorMsg');
   el.textContent = msg;
   el.classList.add('active');
-  setTimeout(() => el.classList.remove('active'), 4000);
+  JOIN_FIELDS.forEach(f => f.removeAttribute('aria-invalid'));
+  const bad = (invalidFields || []).filter(Boolean);
+  bad.forEach(f => f.setAttribute('aria-invalid', 'true'));
+  if (bad.length) bad[0].focus();
+}
+function hideError(){
+  const el = document.getElementById('errorMsg');
+  el.textContent = '';
+  el.classList.remove('active');
+  JOIN_FIELDS.forEach(f => f.removeAttribute('aria-invalid'));
+}
+// Server-side join errors name the offending field in prose ("Wrong join
+// code", "Please use your … email address."); point focus at that field.
+function fieldsForServerError(text){
+  const t = String(text || '').toLowerCase();
+  const [codeEl, , emailEl] = JOIN_FIELDS;
+  if (t.includes('join code')) return [codeEl];
+  if (t.includes('email')) return [emailEl];
+  return [];
 }
 
 /* =====================
@@ -655,23 +708,51 @@ function render(){
     const tally = s.question.audienceTally;
     s.question.options.forEach((opt, i) => {
       const btn = document.createElement('button');
+      btn.type = 'button';
       btn.className = 'answer-btn';
-      // A11Y: clean accessible name — letter + plain option text.
+      const isReveal   = s.phase === 'reveal';
+      const eliminated = s.question.eliminatedOptions.includes(i);
+      const isMine     = s.you.myAnswer === i;
+      const isLocked   = s.you.answered && isMine;
+      // Confirm mode: the pending (not yet locked) selection.
+      const isPending  = !s.you.answered && answerLockMode === 'confirm' && pendingAnswer === i;
+      const isCorrect  = isReveal && s.question.revealedCorrect === i;
+      const isWrong    = isReveal && !isCorrect && isMine;
+      // A11Y: the state is both spoken (suffix on the accessible name) and
+      // shown as text (a tag inside the button), so it is never colour-only.
+      // Name = letter + plain option text; the body is aria-hidden so the
+      // markup inside is not read twice.
       const plainOpt = String(opt || '').replace(/<[^>]+>/g, '').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-      btn.setAttribute('aria-label', letters[i] + ': ' + plainOpt);
-      let label = `<div class="answer-body" aria-hidden="true"><div class="answer-top"><span class="letter">${letters[i]}</span><span>${opt}</span></div>`;
-      if (s.question.eliminatedOptions.includes(i)) btn.classList.add('eliminated');
-      if (s.you.answered && s.you.myAnswer === i) btn.classList.add('selected');
-      // Confirm mode: highlight the pending (not yet locked) selection.
-      if (!s.you.answered && answerLockMode === 'confirm' && pendingAnswer === i) {
-        btn.classList.add('selected', 'pending');
+      let stateText = '';   // spoken
+      let stateTag  = '';   // shown
+      if (eliminated) { btn.classList.add('eliminated'); stateText = 'removed by 50/50'; stateTag = 'Removed'; }
+      if (isLocked)  btn.classList.add('selected');
+      if (isPending) btn.classList.add('selected', 'pending');
+      if (isCorrect) {
+        btn.classList.add('correct');
+        stateText = isMine ? 'correct, your answer' : 'correct';
+        stateTag  = isMine ? '✓ Correct · yours' : '✓ Correct';
+      } else if (isWrong) {
+        btn.classList.add('wrong');
+        stateText = 'wrong, your answer';
+        stateTag  = '✗ Your answer';
+      } else if (isPending) {
+        stateText = 'your answer, not locked in yet';
+        stateTag  = 'Selected';
+      } else if (isLocked) {
+        stateText = 'your answer';
+        stateTag  = 'Your answer';
       }
-      // Reveal coloring
-      if (s.phase === 'reveal'){
-        if (s.question.revealedCorrect === i) btn.classList.add('correct');
-        else if (s.you.myAnswer === i) btn.classList.add('wrong');
+      btn.setAttribute('aria-label', letters[i] + ': ' + plainOpt + (stateText ? ' — ' + stateText : ''));
+      // Toggle-button semantics for the choice; a removed option is not a choice.
+      if (!eliminated) btn.setAttribute('aria-pressed', (isLocked || isPending) ? 'true' : 'false');
+      let label = `<div class="answer-body" aria-hidden="true"><div class="answer-top"><span class="letter">${letters[i]}</span><span class="opt-text">${opt}</span>${stateTag ? `<span class="state-tag">${stateTag}</span>` : ''}</div>`;
+      if (isReveal){
         btn.disabled = true;
       } else {
+        // Removed by 50/50: genuinely disabled. pointer-events:none only
+        // blocked the mouse; Enter/Space on a focused button still fired.
+        if (eliminated) btn.disabled = true;
         // Eliminated players are blocked unless the admin has enabled
         // engagement mode (eliminatedCanAnswer). When on, they tap for
         // participation only — server won't score them.

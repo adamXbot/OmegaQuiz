@@ -60,9 +60,13 @@ body{
   display:flex;gap:0;background:rgba(2,6,37,.7);
   border-bottom:1px solid var(--gray-line);padding:0 24px;
 }
+/* A11Y: tabs are real <button role="tab"> elements (keyboard reachable,
+   announced as tabs). Reset the UA button chrome so they render as before. */
 .tab{
+  background:none;border:0;border-bottom:2px solid transparent;
+  font-family:inherit;line-height:inherit;
   padding:12px 20px;cursor:pointer;color:var(--gray-text);
-  border-bottom:2px solid transparent;font-size:13px;letter-spacing:.05em;
+  font-size:13px;letter-spacing:.05em;
   text-transform:uppercase;transition:all .15s;
 }
 .tab:hover{color:var(--white)}
@@ -161,8 +165,9 @@ body{
 }
 .banner.warn{background:rgba(245,158,11,.15);border:1px solid #f59e0b;color:#fbbf24}
 .banner.info{background:rgba(59,130,246,.15);border:1px solid #3b82f6;color:#93c5fd}
-.banner.success{background:rgba(34,197,94,.15);border:1px solid #4ade80;color:#86efac;animation:fadeOut 3s 2s forwards}
-@keyframes fadeOut{to{opacity:0;height:0;padding-top:0;padding-bottom:0;margin-bottom:0;border-width:0}}
+/* A11Y: banners stay until dismissed (no fade-out / timer) so screen-reader
+   and magnifier users are not racing a 5 s clock. #banner-area is a live region. */
+.banner.success{background:rgba(34,197,94,.15);border:1px solid #4ade80;color:#86efac}
 
 /* --- Event log --- */
 .log-list{max-height:600px;overflow-y:auto;font-family:'Courier New',monospace;font-size:12px}
@@ -287,21 +292,24 @@ body{
     </div>
   </div>
 
-  <div class="tabs">
-    <div class="tab active" data-tab="overview">Overview</div>
-    <div class="tab" data-tab="players">Players<span class="badge" id="playersBadge" style="display:none">0</span></div>
-    <div class="tab" data-tab="questions">Questions</div>
-    <div class="tab" data-tab="branding">Branding</div>
-    <div class="tab" data-tab="settings">Settings</div>
-    <div class="tab" data-tab="log">Event Log<span class="badge" id="logBadge" style="display:none">0</span></div>
+  <!-- A11Y: WAI-ARIA tabs pattern. Roving tabindex + aria-selected are kept in
+       sync by switchTab(); Left/Right/Home/End handled on the tablist. -->
+  <div class="tabs" role="tablist" aria-label="Admin sections" id="adminTabs">
+    <button type="button" class="tab active" role="tab" id="tab-overview" aria-selected="true" aria-controls="panel-overview" data-tab="overview">Overview</button>
+    <button type="button" class="tab" role="tab" id="tab-players" aria-selected="false" aria-controls="panel-players" tabindex="-1" data-tab="players">Players<span class="badge" id="playersBadge" style="display:none">0</span></button>
+    <button type="button" class="tab" role="tab" id="tab-questions" aria-selected="false" aria-controls="panel-questions" tabindex="-1" data-tab="questions">Questions</button>
+    <button type="button" class="tab" role="tab" id="tab-branding" aria-selected="false" aria-controls="panel-branding" tabindex="-1" data-tab="branding">Branding</button>
+    <button type="button" class="tab" role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings" tabindex="-1" data-tab="settings">Settings</button>
+    <button type="button" class="tab" role="tab" id="tab-log" aria-selected="false" aria-controls="panel-log" tabindex="-1" data-tab="log">Event Log<span class="badge" id="logBadge" style="display:none">0</span></button>
   </div>
 
   <div class="content">
 
-    <div id="banner-area"></div>
+    <!-- A11Y: live region — new banners are announced without stealing focus. -->
+    <div id="banner-area" role="status" aria-live="polite"></div>
 
     <!-- OVERVIEW -->
-    <div data-tab-content="overview" class="active">
+    <div data-tab-content="overview" class="active" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
 
       <div class="panel">
         <h2>Game Control
@@ -345,13 +353,13 @@ body{
       </div>
 
       <div class="panel">
-        <h2>Recent Events <a class="btn small ghost" data-switch-tab="log" style="font-weight:normal">View all →</a></h2>
+        <h2>Recent Events <button type="button" class="btn small ghost" data-switch-tab="log" style="font-weight:normal">View all <span aria-hidden="true">→</span></button></h2>
         <div id="overviewLog" class="log-list" style="max-height:240px"></div>
       </div>
     </div>
 
     <!-- PLAYERS -->
-    <div data-tab-content="players">
+    <div data-tab-content="players" role="tabpanel" id="panel-players" aria-labelledby="tab-players">
       <div class="panel">
         <h2>Player Roster
           <span class="panel-actions">
@@ -383,7 +391,7 @@ body{
     </div>
 
     <!-- QUESTIONS -->
-    <div data-tab-content="questions">
+    <div data-tab-content="questions" role="tabpanel" id="panel-questions" aria-labelledby="tab-questions">
 
       <div id="qLockBanner" class="banner warn" style="display:none">
         ⚠️ Questions can only be edited in the lobby phase or after the game ends. Current edits are read-only.
@@ -434,7 +442,7 @@ body{
     </div>
 
     <!-- BRANDING -->
-    <div data-tab-content="branding">
+    <div data-tab-content="branding" role="tabpanel" id="panel-branding" aria-labelledby="tab-branding">
       <div class="panel">
         <h2>Branding & Personalisation
           <span class="panel-actions">
@@ -620,7 +628,7 @@ body{
     </div>
 
     <!-- SETTINGS -->
-    <div data-tab-content="settings">
+    <div data-tab-content="settings" role="tabpanel" id="panel-settings" aria-labelledby="tab-settings">
       <div class="panel">
         <h2>Settings</h2>
         <p class="muted" style="font-size:13px;line-height:1.55;margin-bottom:8px">
@@ -773,7 +781,7 @@ body{
     </div>
 
     <!-- LOG -->
-    <div data-tab-content="log">
+    <div data-tab-content="log" role="tabpanel" id="panel-log" aria-labelledby="tab-log">
       <div class="panel">
         <h2>Event Log
           <span class="panel-actions">
@@ -829,7 +837,6 @@ let questions = [];
 let bonusQuestions = [];
 let eventLog = [];
 let dirty = false;
-let lastBannerTimeout = null;
 
 // U1: WS auto-reconnect with exponential backoff. After the cap is reached we
 // surface a manual "Reconnect" button + a recovery-token link so the operator
@@ -958,27 +965,56 @@ function hostActionFromAdmin(hostAction, hostPayload) {
 /* =====================
    TABS
    ===================== */
-document.querySelectorAll('.tab').forEach(t => {
+// A11Y: WAI-ARIA tabs pattern with automatic activation. Only the selected
+// tab is in the Tab order (roving tabindex); Left/Right/Home/End move between
+// tabs and activate them. Everything funnels through switchTab(), which also
+// fires a 'tab:shown' event on the panel so lazy loaders (Branding) run no
+// matter how the tab was reached — click, keyboard, or a "View all" button.
+const TAB_BUTTONS = Array.from(document.querySelectorAll('#adminTabs [role="tab"]'));
+TAB_BUTTONS.forEach(t => {
   t.addEventListener('click', () => switchTab(t.dataset.tab));
 });
-document.querySelectorAll('[data-switch-tab]').forEach(el => {
-  el.addEventListener('click', () => switchTab(el.dataset.switchTab));
+document.getElementById('adminTabs').addEventListener('keydown', e => {
+  const idx = TAB_BUTTONS.indexOf(e.target.closest('[role="tab"]'));
+  if (idx === -1) return;
+  let next;
+  if (e.key === 'ArrowRight')     next = (idx + 1) % TAB_BUTTONS.length;
+  else if (e.key === 'ArrowLeft') next = (idx - 1 + TAB_BUTTONS.length) % TAB_BUTTONS.length;
+  else if (e.key === 'Home')      next = 0;
+  else if (e.key === 'End')       next = TAB_BUTTONS.length - 1;
+  else return;
+  e.preventDefault();
+  switchTab(TAB_BUTTONS[next].dataset.tab, { focus: true });
 });
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  document.querySelectorAll('[data-tab-content]').forEach(c => c.classList.toggle('active', c.dataset.tabContent === name));
+document.querySelectorAll('[data-switch-tab]').forEach(el => {
+  // Focus moves to the tab: the button that was clicked is inside a panel
+  // that is about to be hidden, so focus would otherwise fall to <body>.
+  el.addEventListener('click', () => switchTab(el.dataset.switchTab, { focus: true }));
+});
+function switchTab(name, { focus = false } = {}) {
+  TAB_BUTTONS.forEach(t => {
+    const on = t.dataset.tab === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.tabIndex = on ? 0 : -1;
+    if (on && focus) t.focus();
+  });
+  document.querySelectorAll('[data-tab-content]').forEach(c => {
+    const on = c.dataset.tabContent === name;
+    c.classList.toggle('active', on);
+    if (on) c.dispatchEvent(new CustomEvent('tab:shown', { detail: name }));
+  });
 }
 
 /* =====================
    BANNERS
    ===================== */
+// A11Y: no auto-dismiss (success banners used to vanish after 5 s). The
+// banner stays until the operator clicks Dismiss or the next banner replaces
+// it; #banner-area is a polite live region so the text is announced.
 function showBanner(kind, msg) {
   const area = document.getElementById('banner-area');
-  area.innerHTML = `<div class="banner ${kind}"><span>${escapeHtml(msg)}</span><button class="btn small ghost" data-act="dismiss-banner" aria-label="Dismiss">×</button></div>`;
-  if (kind === 'success') {
-    clearTimeout(lastBannerTimeout);
-    lastBannerTimeout = setTimeout(() => area.innerHTML = '', 5000);
-  }
+  area.innerHTML = `<div class="banner ${kind}"><span>${escapeHtml(msg)}</span><button type="button" class="btn small ghost" data-act="dismiss-banner" aria-label="Dismiss">×</button></div>`;
 }
 // Delegated click handler — replaces the inline onclick on the dynamically-
 // created banner dismiss button (CSP nonces don't cover inline event attrs).
@@ -2014,8 +2050,10 @@ function parseThemeImport(text){
   return out;
 }
 
-// Lazy-load the form the first time the Branding tab is opened.
-document.querySelector('.tab[data-tab="branding"]').addEventListener('click', loadBrandingForm, { once: true });
+// Lazy-load the form the first time the Branding panel is shown. switchTab()
+// fires 'tab:shown' on the panel, so this fires for a click, an arrow key or a
+// programmatic switch alike (the old click-only binding missed keyboard users).
+document.getElementById('panel-branding').addEventListener('tab:shown', () => loadBrandingForm(), { once: true });
 
 // Server confirms with branding:saved.
 const _origOnOpenMessage = null; // (no-op slot)
