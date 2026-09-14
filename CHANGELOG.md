@@ -18,6 +18,10 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 - `getClientIp(req, policy)` accepts an explicit trust policy (`mode` / `hops` / `onFly`) so tests can exercise Fly and multi-hop deployments in-process. `forwardedIpFromRight`, `pruneExpiredState`, `inMemoryStateSizes` and the policy constants are exported for the test harness.
 - 54 new checks in `test/security.test.js` (576 → 630 on top of the re-keying suite): the `forwardedIpFromRight` walker, Fly / Cloudflare / multi-hop `getClientIp` cases, live `POST /auth/login` and `player:join` spoof attempts behind a proxy-shaped peer, and the expired-state sweep.
 
+### Fixed
+
+- **Bundled sample packs were missing from the Docker image.** The `Dockerfile` runtime stage copied `server.js`, `questions.js`, `package.json` and `public/` but never `samples/`, while the default `SAMPLE_PACKS_URL` (`bundled:samples/manifest.json`) resolves that directory on disk next to `server.js`. On every Dockerfile-based deploy (Fly.io, Railway, self-hosted Docker) Admin → Questions → **Browse sample packs** failed with `Sample browse failed: ENOENT: no such file or directory, open '/app/samples/manifest.json'` — the exact first-boot flow `docs/DEPLOYMENT.md` points operators at. Render's native Node runtime was unaffected. The runtime stage now copies `samples/`, and a new `image-contents` CI job builds the image and fails if any `samples/*.json` from the checkout is missing from `/app/samples` (checked as the unprivileged `app` user, on every PR including forks).
+
 ### Security
 
 - **HIGH — One oversized WebSocket frame from an unauthenticated visitor crashed the server.** `ws` re-emits protocol errors (frame over `maxPayload`, invalid UTF-8) as an `'error'` event on the socket; no listener was registered, so the event became an `uncaughtException` and ran the full graceful shutdown. A single 5 MiB frame dropped every player and restarted the process (reproduced against `main`). Patched: per-socket `'error'` listener that logs `ws.socket-error`, plus a 16 KiB cap on messages from non-admin sockets, closed with 1009 before parsing.
@@ -35,6 +39,7 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 - **The `Test` workflow is enabled again.** It had been disabled manually while every run was red for the two reasons above. It runs on push, pull request and nightly.
 - Docs: README and CONTRIBUTING quick-starts use `npm install -g pnpm` instead of `corepack enable`; the test count and Node matrix are current; CONTRIBUTING records that Renovate (shared `privacykey/renovate-config` preset) is the only dependency bot and that Dependabot was retired.
 - `.env.example`: `TRUST_PROXY` comment rewritten around hop counting and the platform headers.
+- `pnpm-lock.yaml` is no longer copied into the Docker runtime stage. Nothing reads it at runtime; the `deps` stage still uses it for `pnpm install --frozen-lockfile`.
 
 ## [1.1.1] - 2026-05-19
 
