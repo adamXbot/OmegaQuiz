@@ -22,6 +22,17 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 - **Bundled sample packs were missing from the Docker image.** The `Dockerfile` runtime stage copied `server.js`, `questions.js`, `package.json` and `public/` but never `samples/`, while the default `SAMPLE_PACKS_URL` (`bundled:samples/manifest.json`) resolves that directory on disk next to `server.js`. On every Dockerfile-based deploy (Fly.io, Railway, self-hosted Docker) Admin → Questions → **Browse sample packs** failed with `Sample browse failed: ENOENT: no such file or directory, open '/app/samples/manifest.json'` — the exact first-boot flow `docs/DEPLOYMENT.md` points operators at. Render's native Node runtime was unaffected. The runtime stage now copies `samples/`, and a new `image-contents` CI job builds the image and fails if any `samples/*.json` from the checkout is missing from `/app/samples` (checked as the unprivileged `app` user, on every PR including forks).
 
+### Accessibility
+
+Closes six confirmed WCAG 2.2 AA findings from the pre-ship audit follow-up. Mouse users only see darker state colours and a few extra words; keyboard and screen-reader users get working tabs, a submittable join form and answer states they can actually perceive.
+
+- **Admin tabs are real tabs.** The six dashboard tabs were `<div>`s with a click listener — unreachable by keyboard and not announced. They are now `<button role="tab">` inside a `role="tablist"`, with `aria-selected`, `aria-controls`, a roving `tabindex` and Left/Right/Home/End arrow-key navigation; every panel is a `role="tabpanel"` labelled by its tab. The Branding form still lazy-loads on first show, now regardless of whether the tab was reached by click, keyboard or the Overview "View all" button — which is now a `<button>` (it was an `<a>` with no `href`).
+- **Player answer state is no longer colour-only.** Each answer button's accessible name ends with its state ("— your answer", "— correct", "— wrong, your answer", "— removed by 50/50"), the selection is exposed via `aria-pressed`, options removed by 50/50 are genuinely `disabled` (previously only `pointer-events:none`, which did not stop Enter/Space), and a visible text tag (✓ Correct / ✗ Your answer / Selected / Removed, plus strike-through) mirrors the colour.
+- **Pinch-zoom re-enabled on the player page** — `user-scalable=no` removed from the viewport meta (WCAG 1.4.4).
+- **Join screen is a real `<form>`.** Enter and the phone keyboard's Go key now submit; inputs carry `required` and `aria-describedby` pointing at the error message; on a validation or server error the offending field gets `aria-invalid="true"` (red ring) and takes focus. The error no longer auto-hides after 4 s — it stays until the next attempt or a successful join.
+- **Contrast.** Selected/pending answers (white on `#d97706`, 2.9:1), correct answers (white on `#16a34a`, 3.0:1), wrong answers (4.3:1 after opacity), the Lock In button (white on `#22c55e`, 2.3:1) and the host projector's correct-answer letter (gold on `#16a34a`, 2.0:1) now use darker fills (`#9a3412`, `#15803d`, `#b91c1c`) with white letters — every state is ≥ 5.0:1.
+- **Admin banners are announced and stay put.** `#banner-area` is a `role="status"` polite live region, and the 5 s auto-dismiss on success banners (JS timer plus the CSS fade-out) is gone; the existing Dismiss button closes them.
+
 ### Security
 
 - **HIGH — One oversized WebSocket frame from an unauthenticated visitor crashed the server.** `ws` re-emits protocol errors (frame over `maxPayload`, invalid UTF-8) as an `'error'` event on the socket; no listener was registered, so the event became an `uncaughtException` and ran the full graceful shutdown. A single 5 MiB frame dropped every player and restarted the process (reproduced against `main`). Patched: per-socket `'error'` listener that logs `ws.socket-error`, plus a 16 KiB cap on messages from non-admin sockets, closed with 1009 before parsing.
@@ -40,6 +51,7 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 - Docs: README and CONTRIBUTING quick-starts use `npm install -g pnpm` instead of `corepack enable`; the test count and Node matrix are current; CONTRIBUTING records that Renovate (shared `privacykey/renovate-config` preset) is the only dependency bot and that Dependabot was retired.
 - `.env.example`: `TRUST_PROXY` comment rewritten around hop counting and the platform headers.
 - `pnpm-lock.yaml` is no longer copied into the Docker runtime stage. Nothing reads it at runtime; the `deps` stage still uses it for `pnpm install --frozen-lockfile`.
+- Test suite: 576 → 616 checks. New `A11Y:` sections assert the served markup keeps every fix above: tab/tabpanel wiring and key handling, the live region and absence of the auto-dismiss, form semantics, `aria-pressed` / `disabled` / state text on answers, the computed contrast ratio of every state fill, zoomable viewports, and no inline `on*=` handlers on any page.
 
 ## [1.1.1] - 2026-05-19
 

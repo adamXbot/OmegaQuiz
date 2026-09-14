@@ -2679,6 +2679,111 @@ async function dataWipeTests() {
 // v1.1.1 security-audit regression tests (F1, F2, F4, F5, F6, F7).
 // Each section maps to a finding in the 2026-05-19 Railway-targeted review.
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// A11Y: the served markup keeps the accessibility fixes (static checks)
+// ----------------------------------------------------------------------------
+// WCAG 2.x relative-luminance contrast ratio between two #rrggbb colours.
+function contrastRatio(hexA, hexB) {
+  const lum = hex => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(c => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [lum(hexA), lum(hexB)].sort((a, b) => b - a);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+async function a11yMarkupTests() {
+  section('A11Y: player page — zoom, join form, answer-state semantics, contrast');
+  {
+    const r = await request('GET', '/');
+    const body = r.body;
+    ok(r.status === 200, 'GET / (player page) returns 200');
+    ok(!/user-scalable\s*=\s*no/i.test(body), 'viewport meta allows pinch-zoom (no user-scalable=no) — WCAG 1.4.4');
+    ok(/<form class="join-card" id="joinForm" novalidate>/.test(body), 'join fields live inside <form id="joinForm"> so Enter / Go submits');
+    const inputs = ['joinCodeInput', 'nameInput', 'emailInput'];
+    const missing = inputs.filter(id => !new RegExp('<input id="' + id + '"[^>]*\\brequired\\b[^>]*aria-describedby="errorMsg"').test(body));
+    ok(missing.length === 0, 'join inputs are required + described by #errorMsg', 'missing: ' + missing.join(', '));
+    ok(/<button class="btn" id="joinBtn" type="submit">/.test(body), 'Join button is type="submit"');
+    ok(/getElementById\('joinForm'\)\.addEventListener\('submit'/.test(body), 'submit listener is bound on the form (not a click handler on the button)');
+    ok(!/classList\.remove\('active'\), 4000\)/.test(body), 'join error no longer auto-hides after 4 s');
+    ok(/setAttribute\('aria-invalid', 'true'\)/.test(body) && /bad\[0\]\.focus\(\)/.test(body), 'validation marks fields aria-invalid and moves focus to the first one');
+    // Answer buttons: state in the name, aria-pressed, real disabled for 50/50.
+    ok(/removed by 50\/50/.test(body) && /'your answer'/.test(body) && /'correct, your answer'/.test(body), 'answer state is appended to the accessible name');
+    ok(/setAttribute\('aria-pressed'/.test(body), 'selection is exposed via aria-pressed');
+    ok(/if \(eliminated\) btn\.disabled = true;/.test(body), '50/50-removed options are disabled (keyboard cannot activate them)');
+    ok(!/\.answer-btn\.eliminated\{[^}]*pointer-events:none/.test(body), 'eliminated CSS no longer relies on pointer-events:none alone');
+    ok(/class="state-tag"/.test(body) && /✓ Correct/.test(body) && /✗ Your answer/.test(body), 'visible ✓ / ✗ state tag is rendered (state is not colour-only)');
+    // Contrast: white text on the top colour of each state gradient must be ≥ 4.5:1.
+    const fills = {
+      '.answer-btn.selected': /\.answer-btn\.selected\{background:linear-gradient\(180deg,(#[0-9a-f]{6})/,
+      '.answer-btn.correct':  /\.answer-btn\.correct\{background:linear-gradient\(180deg,(#[0-9a-f]{6})/,
+      '.answer-btn.wrong':    /\.answer-btn\.wrong\{background:linear-gradient\(180deg,(#[0-9a-f]{6})/,
+      '.answer-btn.pending':  /\.answer-btn\.pending\{[^}]*background:linear-gradient\(180deg,(#[0-9a-f]{6})/,
+      '.lock-in-btn':         /\.lock-in-btn\{[^}]*background:linear-gradient\(180deg,(#[0-9a-f]{6})/,
+    };
+    for (const [sel, re] of Object.entries(fills)) {
+      const m = body.match(re);
+      const ratio = m ? contrastRatio('#ffffff', m[1]) : 0;
+      ok(ratio >= 4.5, `${sel} fill gives white text ≥ 4.5:1 (${m ? m[1] + ' → ' + ratio.toFixed(2) + ':1' : 'rule not found'})`);
+    }
+    ok(/\.answer-btn\.selected \.letter,\.answer-btn\.correct \.letter,\.answer-btn\.wrong \.letter\{color:#fff\}/.test(body), 'answer letter turns white in selected / correct / wrong states (gold failed on those fills)');
+  }
+
+  section('A11Y: admin page — ARIA tabs, live-region banners');
+  {
+    const { cookie } = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const r = await request('GET', '/admin', { headers: { Cookie: cookie } });
+    const body = r.body;
+    ok(r.status === 200, 'GET /admin (signed in) returns 200');
+    ok(/<div class="tabs" role="tablist" aria-label="[^"]+" id="adminTabs">/.test(body), 'tab strip is a labelled role="tablist"');
+    const tabs = body.match(/<button type="button" class="tab[^"]*" role="tab"[^>]*>/g) || [];
+    ok(tabs.length === 6, 'six <button role="tab"> tabs', 'found ' + tabs.length);
+    ok(!/<div class="tab\b/.test(body), 'no <div class="tab"> remains');
+    const selected = tabs.filter(t => /aria-selected="true"/.test(t));
+    ok(selected.length === 1 && !/tabindex="-1"/.test(selected[0]) && tabs.filter(t => /tabindex="-1"/.test(t)).length === 5,
+       'roving tabindex: exactly one tab is selected and in the Tab order');
+    const broken = tabs.filter(t => {
+      const id = (t.match(/ id="(tab-[a-z]+)"/) || [])[1];
+      const panel = (t.match(/aria-controls="(panel-[a-z]+)"/) || [])[1];
+      return !id || !panel || !new RegExp('role="tabpanel" id="' + panel + '" aria-labelledby="' + id + '"').test(body);
+    });
+    ok(broken.length === 0, 'every tab controls a role="tabpanel" that is labelled by it', broken.join('\n'));
+    ok(/e\.key === 'ArrowRight'/.test(body) && /e\.key === 'ArrowLeft'/.test(body) && /e\.key === 'Home'/.test(body) && /e\.key === 'End'/.test(body), 'tablist handles Left / Right / Home / End keys');
+    ok(/setAttribute\('aria-selected', on \? 'true' : 'false'\)/.test(body), 'switchTab() keeps aria-selected in sync');
+    ok(/getElementById\('panel-branding'\)\.addEventListener\('tab:shown'/.test(body) && !/\.tab\[data-tab="branding"\]'\)\.addEventListener\('click'/.test(body),
+       'Branding lazy-load fires on tab:shown (any input method), not on click only');
+    ok(/<button type="button" class="btn small ghost" data-switch-tab="log"/.test(body) && !/<a class="btn small ghost" data-switch-tab/.test(body), '"View all" is a <button>, not an href-less <a>');
+    ok(/<div id="banner-area" role="status" aria-live="polite">/.test(body), '#banner-area is a polite live region');
+    ok(!/lastBannerTimeout|area\.innerHTML = '', 5000|animation:fadeOut|@keyframes fadeOut/.test(body), 'success banners no longer auto-dismiss (no 5 s timer, no CSS fade-out)');
+  }
+
+  section('A11Y: host page — correct-answer contrast');
+  {
+    const h = await loginAs('host', process.env.HOST_TOKEN);
+    const r = await request('GET', '/host', { headers: { Cookie: h.cookie } });
+    const body = r.body;
+    ok(r.status === 200, 'GET /host (signed in) returns 200');
+    const m = body.match(/\.answer\.correct\{background:linear-gradient\(180deg,(#[0-9a-f]{6})/);
+    const ratio = m ? contrastRatio('#ffffff', m[1]) : 0;
+    ok(ratio >= 4.5, `.answer.correct fill gives white text ≥ 4.5:1 (${m ? m[1] + ' → ' + ratio.toFixed(2) + ':1' : 'rule not found'})`);
+    ok(/\.answer\.correct \.letter\{color:#fff\}/.test(body) && /\.answer\.correct\{[^}]*color:#fff/.test(body), 'correct-answer letter and text are white (gold on green was 2.0:1)');
+  }
+
+  section('A11Y: every page — zoomable viewport, no inline event-handler attributes (CSP nonce cannot cover them)');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const pages = [['/', {}], ['/admin', { Cookie: admin.cookie }], ['/host', { Cookie: host.cookie }]];
+    for (const [p, headers] of pages) {
+      const r = await request('GET', p, { headers });
+      const hits = r.body.match(/<[a-z][^>]*\son[a-z]+\s*=/gi) || [];
+      ok(hits.length === 0, `${p}: no on*= attributes in the markup`, hits.slice(0, 3).join('\n'));
+      ok(!/user-scalable\s*=\s*no/i.test(r.body), `${p}: viewport allows zoom`);
+    }
+  }
+}
+
 async function v111SecurityFixTests() {
   // -- F1: parseCookies must not crash on malformed `%` sequences.
   section('F1: malformed cookie does not crash the server (URIError swallowed)');
@@ -3311,6 +3416,7 @@ async function stateSweepTests() {
     await v111SecurityFixTests();
     await keyRemintTests();
     await wsRobustnessTests();
+    await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
   } catch (e) {
