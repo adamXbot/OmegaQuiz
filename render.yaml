@@ -9,7 +9,15 @@ services:
                                  # >50 players or no-sleep behaviour.
     region: oregon
     branch: main
-    buildCommand: corepack enable && corepack prepare pnpm@11.0.6 --activate && pnpm install --prod --frozen-lockfile
+    # The pnpm version has one source of truth: "packageManager" in
+    # package.json (the Dockerfile resolves it the same way). Not Corepack —
+    # it is no longer bundled with Node 25+. A "+sha512.…" integrity suffix is
+    # stripped; an empty result fails the build rather than installing latest.
+    buildCommand: >-
+      PNPM_VERSION="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
+      && test -n "$PNPM_VERSION"
+      && npm install -g "pnpm@${PNPM_VERSION}"
+      && pnpm install --prod --frozen-lockfile
     startCommand: node server.js
     # /health returns 200 only when the server is fully initialised, 503 while
     # shutting down. Hitting "/" instead returns the player join page which is
