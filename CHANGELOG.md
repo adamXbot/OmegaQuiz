@@ -4,6 +4,20 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ## [Unreleased]
 
+### Security
+
+- **HIGH — Per-IP rate limits were spoofable behind appending reverse proxies (Fly, Render, Railway, Docker + nginx).** `getClientIp` took the *first* `X-Forwarded-For` entry, but every mainstream proxy *appends* the address it accepted the connection from to whatever the client sent, so the first entry was attacker-controlled. A client could present a fresh "IP" on every request, which sidestepped the login limiter (5 tries / 15 min guarding `HOST_TOKEN` / `ADMIN_TOKEN`) and the join-code limiter (8 tries / 60 s guarding the 6-digit join code), and grew `loginFailures` / `joinFailures` without bound because entries were only pruned on success. `CF-Connecting-IP` was also honoured from any private peer, not only from a Cloudflare edge. Patched: `X-Forwarded-For` is now read from the **right**, walking `TRUST_PROXY` hops (Express `proxy-addr` semantics; a non-IP in the trusted slot falls back to the socket peer instead of skipping left into client-supplied entries); `Fly-Client-IP` is preferred when the process is a Fly Machine (`FLY_APP_NAME` / `FLY_MACHINE_ID` / `FLY_ALLOC_ID` present) with a single trusted hop, as [Fly's request-header docs](https://fly.io/docs/networking/request-headers/) recommend; `CF-Connecting-IP` only counts when the socket peer *is* a Cloudflare edge (or `TRUST_PROXY=always`). Found in the 2026-09 pre-ship audit.
+- **MEDIUM — Unbounded in-memory state.** Login / join failure buckets and sessions were only removed on success or on next use. A 60-second sweep (sharing the existing magic-link timer) now drops failure entries whose window and block have both expired, expired sessions, and expired magic links. Decisions are unchanged: the sweep only removes what the hot paths already treated as expired.
+
+### Added
+
+- `getClientIp(req, policy)` accepts an explicit trust policy (`mode` / `hops` / `onFly`) so tests can exercise Fly and multi-hop deployments in-process. `forwardedIpFromRight`, `pruneExpiredState`, `inMemoryStateSizes` and the policy constants are exported for the test harness.
+- 54 new checks in `test/security.test.js` (519 → 573): the `forwardedIpFromRight` walker, Fly / Cloudflare / multi-hop `getClientIp` cases, live `POST /auth/login` and `player:join` spoof attempts behind a proxy-shaped peer, and the expired-state sweep.
+
+### Changed
+
+- `.env.example`: `TRUST_PROXY` comment rewritten around hop counting and the platform headers.
+
 ## [1.1.1] - 2026-05-19
 
 Blue-hat security audit follow-up. Closes nine findings raised in a Railway-targeted review, none of which were caught by the existing 487-check suite.

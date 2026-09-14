@@ -138,12 +138,18 @@ if (process.env.NODE_ENV === 'production' && !AUTO_PROVISION_SECRETS && !process
 // Behind Railway / Render / Fly / nginx, trust X-Forwarded-* for protocol & IP.
 //
 // TRUST_PROXY env var:
-//   - undefined / 'auto' (default) → trust XFF when the socket peer looks like
-//     a reverse proxy (loopback, RFC1918, 100.64/10 carrier-grade NAT,
-//     IPv6 loopback/ULA, or a known Cloudflare edge IP).
-//   - '1' / 'true' / 'always' → always trust XFF (use behind any proxy chain).
-//   - '0' / 'false' / 'never' → never trust XFF (CF check is also disabled).
-//   - A positive integer → Express trust-proxy hop count + auto behaviour.
+//   - undefined / 'auto' (default) → trust forwarding headers when the socket
+//     peer looks like a reverse proxy (loopback, RFC1918, 100.64/10
+//     carrier-grade NAT, IPv6 loopback/ULA, or a known Cloudflare edge IP).
+//   - '1' / 'true' / 'always' → always trust them (use behind any proxy chain).
+//   - '0' / 'false' / 'never' → never trust them (CF check is also disabled).
+//   - A positive integer → number of trusted proxy hops + auto behaviour.
+//
+// Which header wins, and which entry of it, is decided in getClientIp():
+// X-Forwarded-For is read from the RIGHT by hop count (every mainstream proxy
+// APPENDS the address it accepted, so the leftmost entry is whatever the
+// client typed), Fly-Client-IP is preferred on Fly Machines, and
+// CF-Connecting-IP only counts when the peer really is a Cloudflare edge.
 const TRUST_PROXY_RAW = String(process.env.TRUST_PROXY || 'auto').toLowerCase();
 const TRUST_PROXY_MODE =
   ['', 'auto'].includes(TRUST_PROXY_RAW) ? 'auto' :
@@ -154,6 +160,12 @@ const TRUST_PROXY_MODE =
 const TRUST_PROXY_HOPS = /^\d+$/.test(TRUST_PROXY_RAW) ? parseInt(TRUST_PROXY_RAW, 10) :
   TRUST_PROXY_MODE === 'never' ? 0 : 1;
 app.set('trust proxy', TRUST_PROXY_HOPS);
+// Fly Proxy writes Fly-Client-IP from the connection it accepted, so on a Fly
+// Machine the header is authoritative. Anywhere else it is just another
+// client-supplied string that Render / Railway / nginx forward untouched, so
+// it is only consulted when the process is demonstrably running on Fly.
+const RUNNING_ON_FLY = !!(process.env.FLY_APP_NAME || process.env.FLY_MACHINE_ID || process.env.FLY_ALLOC_ID);
+const TRUST_PROXY_POLICY = Object.freeze({ mode: TRUST_PROXY_MODE, hops: TRUST_PROXY_HOPS, onFly: RUNNING_ON_FLY });
 
 // Where to fetch the catalogue of sample question packs from. By default this
 // uses the bundled samples/manifest.json shipped with the app; set
@@ -1498,11 +1510,11 @@ function consumeMagicToken(token) {
   if (entry.expiresAt < Date.now()) return null;
   return entry;
 }
-function pruneExpiredMagic() {
-  const now = Date.now();
+function pruneExpiredMagic(now = Date.now()) {
   for (const [t, e] of magicLinks.entries()) if (e.expiresAt < now) magicLinks.delete(t);
 }
-setInterval(pruneExpiredMagic, 60_000).unref?.();
+// The 60 s sweep that used to live here now runs from pruneExpiredState(),
+// defined after the rate-limit maps below, so one timer covers everything.
 
 // Initial magic tokens minted at module load so the test harness can read them
 // before server.listen fires the boot banner.
@@ -1561,6 +1573,33 @@ function isJoinBlocked(ip) {
   return !!(e && e.blockedUntil > Date.now());
 }
 function clearJoinFailures(ip) { joinFailures.delete(ip); }
+
+// --- Periodic sweep of expiring in-memory state ---
+// Failure buckets used to be removed only on a successful sign-in / join, and
+// sessions only when their cookie was next presented. A client who could mint
+// a fresh "IP" per request (the pre-v1.1.2 X-Forwarded-For bug, or simply a
+// hand on an IPv6 /64) therefore grew these Maps without bound. The sweep
+// drops exactly what the hot paths already treat as expired — the predicate
+// below is the reset branch of recordLoginFailure / recordJoinFailure — so it
+// never changes a decision, only memory. `now` is a parameter so tests can
+// fast-forward without faking the clock.
+function pruneFailureMap(map, windowMs, now) {
+  for (const [key, e] of map) {
+    if (e.blockedUntil < now && (now - e.firstAt) > windowMs) map.delete(key);
+  }
+}
+function pruneExpiredState(now = Date.now()) {
+  pruneExpiredMagic(now);
+  pruneFailureMap(loginFailures, LOGIN_WINDOW_MS, now);
+  pruneFailureMap(joinFailures, JOIN_WINDOW_MS, now);
+  for (const [id, s] of sessions) if (s.expiresAt < now) sessions.delete(id);
+}
+setInterval(pruneExpiredState, 60_000).unref?.();
+// Sizes only — never the contents — so the test harness can prove the sweep
+// bounds memory without being handed live session ids.
+function inMemoryStateSizes() {
+  return { sessions: sessions.size, magicLinks: magicLinks.size, loginFailures: loginFailures.size, joinFailures: joinFailures.size };
+}
 
 const CLOUDFLARE_EDGE_CIDRS = [
   '173.245.48.0/20',
@@ -1700,33 +1739,60 @@ function isPrivateOrLoopbackIp(ip) {
   return false;
 }
 
-function firstValidIpHeader(value) {
+// Reads a comma-separated forwarding header from the RIGHT. Every honest proxy
+// appends the peer address it accepted the connection from, so the rightmost
+// entry was written by the proxy that connected to us, the one before it by
+// the proxy in front of that, and so on; anything further left is whatever
+// the original client chose to send. `hops` is the number of trusted proxies
+// between us and the client, so the entry `hops` positions from the right is
+// the client as the outermost trusted proxy saw it. A list shorter than
+// `hops` yields its leftmost entry (Express / proxy-addr behaviour). Returns
+// '' unless the chosen entry is an IP — we never skip along the list looking
+// for one, because the next candidate is client territory.
+function forwardedIpFromRight(value, hops = 1) {
   if (value == null) return '';
   const raw = Array.isArray(value) ? value.join(',') : String(value);
-  for (const part of raw.split(',')) {
-    const ip = normalizeIp(part);
-    if (net.isIP(ip)) return ip;
-  }
-  return '';
+  const parts = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return '';
+  const n = Number.isInteger(hops) && hops > 1 ? hops : 1;
+  const ip = normalizeIp(parts[Math.max(0, parts.length - n)]);
+  return net.isIP(ip) ? ip : '';
 }
 
 // Returns the client IP we'll use for rate-limit / audit-log purposes. The
-// trust decision is per-request, driven by TRUST_PROXY env var. See the
-// TRUST_PROXY_MODE block at the top of this file for the contract.
-function getClientIp(req) {
+// trust decision is per-request, driven by TRUST_PROXY (see the block at the
+// top of this file). `policy` defaults to the env-derived TRUST_PROXY_POLICY
+// and exists so tests can exercise Fly / multi-hop deployments in-process.
+//
+// Precedence once the socket peer is trusted:
+//   1. CF-Connecting-IP — only when the peer IS a Cloudflare edge (or
+//      TRUST_PROXY=always). Behind any other proxy the header is client-
+//      supplied and forwarded untouched.
+//   2. Fly-Client-IP — only on a Fly Machine (RUNNING_ON_FLY) and only when Fly
+//      Proxy is the single trusted hop; with more hops the header names the
+//      proxy in front of Fly, not the client.
+//   3. X-Forwarded-For, walked from the right by hop count. Never the first
+//      entry: Fly, nginx, Cloudflare, Render and Railway all APPEND, so a
+//      client could otherwise present a fresh "IP" on every request and
+//      sidestep every per-IP limiter (the v1.1.1 → v1.1.2 fix).
+//   4. The socket peer.
+function getClientIp(req, policy = TRUST_PROXY_POLICY) {
   const remote = normalizeIp(req && req.socket && req.socket.remoteAddress);
-  if (TRUST_PROXY_MODE === 'never') {
-    return remote || 'unknown';
+  if (policy.mode === 'never') return remote || 'unknown';
+  const headers = (req && req.headers) || {};
+  const always = policy.mode === 'always';
+  const fromCloudflare = isCloudflareEdgeIp(remote);
+  if (!(always || fromCloudflare || isPrivateOrLoopbackIp(remote))) return remote || 'unknown';
+  const hops = Number.isInteger(policy.hops) && policy.hops > 1 ? policy.hops : 1;
+  if (always || fromCloudflare) {
+    const cf = forwardedIpFromRight(headers['cf-connecting-ip'], 1);
+    if (cf) return cf;
   }
-  const cfIp = isCloudflareEdgeIp(remote);
-  const proxyIp = TRUST_PROXY_MODE === 'always' || cfIp || isPrivateOrLoopbackIp(remote);
-  if (proxyIp) {
-    return firstValidIpHeader(req.headers['cf-connecting-ip'])
-      || firstValidIpHeader(req.headers['x-forwarded-for'])
-      || remote
-      || 'unknown';
+  if (policy.onFly && hops === 1) {
+    const fly = forwardedIpFromRight(headers['fly-client-ip'], 1);
+    if (fly) return fly;
   }
-  return remote || 'unknown';
+  return forwardedIpFromRight(headers['x-forwarded-for'], hops) || remote || 'unknown';
 }
 
 // --- Security headers (A05-1) ---
@@ -3462,12 +3528,13 @@ module.exports = {
   recordJoinFailure, isJoinBlocked, clearJoinFailures,
   recordLoginFailure, isBlocked, clearLoginFailures,
   LOGIN_FAILURE_MAX, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS,
-  getClientIp, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp,
+  getClientIp, forwardedIpFromRight, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp,
   parseCookies, isSafeNext,
-  TRUST_PROXY_MODE,
+  TRUST_PROXY_MODE, TRUST_PROXY_HOPS, TRUST_PROXY_POLICY, RUNNING_ON_FLY,
+  pruneExpiredState, inMemoryStateSizes, SESSION_TTL_MS,
   parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow,
   PLAYER_RECONNECT_WINDOW_MS,
-  JOIN_FAILURE_MAX,
+  JOIN_FAILURE_MAX, JOIN_BLOCK_MS, JOIN_WINDOW_MS,
   CONFIG_PATH, DATA_DIR, MAGIC_TTL_MS,
   get ENV_PUBLIC_BASE_URL() { return ENV_PUBLIC_BASE_URL; },
   get branding()    { return branding; },

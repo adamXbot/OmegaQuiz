@@ -19,13 +19,20 @@ process.env.ADMIN_TOKEN = 'test-admin-token-' + Math.random().toString(36).slice
 process.env.NODE_ENV    = 'test';
 process.env.PORT        = '0';
 process.env.SAMPLE_PACKS_URL = 'https://samples.test/manifest.json';
+// Pin the proxy policy the assertions assume: auto-detect, one hop, and never
+// "on Fly" — getClientIp only honours Fly-Client-IP on a Fly Machine, and the
+// spoofing tests below prove the header is ignored everywhere else.
+delete process.env.TRUST_PROXY;
+delete process.env.FLY_APP_NAME;
+delete process.env.FLY_MACHINE_ID;
+delete process.env.FLY_ALLOC_ID;
 // Use a per-run DATA_DIR so we don't clobber any real config.json
 const fs = require('fs');
 const os = require('os');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-test-'));
 
 const srv = require('../server.js');
-const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, recordLoginFailure, isBlocked, clearLoginFailures, LOGIN_FAILURE_MAX, getClientIp, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp, parseCookies, isSafeNext, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS } = srv;
+const { app, server, sanitizeQuestionHtml, sanitizeQuestionImage, csvField, tokensEqual, packCookie, createSession, validateBranding, loadBranding, CONFIG_PATH, mintMagicToken, consumeMagicToken, parsePublicBaseUrl, getPublicBaseUrl, validateTheme, DEFAULT_THEME, DEFAULT_CONSENT_TEXT, parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv, loadQuestionsFromDisk, QUESTIONS_PATH, fetchJsonSafe, loadBundledSampleJson, parseStartupArgs, parseSeedBody, normalizeQuestionBank, loadDotenv, brandingFromEnv, gracefulShutdown, recordJoinFailure, isJoinBlocked, clearJoinFailures, JOIN_FAILURE_MAX, recordLoginFailure, isBlocked, clearLoginFailures, LOGIN_FAILURE_MAX, getClientIp, forwardedIpFromRight, TRUST_PROXY_POLICY, isCloudflareEdgeIp, isPrivateOrLoopbackIp, ipMatchesCidr, normalizeIp, parseCookies, isSafeNext, pruneExpiredState, inMemoryStateSizes, getSession, SESSION_TTL_MS, LOGIN_BLOCK_MS, LOGIN_WINDOW_MS, JOIN_BLOCK_MS, JOIN_WINDOW_MS, MAGIC_TTL_MS, parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow, PLAYER_RECONNECT_WINDOW_MS } = srv;
 
 // ----------------------------------------------------------------------------
 // Tiny test runner
@@ -185,14 +192,33 @@ function unitTests() {
 
   section('Unit: reverse-proxy aware client IP detection');
   const fakeReq = (remoteAddress, headers = {}) => ({ socket: { remoteAddress }, headers });
+  const CF_EDGE = '173.245.48.1';
+  const onFly   = { ...TRUST_PROXY_POLICY, onFly: true };
+  const hops2   = { ...TRUST_PROXY_POLICY, hops: 2 };
+  const always  = { ...TRUST_PROXY_POLICY, mode: 'always' };
+  const never   = { ...TRUST_PROXY_POLICY, mode: 'never' };
+  ok(TRUST_PROXY_POLICY.mode === 'auto' && TRUST_PROXY_POLICY.hops === 1 && TRUST_PROXY_POLICY.onFly === false, 'harness policy is TRUST_PROXY=auto, one hop, not on Fly');
   ok(normalizeIp('::ffff:127.0.0.1') === '127.0.0.1', 'normalizeIp unwraps IPv4-mapped IPv6');
-  ok(isCloudflareEdgeIp('173.245.48.1') === true, 'Cloudflare IPv4 edge range is recognised');
+  ok(isCloudflareEdgeIp(CF_EDGE) === true, 'Cloudflare IPv4 edge range is recognised');
   ok(isCloudflareEdgeIp('2606:4700::1') === true, 'Cloudflare IPv6 edge range is recognised');
   ok(isCloudflareEdgeIp('127.0.0.1') === false, 'localhost is not treated as a Cloudflare edge');
-  ok(ipMatchesCidr('173.245.48.1', '173.245.48.0/20') === true, 'ipMatchesCidr handles IPv4 ranges');
-  // Cloudflare edge → CF-Connecting-IP / XFF are trusted (unchanged from v1.1.0).
-  ok(getClientIp(fakeReq('173.245.48.1', { 'cf-connecting-ip': '203.0.113.7' })) === '203.0.113.7', 'Cloudflare CF-Connecting-IP is trusted from edge IPs');
-  ok(getClientIp(fakeReq('173.245.48.1', { 'x-forwarded-for': '198.51.100.10, 173.245.48.1' })) === '198.51.100.10', 'Cloudflare X-Forwarded-For fallback uses first valid client IP');
+  ok(ipMatchesCidr(CF_EDGE, '173.245.48.0/20') === true, 'ipMatchesCidr handles IPv4 ranges');
+  // forwardedIpFromRight is the walker behind every header read (v1.1.2).
+  ok(forwardedIpFromRight('203.0.113.9') === '203.0.113.9', 'forwardedIpFromRight: single entry');
+  ok(forwardedIpFromRight('6.6.6.6, 203.0.113.9') === '203.0.113.9', 'forwardedIpFromRight: rightmost entry wins with one hop');
+  ok(forwardedIpFromRight('203.0.113.9,203.0.113.10') === '203.0.113.10', 'forwardedIpFromRight: comma without spaces');
+  ok(forwardedIpFromRight('6.6.6.6, 203.0.113.9, 173.245.48.1', 2) === '203.0.113.9', 'forwardedIpFromRight: two hops → second entry from the right');
+  ok(forwardedIpFromRight('203.0.113.9', 3) === '203.0.113.9', 'forwardedIpFromRight: list shorter than the hop count clamps to its leftmost entry');
+  ok(forwardedIpFromRight('6.6.6.6, not-an-ip') === '', 'forwardedIpFromRight: non-IP in the trusted slot is rejected, not skipped over');
+  ok(forwardedIpFromRight(' 203.0.113.9 ,') === '203.0.113.9', 'forwardedIpFromRight: whitespace and a trailing comma are tolerated');
+  ok(forwardedIpFromRight('::ffff:203.0.113.9') === '203.0.113.9', 'forwardedIpFromRight: IPv4-mapped entries are normalised');
+  ok(forwardedIpFromRight(['6.6.6.6', '203.0.113.9']) === '203.0.113.9', 'forwardedIpFromRight: array-valued header is joined in order');
+  ok(forwardedIpFromRight(undefined) === '' && forwardedIpFromRight('') === '' && forwardedIpFromRight(', ,') === '', 'forwardedIpFromRight: missing / empty header → empty string');
+  // Cloudflare edge peer → CF-Connecting-IP wins; X-Forwarded-For is read from the right.
+  ok(getClientIp(fakeReq(CF_EDGE, { 'cf-connecting-ip': '203.0.113.7' })) === '203.0.113.7', 'Cloudflare peer: CF-Connecting-IP is trusted');
+  ok(getClientIp(fakeReq(CF_EDGE, { 'cf-connecting-ip': '203.0.113.7', 'x-forwarded-for': '6.6.6.6, 203.0.113.7' })) === '203.0.113.7', 'Cloudflare peer: CF-Connecting-IP outranks X-Forwarded-For');
+  ok(getClientIp(fakeReq(CF_EDGE, { 'x-forwarded-for': '198.51.100.10' })) === '198.51.100.10', 'Cloudflare peer: X-Forwarded-For fallback when CF-Connecting-IP is absent');
+  ok(getClientIp(fakeReq(CF_EDGE, { 'x-forwarded-for': '6.6.6.6, 198.51.100.10' })) === '198.51.100.10', 'Cloudflare peer: client-supplied leading XFF entry is ignored');
   // F3 (v1.1.1): non-CF reverse proxies (Railway / Render / Fly / Docker / nginx
   // on localhost) appear to us as loopback / RFC1918 / 100.64-CGN sockets. We
   // trust X-Forwarded-For in those cases — otherwise every visitor would share
@@ -212,6 +238,29 @@ function unitTests() {
   ok(getClientIp(fakeReq('100.64.0.1', { 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'CGN peer (Railway-shape) → trust XFF');
   ok(getClientIp(fakeReq('8.8.8.8', { 'x-forwarded-for': '203.0.113.9' })) === '8.8.8.8', 'public-IP peer → DO NOT trust XFF (direct client cannot spoof)');
   ok(getClientIp(fakeReq('127.0.0.1', {})) === '127.0.0.1', 'no XFF → socket IP returned even from loopback');
+  ok(getClientIp(fakeReq('::ffff:127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'IPv4-mapped loopback peer is recognised as a proxy peer');
+  // F3 follow-up (v1.1.2): appending proxies (Fly, nginx, Cloudflare, Render,
+  // Railway) leave the FIRST X-Forwarded-For entry under client control, so
+  // the entry written by the trusted proxy — the rightmost one — is the client.
+  ok(getClientIp(fakeReq('172.16.0.2', { 'x-forwarded-for': '6.6.6.6, 203.0.113.9' })) === '203.0.113.9', 'private peer: client-supplied leading XFF entry is ignored, proxy-appended entry wins');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3, 203.0.113.9' })) === '203.0.113.9', 'private peer: any number of client-supplied entries are ignored');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'x-forwarded-for': '203.0.113.9, junk' })) === '172.16.0.2', 'private peer: non-IP in the trusted slot falls back to the socket peer, never to a client entry');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'x-forwarded-for': '6.6.6.6, 203.0.113.9, 173.245.48.1' }), hops2) === '203.0.113.9', 'TRUST_PROXY=2 (Cloudflare → Fly): second entry from the right is the client');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'x-forwarded-for': '203.0.113.9' }), hops2) === '203.0.113.9', 'TRUST_PROXY=2 with a single entry clamps to it');
+  // Fly-Client-IP: written by Fly Proxy on Fly, an opaque client string anywhere else.
+  ok(getClientIp(fakeReq('172.16.0.2', { 'fly-client-ip': '203.0.113.5', 'x-forwarded-for': '6.6.6.6, 203.0.113.5' }), onFly) === '203.0.113.5', 'on Fly: Fly-Client-IP wins');
+  ok(getClientIp(fakeReq('fdaa:0:1::3', { 'fly-client-ip': '203.0.113.5' }), onFly) === '203.0.113.5', 'on Fly: 6PN (fdaa::/16 ULA) peer is a proxy peer and Fly-Client-IP is honoured without XFF');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'fly-client-ip': '6.6.6.6', 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'not on Fly: client-supplied Fly-Client-IP is ignored');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'fly-client-ip': '173.245.48.1', 'x-forwarded-for': '6.6.6.6, 203.0.113.9, 173.245.48.1' }), { ...onFly, hops: 2 }) === '203.0.113.9', 'on Fly with TRUST_PROXY=2: Fly-Client-IP names the proxy in front of Fly, so XFF hop-walking is used instead');
+  ok(getClientIp(fakeReq('8.8.8.8', { 'fly-client-ip': '203.0.113.5' }), onFly) === '8.8.8.8', 'on Fly: public-IP peer (bypassed the proxy) → Fly-Client-IP ignored');
+  ok(getClientIp(fakeReq('172.16.0.2', { 'fly-client-ip': 'nope', 'x-forwarded-for': '203.0.113.9' }), onFly) === '203.0.113.9', 'on Fly: malformed Fly-Client-IP falls through to XFF');
+  // CF-Connecting-IP only counts when the peer really is Cloudflare.
+  ok(getClientIp(fakeReq('172.16.0.2', { 'cf-connecting-ip': '6.6.6.6', 'x-forwarded-for': '203.0.113.9' })) === '203.0.113.9', 'private (non-Cloudflare) peer: client-supplied CF-Connecting-IP is ignored');
+  ok(getClientIp(fakeReq('127.0.0.1', { 'cf-connecting-ip': '6.6.6.6' })) === '127.0.0.1', 'loopback peer with only CF-Connecting-IP → socket peer');
+  ok(getClientIp(fakeReq('8.8.8.8', { 'cf-connecting-ip': '6.6.6.6', 'x-forwarded-for': '6.6.6.6', 'fly-client-ip': '6.6.6.6' })) === '8.8.8.8', 'public peer: no header is trusted at all');
+  ok(getClientIp(fakeReq('8.8.8.8', { 'cf-connecting-ip': '203.0.113.7' }), always) === '203.0.113.7', 'TRUST_PROXY=always: CF-Connecting-IP honoured from any peer (operator opt-in)');
+  ok(getClientIp(fakeReq('8.8.8.8', { 'x-forwarded-for': '6.6.6.6, 203.0.113.9' }), always) === '203.0.113.9', 'TRUST_PROXY=always: XFF is still read from the right');
+  ok(getClientIp(fakeReq('127.0.0.1', { 'x-forwarded-for': '203.0.113.9', 'cf-connecting-ip': '6.6.6.6', 'fly-client-ip': '6.6.6.6' }), never) === '127.0.0.1', 'TRUST_PROXY=never: every header ignored');
 
   section('Unit: player reconnect window');
   ok(parseReconnectWindowSeconds(undefined) === 300, 'reconnect window: missing env defaults to 300s');
@@ -2847,6 +2896,61 @@ async function v111SecurityFixTests() {
   } finally {
     process.env.NODE_ENV = prevEnv;
   }
+
+  // -- F3 follow-up (v1.1.2): forwarding headers a client controls must not
+  //    mint a fresh rate-limit bucket. The test client connects from
+  //    127.0.0.1, which TRUST_PROXY=auto treats as a proxy peer, so the server
+  //    reads forwarding headers — exactly the Fly / Render / Railway / Docker
+  //    situation. We play the attacker: hold the proxy-appended (rightmost)
+  //    X-Forwarded-For entry fixed and rotate everything a client can.
+  section('F3 follow-up (v1.1.2): client-supplied proxy headers cannot mint a fresh rate-limit bucket');
+  const bucket = '198.51.100.60';
+  async function loginAttemptsUntilBlocked(headersFor, key = bucket) {
+    clearLoginFailures(key);
+    let spoofBlockedAt = null;
+    for (let i = 1; i <= LOGIN_FAILURE_MAX + 2; i++) {
+      const r = await request('POST', '/auth/login', {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headersFor(i) },
+        body: 'role=admin&token=wrong' + i + '&next=' + encodeURIComponent('/admin')
+      });
+      if (r.status === 429) { spoofBlockedAt = i; break; }
+    }
+    clearLoginFailures(key);
+    return spoofBlockedAt;
+  }
+  let spoofBlockedAt = await loginAttemptsUntilBlocked(i => ({ 'X-Forwarded-For': `203.0.113.${i}, ${bucket}` }));
+  ok(spoofBlockedAt === LOGIN_FAILURE_MAX + 1, `rotating the leading XFF entry per request still trips the limiter on attempt ${LOGIN_FAILURE_MAX + 1} (blocked at ${spoofBlockedAt})`);
+  spoofBlockedAt = await loginAttemptsUntilBlocked(i => ({ 'X-Forwarded-For': `203.0.113.${i}, 203.0.113.${i + 50}, ${bucket}` }));
+  ok(spoofBlockedAt === LOGIN_FAILURE_MAX + 1, `two rotating client entries ahead of the proxy entry are still ignored (blocked at ${spoofBlockedAt})`);
+  spoofBlockedAt = await loginAttemptsUntilBlocked(i => ({ 'X-Forwarded-For': bucket, 'Fly-Client-IP': `203.0.113.${i}` }));
+  ok(spoofBlockedAt === LOGIN_FAILURE_MAX + 1, `rotating Fly-Client-IP is ignored when not running on Fly (blocked at ${spoofBlockedAt})`);
+  spoofBlockedAt = await loginAttemptsUntilBlocked(i => ({ 'X-Forwarded-For': bucket, 'CF-Connecting-IP': `203.0.113.${i}` }));
+  ok(spoofBlockedAt === LOGIN_FAILURE_MAX + 1, `rotating CF-Connecting-IP is ignored behind a non-Cloudflare peer (blocked at ${spoofBlockedAt})`);
+  spoofBlockedAt = await loginAttemptsUntilBlocked(i => ({ 'Fly-Client-IP': `203.0.113.${i}`, 'CF-Connecting-IP': `203.0.113.${i + 50}` }), '127.0.0.1');
+  ok(spoofBlockedAt === LOGIN_FAILURE_MAX + 1, `with no XFF the bucket is the socket peer, never a client header (blocked at ${spoofBlockedAt})`);
+  for (let i = 1; i <= LOGIN_FAILURE_MAX + 2; i++) { clearLoginFailures(`203.0.113.${i}`); clearLoginFailures(`203.0.113.${i + 50}`); }
+  // Control: a genuinely different proxy-appended address IS a different bucket.
+  const controlBuckets = [];
+  spoofBlockedAt = await loginAttemptsUntilBlocked(i => { controlBuckets.push(`203.0.113.${100 + i}`); return { 'X-Forwarded-For': `6.6.6.6, 203.0.113.${100 + i}` }; });
+  controlBuckets.forEach(clearLoginFailures);
+  ok(spoofBlockedAt === null, 'control: distinct proxy-appended addresses are distinct buckets (never blocked)');
+
+  // Same rule on the WebSocket path: player:join is keyed on ws.clientIp,
+  // resolved once at upgrade time by the same getClientIp.
+  const joinBucket = '203.0.113.70';
+  ['6.6.6.6', '203.0.113.71', '203.0.113.72', joinBucket].forEach(clearJoinFailures);
+  const spoofWs = await openWs({ headers: { 'X-Forwarded-For': `6.6.6.6, ${joinBucket}`, 'Fly-Client-IP': '203.0.113.71', 'CF-Connecting-IP': '203.0.113.72' } });
+  let limitedAt = null;
+  for (let i = 1; i <= JOIN_FAILURE_MAX + 1; i++) {
+    spoofWs.send(JSON.stringify({ type: 'player:join', name: 'X', email: 'x@x.test', joinCode: '0000' }));
+    const m = await waitMessage(spoofWs, msg => msg.type === 'error');
+    if (/too many join attempts/i.test(m.error || '')) { limitedAt = i; break; }
+  }
+  try { spoofWs.close(); } catch {}
+  ok(limitedAt === JOIN_FAILURE_MAX + 1, `WS join: ${JOIN_FAILURE_MAX} wrong codes behind spoofed headers trip the limiter on attempt ${JOIN_FAILURE_MAX + 1} (got ${limitedAt})`);
+  ok(isJoinBlocked(joinBucket), 'WS join: the bucket is the proxy-appended XFF entry');
+  ok(!isJoinBlocked('6.6.6.6') && !isJoinBlocked('203.0.113.71') && !isJoinBlocked('203.0.113.72'), 'WS join: no client-supplied header value acquired a bucket');
+  clearJoinFailures(joinBucket);
 }
 
 // ----------------------------------------------------------------------------
@@ -2874,6 +2978,57 @@ async function ssrfGuardTests() {
     try { await fetchTextSafe(c.url); } catch (e) { thrown = e; }
     ok(thrown && c.err.test(thrown.message), c.label + ' (got: ' + (thrown ? thrown.message : 'no error') + ')');
   }
+}
+
+// ----------------------------------------------------------------------------
+// Expired-state sweep (v1.1.2): failure buckets, sessions and magic links are
+// dropped once expired instead of living until the next success / use.
+// pruneExpiredState(now) takes the clock as a parameter, so we fast-forward it
+// — which also expires every session and magic link the earlier tests minted,
+// hence this runs after them and before dataWipeTests (which signs in afresh).
+// ----------------------------------------------------------------------------
+async function stateSweepTests() {
+  section('Expired-state sweep (v1.1.2): failure buckets, sessions and magic links are bounded');
+  const loginIp = '198.51.100.77', joinIp = '198.51.100.78';
+  clearLoginFailures(loginIp); clearJoinFailures(joinIp);
+  const before = inMemoryStateSizes();
+  for (let i = 0; i < LOGIN_FAILURE_MAX; i++) recordLoginFailure(loginIp);
+  for (let i = 0; i < JOIN_FAILURE_MAX; i++) recordJoinFailure(joinIp);
+  const sid = createSession('host', loginIp);
+  const magic = mintMagicToken('host');
+  const t0 = Date.now();
+  const grew = (sizes) => sizes.loginFailures === before.loginFailures + 1 && sizes.joinFailures === before.joinFailures + 1
+    && sizes.sessions === before.sessions + 1 && sizes.magicLinks === before.magicLinks + 1;
+  ok(grew(inMemoryStateSizes()), 'setup: one new entry in each map');
+  ok(isBlocked(loginIp) && isJoinBlocked(joinIp) && !!getSession(sid), 'setup: both IPs blocked, session live');
+
+  pruneExpiredState(t0);
+  ok(grew(inMemoryStateSizes()), 'sweep at "now" keeps every live entry');
+
+  // Join: 60 s window, 5 min block. Login: 15 min window, 5 min block.
+  pruneExpiredState(t0 + JOIN_WINDOW_MS + 1000);
+  ok(inMemoryStateSizes().joinFailures === before.joinFailures + 1, 'join bucket survives while its block is still active (window elapsed)');
+  pruneExpiredState(t0 + JOIN_BLOCK_MS + 1000);
+  ok(inMemoryStateSizes().joinFailures === before.joinFailures, 'join bucket dropped once window AND block have expired');
+  ok(inMemoryStateSizes().loginFailures === before.loginFailures + 1, 'login bucket survives while its 15-minute window is still open (block expired)');
+  pruneExpiredState(t0 + LOGIN_WINDOW_MS + 1000);
+  ok(inMemoryStateSizes().loginFailures === before.loginFailures, 'login bucket dropped once window AND block have expired');
+  ok(!isBlocked(loginIp) && !isJoinBlocked(joinIp), 'swept IPs read as unblocked');
+  ok(!!getSession(sid) && inMemoryStateSizes().sessions === before.sessions + 1, 'session (4 h TTL) untouched by the 15-minute sweep');
+
+  pruneExpiredState(t0 + Math.max(SESSION_TTL_MS, MAGIC_TTL_MS) + 1000);
+  ok(getSession(sid) === null, 'expired session swept: getSession returns null');
+  ok(consumeMagicToken(magic) === null, 'expired magic link swept: consume returns null');
+  ok(inMemoryStateSizes().sessions === 0 && inMemoryStateSizes().magicLinks === 0, 'every session and magic link older than the fast-forwarded clock is gone');
+
+  // A bucket still counting strikes is never dropped early: the sweep
+  // predicate is exactly the reset branch of record*Failure.
+  clearLoginFailures(loginIp);
+  recordLoginFailure(loginIp);
+  pruneExpiredState(Date.now() + LOGIN_WINDOW_MS - 5000);
+  ok(isBlocked(loginIp) === false && inMemoryStateSizes().loginFailures >= 1, 'a bucket with strikes inside its window survives the sweep');
+  clearLoginFailures(loginIp);
+  ok(typeof pruneExpiredState() === 'undefined', 'pruneExpiredState() with no argument uses the real clock (timer call shape)');
 }
 
 // ----------------------------------------------------------------------------
@@ -2907,6 +3062,7 @@ async function ssrfGuardTests() {
     await healthEndpointTests();
     await ssrfGuardTests();
     await v111SecurityFixTests();
+    await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
   } catch (e) {
     console.error('\nTest run aborted by exception:', e);
