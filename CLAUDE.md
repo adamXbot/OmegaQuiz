@@ -6,7 +6,7 @@ This file is read by Claude at the start of every session in this repo. It captu
 
 `omegaquiz` is a self-hosted Millionaire-style live cybersecurity training quiz. Node 22.13+ (pnpm 11's floor), Express 5, `ws`, vanilla HTML. One single-file backend (`server.js` ~3700 lines), three plain HTML pages in `public/`, on-disk state only for branding and question bank (`data/config.json`, `data/questions.json`). No database, no build step, no framework. One game per server.
 
-Tests: `pnpm test` runs ~592 in-process integration checks against the live server. Keep this passing on every change.
+Tests: `pnpm test` runs ~646 in-process integration checks against the live server. Keep this passing on every change.
 
 Important architectural choices to preserve unless explicitly discussed:
 - Single-file `server.js` — don't split.
