@@ -4,25 +4,32 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 
-# Install only production deps for a leaner final image.
-COPY package.json pnpm-lock.yaml ./
-# Keep this version in lockstep with "packageManager" in package.json.
-RUN npm install -g pnpm@11.1.3 \
+# Install only production deps for a leaner final image. pnpm-workspace.yaml
+# holds the pnpm overrides the lockfile was resolved with; --frozen-lockfile
+# refuses to run without it.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# The pnpm version has one source of truth: "packageManager" in package.json.
+# Resolve it here instead of hard-coding it (see the header for why not
+# Corepack). A "+sha512.…" integrity suffix is stripped; an empty result fails
+# the build rather than silently installing whatever "latest" is.
+RUN PNPM_VERSION="$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")" \
+  && test -n "$PNPM_VERSION" \
+  && npm install -g "pnpm@${PNPM_VERSION}" \
   && pnpm install --prod --frozen-lockfile
 
 # ---- Runtime stage ----
 FROM node:24-alpine AS runtime
 
-# Pull in the latest Alpine package fixes (CI gates on HIGH/CRITICAL CVEs and
-# the base image's openssl lags the repo), then add a tiny init so signals
-# propagate correctly to Node.
+# Pick up Alpine security patches released since the base image was built —
+# CI's Trivy scan fails on any fixed HIGH/CRITICAL OS CVE — then add a tiny
+# init so signals propagate correctly to Node.
 RUN apk upgrade --no-cache && apk add --no-cache tini
 
-# The runtime only ever runs `node server.js` (plus its `links` / `remint`
-# subcommands). Drop the package managers the base image bundles — npm, npx,
-# corepack, yarn — so their vendored dependencies (tar, brace-expansion,
-# ip-address, …) can neither fail the container scan nor widen the attack
-# surface. The app's own dependencies live in /app/node_modules.
+# The runtime never runs a package manager: pnpm installed everything in the
+# deps stage and the CLI is `node server.js …` (plus its `links` / `remint`
+# subcommands). Dropping npm, npx, corepack and yarn removes their bundled
+# dependencies (tar, brace-expansion, ip-address, …) from the container scan
+# and shrinks the attack surface. The app's own deps live in /app/node_modules.
 RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx \
            /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn-*
 

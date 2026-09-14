@@ -41,12 +41,12 @@ There is no database, no third-party SaaS, and no telemetry. One Node process, o
 
 ## Get it
 
-Requires Node 22.13 or newer (the pinned pnpm 11 will not run on older releases, and Node 18 and 20 are end-of-life). The package manager is pnpm, pinned in `package.json`; npm and yarn are not supported here.
+Requires Node 22.13 or newer (the floor set by pnpm 11). The package manager is pnpm, pinned by the `packageManager` field in `package.json`; npm and yarn are not supported here.
 
 ```bash
 git clone https://github.com/adamXbot/OmegaQuiz.git
 cd OmegaQuiz
-corepack enable
+npm install -g pnpm   # any recent pnpm; it switches itself to the version pinned in package.json
 pnpm install --frozen-lockfile
 pnpm start
 ```
@@ -76,7 +76,7 @@ pnpm test
 
 A [`justfile`](justfile) wraps the common ones — `just setup`, `just test`, `just run`. There is also a 50-player stress run, `pnpm stress`.
 
-The [`Test` workflow](.github/workflows/test.yml) runs the same three commands across Node 22 and 24, plus a Trivy container scan (which also smoke-tests the built image for the bundled sample packs), on every push and pull request. Please still run the commands locally before opening a PR.
+The [`Test` workflow](.github/workflows/test.yml) runs the same three commands across Node 22, 24 and 26 on every push and pull request, plus a Trivy scan of the Docker image, and repeats them nightly so advisory drift in pinned dependencies surfaces between PRs.
 
 ## Licence
 

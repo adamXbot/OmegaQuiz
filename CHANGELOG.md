@@ -13,20 +13,24 @@ All notable changes to `omegaquiz` are recorded here. Format follows [Keep a Cha
 
 ### Fixed
 
-- **Container image: HIGH CVEs from packages the app never uses.** Trivy flagged the base image's openssl (behind the Alpine repo fix) and vendored dependencies of the bundled npm (`tar`, `brace-expansion`, `ip-address`), none of which are in this project's lockfile. The runtime stage now runs `apk upgrade` and removes npm, npx, corepack and yarn — the container only ever runs `node server.js` and its subcommands.
-- **CI was red on `main` for reasons unrelated to any change.** The Trivy container-scan job failed at "Set up job" because the action was pinned to `0.36.0` while its release tags are `vX.Y.Z`; it is now SHA-pinned like the other actions. The Node 18 and 20 matrix jobs failed at `pnpm install` because the pinned pnpm 11 requires Node 22.13+; see *Changed*.
 - **Docker / Fly.io: "Browse sample packs" never loaded.** The Dockerfile did not copy `samples/` into the image, so the bundled manifest was missing at runtime. The server's error reply was rendered in the banner area *underneath* the modal overlay, so the modal sat on "Loading…" forever and looked like a timeout. The image now ships `samples/`; a missing bundled pack produces a clear `missing from this deployment` error instead of a raw `ENOENT` + path; the boot banner prints `Samples: NOT FOUND` when the directory is absent; the sample-packs modal shows failures inline with a **Retry** button (and gives up after 15 s if no reply arrives at all); and CI smoke-tests the built image for the packs. Render (native Node runtime) was never affected.
 
 ### Security
 
 - **HIGH — One oversized WebSocket frame from an unauthenticated visitor crashed the server.** `ws` re-emits protocol errors (frame over `maxPayload`, invalid UTF-8) as an `'error'` event on the socket; no listener was registered, so the event became an `uncaughtException` and ran the full graceful shutdown. A single 5 MiB frame dropped every player and restarted the process (reproduced against `main`). Patched: per-socket `'error'` listener that logs `ws.socket-error`, plus a 16 KiB cap on messages from non-admin sockets, closed with 1009 before parsing.
+- **`qs` and `body-parser` advisories closed with pnpm override floors.** `pnpm audit --prod` reported three moderate advisories in `qs` 6.15.1 (GHSA-q8mj-m7cp-5q26, GHSA-x5fp-wj9c-mxmx, GHSA-4mjr-xmp4-gh2g) and one low in `body-parser` 2.2.2 (GHSA-v422-hmwv-36x6), all transitive via `express`. New `pnpm-workspace.yaml` sets `overrides` of `qs >=6.16.0` and `body-parser >=2.3.0` (pnpm 10+ no longer reads a `pnpm` field in `package.json`); the lockfile now resolves 6.16.0 / 2.3.0 and the audit is clean.
+- **`aquasecurity/trivy-action` pinned to a commit SHA** (`ed142fd0…`, v0.36.0), matching every other action in the workflow. The old `@0.36.0` ref pointed at a tag that does not exist upstream (releases are tagged `v0.36.0`), so the container-scan job had failed at set-up on every run.
+- **Docker runtime image applies Alpine security patches and no longer ships npm** (nor npx, corepack or yarn). With the scan able to run for the first time, Trivy flagged the base image itself: `libcrypto3` / `libssl3` CVE-2026-14456 (fixed in 3.5.8-r0) and HIGH advisories in npm's own bundled `brace-expansion`, `ip-address` and `tar`, none of them application dependencies. The runtime stage now runs `apk upgrade --no-cache` and removes npm / npx (nothing at runtime uses them; the CLI is `node server.js …`). The image scans clean with CI's flags and `/health` still answers.
 
 ### Changed
 
 - `secrets.json` is written atomically (temp file + rename) and records `rotatedAt` per role. `HOST_TOKEN` / `ADMIN_TOKEN` are mutable inside the process; `COOKIE_SECRET` is not.
 - Structured JSON log lines are suppressed while a subcommand runs — its output is for a human.
-- **Node 22.13 is now the minimum supported version** (was 18). The pinned pnpm 11 refuses to run on older Node, so 18 / 20 could not install the project anyway, and both are end-of-life. `engines.node`, the CI matrix (now 22 and 24) and the docs are aligned; `.nvmrc` and the Docker base image were already on 24.
 - Test suite: 519 → 592 checks (re-keying unit + WS + end-to-end child-process coverage, WS robustness; JSON import, missing-samples error and sample-error scope).
+- **One pnpm version pin.** The `packageManager` field in `package.json` is the single source of truth. The Dockerfile (hard-coded 11.1.3) and `render.yaml` (Corepack + 11.0.6) now resolve the version from `package.json` at build time and install it with `npm install -g`. Corepack is no longer used anywhere: Node 25+ does not bundle it.
+- **Supported Node is now 22.13 or newer** (`engines.node`), and the CI matrix is Node 22 / 24 / 26 instead of 18 / 20 / 22 / 24. pnpm 11 refuses to run on older Node, which is why the Node 18 and 20 jobs had failed at `pnpm install` on every run since May; both versions are also end-of-life.
+- **The `Test` workflow is enabled again.** It had been disabled manually while every run was red for the two reasons above. It runs on push, pull request and nightly.
+- Docs: README and CONTRIBUTING quick-starts use `npm install -g pnpm` instead of `corepack enable`; the test count and Node matrix are current; CONTRIBUTING records that Renovate (shared `privacykey/renovate-config` preset) is the only dependency bot and that Dependabot was retired.
 
 ## [1.1.1] - 2026-05-19
 

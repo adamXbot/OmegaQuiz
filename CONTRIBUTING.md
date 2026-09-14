@@ -7,9 +7,9 @@ Thanks for thinking about contributing to `omegaquiz`. This is small, intentiona
 ```bash
 git clone https://github.com/<your-fork>/omegaquiz
 cd omegaquiz
-corepack enable
+npm install -g pnpm # any recent pnpm; it switches itself to the version pinned in package.json
 pnpm install --frozen-lockfile
-pnpm test          # ~410 checks, should be green
+pnpm test          # ~592 checks, should be green
 pnpm start         # http://localhost:3000
 ```
 
@@ -41,7 +41,7 @@ If you're unsure whether a change fits, open an issue describing the problem bef
 
 1. **Open an issue first** for anything beyond a small bug fix or doc tweak. It saves time on both sides.
 2. **Fork**, branch, commit, push, open a PR against `main`.
-3. **CI must be green** — `pnpm test` runs across Node 22 / 24 with `pnpm audit --prod` gated on HIGH severity.
+3. **CI must be green** — the `Test` workflow runs `pnpm test` across Node 22 / 24 / 26 with `pnpm audit --prod` gated on HIGH severity, plus a Trivy scan of the Docker image.
 4. **Write a test** for new behaviour. The suite in `test/security.test.js` exercises the live server in-process; follow the existing patterns.
 5. **Keep the diff focused** — one PR per concern. Refactors mixed with bug fixes are hard to review.
 6. **Update CHANGELOG.md** under `[Unreleased]` if your change is user-visible.
@@ -54,6 +54,14 @@ If you're unsure whether a change fits, open an issue describing the problem bef
 - **Comments explain WHY, not WHAT**. Identifiers should be self-explanatory; comments are for hidden constraints or non-obvious decisions.
 - **No emojis in code or commit messages** unless the user-facing UI already uses one.
 - **Match the existing style** — 2-space indent, semicolons, single quotes for strings.
+
+## Dependency updates and toolchain pins
+
+**Renovate is the only dependency bot.** `renovate.json` extends the shared [`privacykey/renovate-config`](https://github.com/privacykey/renovate-config) preset: one grouped PR for every non-major update (including lock-file maintenance) on Monday mornings, majors held on the Dependency Dashboard issue until someone ticks them, and GitHub Actions pinned to commit SHAs with the version in a trailing comment. Dependabot version updates were retired when Renovate was adopted (`.github/dependabot.yml` was deleted), so any `dependabot/*` branch or PR predates that switch — close it rather than merge it, and don't add a second bot.
+
+**The pnpm version is pinned once**, in the `packageManager` field of `package.json`. CI reads it through `pnpm/action-setup`; the Dockerfile and `render.yaml` resolve it from `package.json` at build time. Bump it in that one place and nothing else. Corepack is not used anywhere (Node 25+ no longer bundles it).
+
+**Security floors for transitive packages** live in `pnpm-workspace.yaml` as pnpm `overrides` (pnpm 10+ ignores a `pnpm` field in `package.json`). Add one when `pnpm audit --prod` flags a package that `express`'s own ranges already allow, and remove it once the lockfile resolves past it on its own.
 
 ## Security
 
