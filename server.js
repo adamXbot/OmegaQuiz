@@ -2179,7 +2179,10 @@ function pushHostState() {
         lesson: game.phase === 'reveal' ? q.lesson : null
       } : null
     }
-  }, c => c.role === 'host');
+    // Every socket that announced itself as the host screen (host or admin
+    // session), plus host-role sockets that never said hello — the latter is
+    // the pre-existing behaviour, kept for older harnesses.
+  }, c => c.screen === 'host' || c.role === 'host');
 }
 
 function pushPlayerStates() {
@@ -2950,6 +2953,12 @@ wss.on('connection', (ws, req) => {
         ws.close();
         return;
       }
+      // Subscribe this socket to host-state pushes by the screen it announced,
+      // not by its role: an admin session may open /host too (requireRole and
+      // /qr already allow it), and previously it loaded the page and the QR
+      // but never received host:state — dashes for the join code, a Start
+      // button that never enabled.
+      ws.screen = 'host';
       pushHostState();
       return;
     }
@@ -2960,6 +2969,7 @@ wss.on('connection', (ws, req) => {
         ws.close();
         return;
       }
+      ws.screen = 'admin';
       ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus() }));
       pushAdminState();
       return;

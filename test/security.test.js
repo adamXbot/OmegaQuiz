@@ -3458,6 +3458,70 @@ async function stateSweepTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Host screen: host:state reaches every socket that announced host:hello,
+// whichever of the two roles it holds
+// ----------------------------------------------------------------------------
+async function hostScreenTests() {
+  section('Host screen: an admin session on /host receives host:state (join code)');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const ws = await openWs({ cookie: admin.cookie });
+    ws.send(JSON.stringify({ type: 'host:hello' }));
+    let st = null;
+    try { st = await waitMessage(ws, m => m.type === 'host:state', 2000); } catch {}
+    ok(st && st.state && /^\d{6}$/.test(String(st.state.joinCode)), 'admin socket gets host:state with a 6-digit join code after host:hello');
+    ok(st && st.state.phase === 'lobby' && typeof st.state.playerCount === 'number', 'host:state carries phase and player count');
+    // A later push (another screen saying hello) must reach it too.
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const ws2 = await openWs({ cookie: host.cookie });
+    const later = waitMessage(ws, m => m.type === 'host:state', 2000);
+    ws2.send(JSON.stringify({ type: 'host:hello' }));
+    let again = null;
+    try { again = await later; } catch {}
+    ok(again && again.state.joinCode === st.state.joinCode, 'subsequent host-state pushes reach the admin socket on the host screen');
+    const hostSt = await waitMessage(ws2, m => m.type === 'host:state', 2000);
+    ok(st && hostSt.state.joinCode === st.state.joinCode, 'host-role socket still receives host:state');
+    try { ws.close(); ws2.close(); } catch {}
+  }
+
+  section('Host screen: the admin dashboard socket is not subscribed to host:state');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const dash = await openWs({ cookie: admin.cookie });
+    dash.send(JSON.stringify({ type: 'admin:hello' }));
+    await waitMessage(dash, m => m.type === 'admin:init');
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const board = await openWs({ cookie: host.cookie });
+    const leak = waitMessage(dash, m => m.type === 'host:state', 600);
+    board.send(JSON.stringify({ type: 'host:hello' }));
+    await waitMessage(board, m => m.type === 'host:state', 2000);
+    let leaked = false;
+    try { await leak; leaked = true; } catch {}
+    ok(!leaked, 'dashboard socket (admin:hello only) did not receive host:state');
+    try { dash.close(); board.close(); } catch {}
+  }
+
+  section('Host screen: unauthenticated host:hello is refused and closed');
+  {
+    const ws = await openWs();
+    ws.on('error', () => {});
+    const closed = new Promise(r => ws.on('close', () => r(true)));
+    ws.send(JSON.stringify({ type: 'host:hello' }));
+    const err = await waitMessage(ws, m => m.type === 'error', 2000);
+    ok(/not signed in as host/i.test(err.error), 'error names the missing sign-in');
+    const c = await Promise.race([closed, new Promise(r => setTimeout(() => r(false), 2000))]);
+    ok(c === true, 'socket is closed by the server');
+  }
+
+  section('Host screen: served markup carries the waiting-for-state notice');
+  {
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const page = await request('GET', '/host', { headers: { cookie: host.cookie } });
+    ok(page.status === 200 && page.body.includes('id="stateWait"') && page.body.includes('role="status"'), 'host page has the hidden state-wait status line');
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -3472,6 +3536,7 @@ async function stateSweepTests() {
     unitTests();
     await httpTests();
     await wsTests();
+    await hostScreenTests();
     await bonusBugTest();
     await magicLinkTests();
     await brandingTests();

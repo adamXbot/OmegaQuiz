@@ -188,6 +188,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
 .qr-wrap{background:var(--navy-deep);border:3px solid var(--gold);border-radius:16px;padding:18px;box-shadow:var(--shadow-gold)}
 .qr-wrap img, .qr-wrap svg{width:280px;height:280px;display:block}
 .join-details{text-align:left}
+.state-wait{margin:14px auto 0;max-width:560px;color:#bdc4eb;font-size:14px;line-height:1.5;text-align:center}
 .join-code-label{font-size:14px;color:#bdc4eb;letter-spacing:.3em;text-transform:uppercase;margin-bottom:8px}
 .join-code{font-size:90px;color:var(--gold);font-weight:bold;letter-spacing:.15em;text-shadow:0 0 25px rgba(244,196,48,.7),0 4px 0 #000;line-height:1;font-family:'Courier New',monospace}
 .join-url{font-size:14px;color:#9aa3d4;margin-top:14px;font-family:'Courier New',monospace}
@@ -309,6 +310,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
     </div>
   </div>
   <div class="lobby-joined"><span class="count" id="lobbyCount">0</span> players joined</div>
+  <div class="state-wait" id="stateWait" role="status" hidden>Waiting for the game state from the server… If this does not clear, the WebSocket connection is being blocked (a proxy without WebSocket support) or your sign-in has expired — reload the page.</div>
   <div class="lobby-players" id="lobbyPlayers"></div>
   <div class="controls">
     <button class="btn primary" id="startBtn">Start Game →</button>
@@ -592,17 +594,31 @@ function showReconnectPrompt(){
   };
 }
 
+// The board is only as good as its first host:state. If the socket opens but
+// no state arrives (a proxy that drops WebSockets, or a session the server no
+// longer recognises), say so instead of sitting on dashes forever.
+let stateWaitTimer = null;
+function armStateWait(){
+  clearTimeout(stateWaitTimer);
+  stateWaitTimer = setTimeout(() => { if (!state) document.getElementById('stateWait').hidden = false; }, 6000);
+}
+function clearStateWait(){
+  clearTimeout(stateWaitTimer);
+  document.getElementById('stateWait').hidden = true;
+}
 function connect(){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
   ws.onopen = () => {
     reconnectAttempt = 0;
     ws.send(JSON.stringify({ type: 'host:hello' }));
+    armStateWait();
   };
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'host:state') {
       state = msg.state;
+      clearStateWait();
       clearShutdownBanner();
       render();
     } else if (msg.type === 'lifeline:askit') {

@@ -16,12 +16,17 @@ There are two ways in to `/admin` and `/host`:
 Sessions are httpOnly cookies signed with `COOKIE_SECRET`. Set that to a stable random value in
 production, otherwise every restart invalidates everyone's session.
 
+An admin session opens `/host` as well, so one device signed in as admin can drive both screens
+(useful when the projector is mirrored from the facilitator laptop). A separate host magic link is
+only needed for a second machine.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Players' phones cannot connect after scanning the QR | The QR encodes a URL the phones cannot reach | Admin → Branding → **Public server URL**. Set it to whatever the phones can actually reach, or set `PUBLIC_BASE_URL` on the server. |
 | Magic link redirects to a sign-in error | Token already used, expired, or the server restarted | A restart mints a new one — check the latest boot banner, or use `/auth/login` with your recovery token. |
+| Host board shows `----` for the join code and **Start Game** never enables, but the QR code renders | The page loaded over HTTP but no game state is arriving over the WebSocket. After a few seconds the board says so. Usually a proxy that does not pass WebSockets (Cloudflare: check **WebSockets** is on under Network), or a sign-in the server no longer recognises after a restart. | Reload the page; if it persists, check the proxy. Before v1.1.2 this also happened whenever `/host` was opened with the *admin* session — fixed, both sessions now drive the board. |
 | "Please use your *example.com* email address" | **Only accept joins from this domain** is ticked in Branding | Either untick it, or have the player join with their company email. The domain itself is the **Company email domain** field. |
 | Someone joined with a typo in their name | — | Admin → Players → **Kick**, then ask them to rejoin. |
 | Someone dropped mid-question | Their phone slept or lost Wi-Fi | They can reconnect with the same email within the reconnect window — 5 minutes by default. Admin → Players → **Extend** resets that timer for a specific player. |
