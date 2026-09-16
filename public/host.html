@@ -95,6 +95,18 @@ body::after{right:-10%;transform:rotate(-15deg)}
   transition:all .25s ease;
 }
 .answer .letter{color:var(--gold);font-weight:bold;letter-spacing:.1em;min-width:24px}
+/* Dramatic presentation (admin → Branding → Presentation): the question box
+   and options sweep in, and the grid pulses during the drum-roll that runs
+   before the answer is revealed. Standard mode never adds these classes. */
+html.dramatic .question-box.enter{animation:qEnter .7s cubic-bezier(.2,.8,.2,1) both}
+@keyframes qEnter{from{opacity:0;transform:translateY(22px) scale(.96)}to{opacity:1;transform:none}}
+html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i, 0) * .22s + .35s)}
+@keyframes aEnter{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+.answers.drumroll .answer{animation:drumPulse .3s ease-in-out infinite alternate}
+@keyframes drumPulse{from{box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold-dim)}to{box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold), 0 0 28px rgba(244,196,48,.75)}}
+@media (prefers-reduced-motion: reduce){ html.dramatic .answer.enter{animation-delay:0s !important} }
+.end-cta{margin:0 0 18px;color:var(--gold);font-size:clamp(14px,1.4vw,20px);letter-spacing:.06em;text-align:center}
+.end-cta .url{color:#bdc4eb;font-family:'Courier New',monospace;font-size:.85em;display:block;margin-top:4px}
 /* A11Y: darker green + white text/letter — gold on #16a34a was 2.0:1, off-white
    3.0:1. White on #15803d is 5.0:1 (top of gradient), 7.1:1 at the bottom. */
 .answer.correct{background:linear-gradient(180deg,#15803d,#166534);color:#fff;border-color:#4ade80;box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px #4ade80, 0 0 35px rgba(34,197,94,.9);animation:flash-green .5s 3}
@@ -319,6 +331,9 @@ body::after{right:-10%;transform:rotate(-15deg)}
 
 <!-- END SCREEN -->
 <div class="overlay" id="endScreen">
+  <!-- Optional operator CTA (Branding → End-of-game CTA), spelled out because
+       a projector can't be tapped. Players get it as a button on their phones. -->
+  <div class="end-cta" id="endCtaLine" hidden></div>
   <!-- CEREMONY VIEW (interactive top-5 reveal) -->
   <div id="ceremonyView" style="display:none;width:100%;max-width:1100px;text-align:center">
     <div class="ceremony-place-label" id="ceremonyPlaceLabel" aria-live="polite">And the top 5 are…</div>
@@ -458,6 +473,13 @@ body::after{right:-10%;transform:rotate(-15deg)}
 let state = null;
 let ws = null;
 let audioOn = false;
+// Dramatic presentation state (see the CSS block of the same name).
+let presentationDramatic = false;
+const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const REVEAL_HOLD_MS = 1400;
+let revealHoldTimer = null;
+let revealHeldFor = '';
+let lastQuestionKey = '';
 let prevSurvivors = null;
 
 // Branding: fetch on load + on `branding:updated` push.
@@ -524,6 +546,16 @@ async function applyBranding(){
     levelStyle = (b.levelStyle === 'levels') ? 'levels' : 'money';
     showNamesAtEnd = b.showNamesAtEnd !== false;  // default true if unset
     sessionClosed  = !!b.sessionClosed;
+    presentationDramatic = b.presentationStyle === 'dramatic';
+    document.documentElement.classList.toggle('dramatic', presentationDramatic);
+    const ctaLine = document.getElementById('endCtaLine');
+    if (b.endGameCtaLabel && b.endGameCtaUrl) {
+      ctaLine.innerHTML = 'Next step: ' + b.endGameCtaLabel + '<span class="url">' + escapeHtml(b.endGameCtaUrl) + '</span>';
+      ctaLine.hidden = false;
+    } else {
+      ctaLine.hidden = true;
+      ctaLine.innerHTML = '';
+    }
     applySessionClosedBanner();
     const count = (state && state.totalQuestions) || 10;
     prizes = makePrizes(levelStyle, count);
@@ -736,13 +768,35 @@ function render(){
     document.getElementById('confettiCanvas').style.display = 'none';
   }
 
+  // Dramatic mode: hold the reveal behind a drum-roll. Renders that arrive
+  // during the hold are ignored; the timer re-renders when it ends and the
+  // normal reveal path (sound, green flash, tally bars) runs then.
+  if (state.phase !== 'reveal') revealHeldFor = '';
+  if (revealHoldTimer) return;
+  const questionKey = (state.inBonus ? 'b' : 'q') + (state.inBonus ? state.bonusIndex : state.questionIndex);
+  if (presentationDramatic && state.phase === 'reveal' && prevPhase === 'question' && revealHeldFor !== questionKey) {
+    revealHeldFor = questionKey;
+    document.getElementById('answersGrid').classList.add('drumroll');
+    sfx('drumroll');
+    revealHoldTimer = setTimeout(() => {
+      revealHoldTimer = null;
+      document.getElementById('answersGrid').classList.remove('drumroll');
+      render();
+    }, REVEAL_HOLD_MS);
+    return;
+  }
+
   // Phase-transition sounds — entering reveal plays a quick "ding", entering
   // end plays a fanfare. Suppressed on first render so we don't fire on reconnect.
   if (prevPhase !== null && prevPhase !== state.phase) {
     if (state.phase === 'reveal') sfx('reveal');
     else if (state.phase === 'end') sfx('fanfare');
-    else if (state.phase === 'question' && prevPhase === 'lobby') sfx('chime');
+    else if (state.phase === 'question' && prevPhase === 'lobby' && !presentationDramatic) sfx('chime');
   }
+  // A question landing on the board (first or next) is the dramatic moment.
+  const newQuestion = state.phase === 'question' && questionKey !== lastQuestionKey;
+  if (state.phase === 'question') lastQuestionKey = questionKey;
+  if (newQuestion && presentationDramatic && prevPhase !== null) sfx('suspense');
   prevPhase = state.phase;
 
   // Lobby
@@ -850,6 +904,15 @@ function render(){
       div.innerHTML = html;
       grid.appendChild(div);
     });
+    if (newQuestion && presentationDramatic && !REDUCED_MOTION) {
+      const box = document.querySelector('.question-box');
+      box.classList.remove('enter'); void box.offsetWidth; box.classList.add('enter');
+      [...grid.children].forEach((el, i) => {
+        el.style.setProperty('--i', i);
+        el.classList.add('enter');
+        sfx('tick', 0.35 + i * 0.22);
+      });
+    }
   }
 
   // Top survivors panel (only show when field is narrowed — ≤ 5 alive after Q3+)
@@ -1049,7 +1112,7 @@ function playTone(freq, dur, type='sine', vol=0.1, delay=0){
   o.connect(g); g.connect(audioCtx.destination);
   o.start(t0); o.stop(t0 + dur + 0.05);
 }
-function sfx(name){
+function sfx(name, delay = 0){
   if (!audioOn) return;
   // Lazy resume — handles the case where the tab was backgrounded and the
   // context auto-suspended. Fire-and-forget here is fine; if it lands late,
@@ -1064,6 +1127,12 @@ function sfx(name){
     case 'chime':   playTone(523,0.1,'sine',0.12); playTone(784,0.18,'sine',0.12,0.08); break;
     case 'tada':    playTone(523,0.12,'triangle',0.14); playTone(659,0.12,'triangle',0.14,0.12); playTone(784,0.12,'triangle',0.14,0.24); playTone(1046,0.45,'triangle',0.16,0.36); break;
     case 'fanfare': playTone(392,0.15,'square',0.1); playTone(523,0.15,'square',0.1,0.15); playTone(659,0.3,'square',0.12,0.3); break;
+    // Dramatic presentation extras: a low drone with a rising triad when a
+    // question lands, a tick per option as it sweeps in, a drum-roll before
+    // the answer is revealed.
+    case 'suspense': playTone(98,1.4,'sine',0.09); playTone(196,1.0,'sawtooth',0.04); playTone(261.6,0.28,'triangle',0.1,0.15); playTone(329.6,0.28,'triangle',0.1,0.42); playTone(392,0.7,'triangle',0.13,0.7); break;
+    case 'tick':     playTone(1400,0.04,'square',0.05,delay); break;
+    case 'drumroll': for (let i = 0; i < 14; i++) playTone(90 + i * 5, 0.06, 'square', 0.07, i * 0.09); break;
   }
 }
 // A11Y: keyboard users can close the popups with Escape.

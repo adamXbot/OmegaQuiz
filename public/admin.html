@@ -506,6 +506,18 @@ body{
                 style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
             </div>
           </div>
+          <div style="grid-column:1 / -1;display:grid;grid-template-columns:1fr 2fr;gap:12px">
+            <div>
+              <label class="lesson-label" for="brandingEndCtaLabel" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">End-of-game CTA — button label</label>
+              <input type="text" id="brandingEndCtaLabel" maxlength="60" placeholder="e.g. Book time with IT"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+            <div>
+              <label class="lesson-label" for="brandingEndCtaUrl" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">End-of-game CTA — URL <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— a button on every player's final screen, next to "Email me my results". https://, http:// or mailto:. Leave both blank to hide it.</span></label>
+              <input type="text" id="brandingEndCtaUrl" maxlength="500" placeholder="https://calendar.example.com/it-team"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+          </div>
           <div style="grid-column:1 / -1">
             <label class="lesson-label" for="brandingConsentInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Privacy notice on join screen <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— shown to players above the Join button. Leave blank to omit. Limited HTML allowed: &lt;em&gt;, &lt;br&gt;, &lt;span class="mono"&gt;.</span></label>
             <textarea id="brandingConsentInput" maxlength="800" rows="3" placeholder='e.g. "By joining you agree to share your name and work email with the session facilitator. Data is held in memory only and cleared at the end."'
@@ -577,6 +589,22 @@ body{
             <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
               <input type="radio" name="brandingAnswerLockMode" value="confirm" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
               <span><strong>Lock-in confirmation</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Tap an option to highlight it, then tap "Lock In Answer" to commit. Reduces fat-finger mistakes.</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Presentation style: quiet vs dramatic transitions and sounds -->
+        <div class="panel" style="margin-top:18px">
+          <h2 style="margin-bottom:8px">Presentation</h2>
+          <p class="muted" style="font-size:12px;margin-bottom:10px">How much theatre the board and the phones put on. Sounds are synthesised on each device and always respect that device's own speaker toggle and reduced-motion setting.</p>
+          <div style="display:flex;gap:18px;flex-wrap:wrap">
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingPresentation" value="standard" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Standard</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Questions change instantly. Short cues on the board only, when its speaker is on. Phones stay silent.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingPresentation" value="dramatic" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Dramatic</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">A suspense sting and staged option reveal when a question lands, a drum-roll before the answer is shown, and tap / lock-in / result sounds with sweeping transitions on the phones (each phone gets a mute button).</span></span>
             </label>
           </div>
         </div>
@@ -1916,6 +1944,13 @@ function populateBrandingForm(){
   const ctaUrlEl = document.getElementById('brandingClosedCtaUrl');
   if (ctaLabelEl) ctaLabelEl.value = brandingDraft.closedSessionCtaLabel || '';
   if (ctaUrlEl) ctaUrlEl.value = brandingDraft.closedSessionCtaUrl || '';
+  // End-of-game CTA + presentation style.
+  const endCtaLabelEl = document.getElementById('brandingEndCtaLabel');
+  const endCtaUrlEl = document.getElementById('brandingEndCtaUrl');
+  if (endCtaLabelEl) endCtaLabelEl.value = brandingDraft.endGameCtaLabel || '';
+  if (endCtaUrlEl) endCtaUrlEl.value = brandingDraft.endGameCtaUrl || '';
+  const presMode = brandingDraft.presentationStyle === 'dramatic' ? 'dramatic' : 'standard';
+  document.getElementsByName('brandingPresentation').forEach(r => { r.checked = (r.value === presMode); });
   // Session Control badge + button visibility.
   const closed = !!brandingDraft.sessionClosed;
   const badge = document.getElementById('sessionStatusBadge');
@@ -2011,6 +2046,7 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
   const levelStyleEl = document.querySelector('input[name="brandingLevelStyle"]:checked');
   const lockModeEl = document.querySelector('input[name="brandingAnswerLockMode"]:checked');
   const refillEl = document.querySelector('input[name="brandingLifelineRefill"]:checked');
+  const presEl = document.querySelector('input[name="brandingPresentation"]:checked');
   const next = {
     companyName: document.getElementById('brandingNameInput').value,
     companyDomain: document.getElementById('brandingDomainInput').value,
@@ -2028,6 +2064,9 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
     quizCategory: brandingDraft.quizCategory || 'cyber',
     closedSessionCtaLabel: document.getElementById('brandingClosedCtaLabel').value,
     closedSessionCtaUrl: document.getElementById('brandingClosedCtaUrl').value,
+    endGameCtaLabel: document.getElementById('brandingEndCtaLabel').value,
+    endGameCtaUrl: document.getElementById('brandingEndCtaUrl').value,
+    presentationStyle: presEl ? presEl.value : 'standard',
     theme: brandingDraft.theme
   };
   adminAction('branding:update', { branding: next });

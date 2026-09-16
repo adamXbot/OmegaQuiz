@@ -187,7 +187,7 @@ Magic links printed by `links` or the boot banner are single-use and expire afte
 In the admin tab:
 
 - **Questions tab → Browse sample packs** loads a curated phishing / nature / pop-culture pack. Or **Import CSV / JSON** for your own bank — download the CSV template first, or download one of the [`samples/*.json`](../samples) packs from GitHub and import it as-is.
-- **Branding tab** — set company name, email domain (with optional join restriction), logo, tagline, and the **Privacy notice** that appears on the player join screen.
+- **Branding tab** — set company name, quiz title (the second line of the host board; leave it blank to show only the company name), email domain (with optional join restriction), logo, tagline, the **Privacy notice** that appears on the player join screen, an optional **end-of-game call to action** (e.g. "Book time with IT"), and the **presentation style** (standard or dramatic).
 - The Privacy notice ships with an Australian-Privacy-Act–compatible default. **Rewrite it for your jurisdiction** before sharing the join URL publicly.
 
 ---

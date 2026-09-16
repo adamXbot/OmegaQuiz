@@ -3522,6 +3522,77 @@ async function hostScreenTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Branding: end-of-game CTA + presentation style
+// ----------------------------------------------------------------------------
+async function presentationTests() {
+  section('Branding: presentationStyle and end-of-game CTA validation');
+  {
+    ok(validateBranding({ presentationStyle: 'dramatic' }).presentationStyle === 'dramatic', 'strict: dramatic accepted');
+    ok(validateBranding({ presentationStyle: 'standard' }).presentationStyle === 'standard', 'strict: standard accepted');
+    let threw = false; try { validateBranding({ presentationStyle: 'loud' }); } catch { threw = true; }
+    ok(threw, 'strict: unknown presentationStyle rejected');
+    ok(validateBranding({ presentationStyle: 'loud' }, { tolerant: true }).presentationStyle === 'standard', 'tolerant: unknown presentationStyle falls back to standard');
+    ok(validateBranding({}).presentationStyle === 'standard', 'default is standard');
+    const cta = validateBranding({ endGameCtaLabel: 'Book time with IT', endGameCtaUrl: 'https://cal.example.com/it' });
+    ok(cta.endGameCtaLabel === 'Book time with IT' && cta.endGameCtaUrl === 'https://cal.example.com/it', 'end-of-game CTA label + https URL accepted');
+    ok(validateBranding({ endGameCtaUrl: 'mailto:it@example.com' }).endGameCtaUrl === 'mailto:it@example.com', 'mailto: accepted');
+    threw = false; try { validateBranding({ endGameCtaUrl: 'javascript:alert(1)' }); } catch { threw = true; }
+    ok(threw, 'javascript: URL rejected');
+    threw = false; try { validateBranding({ endGameCtaUrl: 'https://x.example/"onclick' }); } catch { threw = true; }
+    ok(threw, 'URL with a quote rejected');
+    ok(validateBranding({ endGameCtaLabel: 'x'.repeat(100) }).endGameCtaLabel.length === 60, 'label capped at 60 chars');
+    ok(validateBranding({ endGameCtaLabel: '<b>Book</b>' }).endGameCtaLabel === '&lt;b&gt;Book&lt;/b&gt;', 'label goes through the HTML allowlist');
+    // The closed-session pair still validates the same way (shared code path).
+    threw = false; try { validateBranding({ closedSessionCtaUrl: 'ftp://x' }); } catch { threw = true; }
+    ok(threw, 'closedSessionCtaUrl still rejects non-http schemes');
+    // Env defaults.
+    const saved = { p: process.env.PRESENTATION_STYLE, l: process.env.END_GAME_CTA_LABEL, u: process.env.END_GAME_CTA_URL };
+    process.env.PRESENTATION_STYLE = 'dramatic'; process.env.END_GAME_CTA_LABEL = 'Talk to IT'; process.env.END_GAME_CTA_URL = 'https://it.example.com/book';
+    const fromEnv = brandingFromEnv();
+    ok(fromEnv.presentationStyle === 'dramatic' && fromEnv.endGameCtaLabel === 'Talk to IT' && fromEnv.endGameCtaUrl === 'https://it.example.com/book', 'brandingFromEnv reads PRESENTATION_STYLE + END_GAME_CTA_*');
+    process.env.PRESENTATION_STYLE = 'bogus';
+    ok(brandingFromEnv().presentationStyle === 'standard', 'brandingFromEnv ignores an unknown PRESENTATION_STYLE');
+    for (const [k, v] of [['PRESENTATION_STYLE', saved.p], ['END_GAME_CTA_LABEL', saved.l], ['END_GAME_CTA_URL', saved.u]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
+
+  section('Branding: presentation + CTA round-trip through the admin and /branding.json');
+  {
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const ws = await openWs({ cookie: admin.cookie });
+    ws.send(JSON.stringify({ type: 'admin:hello' }));
+    await waitMessage(ws, m => m.type === 'admin:init');
+    const before = JSON.parse((await request('GET', '/branding.json')).body);
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { presentationStyle: 'dramatic', endGameCtaLabel: 'Book time with IT', endGameCtaUrl: 'https://cal.example.com/it' } } }));
+    const saved = await waitMessage(ws, m => m.type === 'branding:saved' || m.type === 'error', 3000);
+    ok(saved.type === 'branding:saved', 'branding:update accepted');
+    const b = JSON.parse((await request('GET', '/branding.json')).body);
+    ok(b.presentationStyle === 'dramatic' && b.endGameCtaLabel === 'Book time with IT' && b.endGameCtaUrl === 'https://cal.example.com/it', '/branding.json exposes the new fields to the player page');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { presentationStyle: 'loud' } } }));
+    const rej = await waitMessage(ws, m => m.type === 'branding:saved' || m.type === 'error', 3000);
+    ok(rej.type === 'error' && /presentationStyle/.test(rej.error), 'admin form rejects an unknown presentation style');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { presentationStyle: before.presentationStyle || 'standard', endGameCtaLabel: before.endGameCtaLabel || '', endGameCtaUrl: before.endGameCtaUrl || '' } } }));
+    await waitMessage(ws, m => m.type === 'branding:saved' || m.type === 'error', 3000);
+    try { ws.close(); } catch {}
+  }
+
+  section('Branding: served markup carries the end-of-game actions and dramatic-mode hooks');
+  {
+    const player = await request('GET', '/');
+    ok(player.body.includes('id="endEmailResultsBtn"') && player.body.includes('id="endCtaLink"'), 'player end screen has the email button and CTA link');
+    ok(player.body.includes('id="audioToggle"') && player.body.includes("case 'drumroll'") && player.body.includes('html.dramatic .answer-btn.enter'), 'player page has the speaker toggle, drum-roll and entry animation');
+    ok(player.body.includes('rel="noopener noreferrer" target="_blank"'), 'CTA opens in a new tab safely');
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const board = await request('GET', '/host', { headers: { cookie: host.cookie } });
+    ok(board.body.includes("case 'suspense'") && board.body.includes('id="endCtaLine"') && board.body.includes('.answers.drumroll .answer'), 'host board has the suspense sting, CTA line and drum-roll pulse');
+    ok(board.body.includes('id="stageTitle"') && !board.body.includes('Phishing Edition'), 'host game-stage header is branded, not hard-coded');
+    ok(player.body.includes("brandingCategory === 'cyber'") && player.body.includes('Strong run — you got most of them right.'), 'player end-screen copy is category-aware');
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const dash = await request('GET', '/admin', { headers: { cookie: admin.cookie } });
+    ok(dash.body.includes('name="brandingPresentation"') && dash.body.includes('id="brandingEndCtaLabel"') && dash.body.includes('id="brandingEndCtaUrl"'), 'Branding tab has the Presentation radios and CTA inputs');
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Branding: the quiz title is editable, may be blank with a company name, and
 // brands the sign-in page
 // ----------------------------------------------------------------------------
@@ -3599,6 +3670,7 @@ async function quizTitleTests() {
     await magicLinkTests();
     await brandingTests();
     await quizTitleTests();
+    await presentationTests();
     await themeAndLevelTests();
     await publicBaseUrlTests();
     await questionImageTests();

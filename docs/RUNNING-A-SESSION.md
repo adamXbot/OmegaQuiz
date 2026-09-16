@@ -20,6 +20,29 @@ An admin session opens `/host` as well, so one device signed in as admin can dri
 (useful when the projector is mirrored from the facilitator laptop). A separate host magic link is
 only needed for a second machine.
 
+## Presentation style and sounds
+
+Admin → **Branding → Presentation** picks how much theatre the game puts on:
+
+- **Standard** (default) — questions change instantly; the board plays short cues only when its
+  speaker is on; phones stay silent.
+- **Dramatic** — a suspense sting and a staged option reveal when a question lands on the board, a
+  drum-roll (about 1.5 s) before the answer is shown, and tap / lock-in / result sounds with sweeping
+  transitions on the phones. The phones hold the reveal for the same drum-roll, so nobody sees the
+  answer before the board does.
+
+Sounds are synthesised in the browser — nothing to download. Browsers only start audio after a
+click, so: on the **board**, click the speaker icon once (it starts muted); on a **phone**, the first
+tap on an answer unlocks sound, and a speaker button in the corner mutes it for that phone. Both
+pages honour the device's reduced-motion setting for the animations.
+
+## End-of-game actions
+
+Every player's final screen has **View My Results** and **Email me my results** (which opens their
+mail app with the per-question breakdown pre-filled). Admin → **Branding → End-of-game CTA** adds an
+optional third button — a label and a link, for example *Book time with IT* pointing at a booking
+page. The board's results screen spells the same link out for anyone who has put their phone away.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

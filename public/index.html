@@ -123,6 +123,17 @@ input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,
 }
 .answer-btn .letter{color:var(--gold);font-weight:bold;min-width:22px}
 .answer-btn:active:not(:disabled){transform:scale(.98)}
+/* Dramatic presentation (admin → Branding → Presentation). The question card
+   and options sweep in, the stack pulses while the board drum-rolls, and a
+   speaker toggle appears. Standard mode never adds these classes. */
+.audio-toggle{position:fixed;top:10px;right:10px;z-index:5;width:40px;height:40px;border-radius:50%;border:1px solid var(--gold-dim);background:rgba(2,6,37,.85);color:var(--gold);font-size:18px;cursor:pointer}
+html.dramatic .question-card.enter{animation:qEnter .6s cubic-bezier(.2,.8,.2,1) both}
+@keyframes qEnter{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:none}}
+html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i, 0) * .18s + .25s)}
+@keyframes aEnter{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+.answers-stack.drumroll .answer-btn{animation:drumPulse .32s ease-in-out infinite alternate}
+@keyframes drumPulse{from{box-shadow:0 0 0 0 rgba(244,196,48,0)}to{box-shadow:0 0 18px 2px rgba(244,196,48,.55)}}
+@media (prefers-reduced-motion: reduce){ html.dramatic .answer-btn.enter{animation-delay:0s !important} }
 /* A11Y: state fills are dark enough for white text at 4.5:1+ (WCAG 1.4.3):
    selected #9a3412 → 6.6:1, correct #15803d → 5.0:1, wrong #b91c1c → 5.8:1.
    (The old #d97706 / #16a34a / #dc2626 + opacity sat at 2.9–4.3:1.) The gold
@@ -278,6 +289,7 @@ input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,
 
   <!-- GAME -->
   <div id="gameView" style="display:none">
+    <button class="audio-toggle" id="audioToggle" type="button" hidden aria-pressed="true" aria-label="Game sounds are on — tap to mute">🔊</button>
     <div class="status-banner" id="statusBanner" aria-live="polite" aria-atomic="true"></div>
     <div class="question-counter" id="qCounter"></div>
     <div class="question-card">
@@ -302,6 +314,8 @@ input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,
       <div class="score" id="endScore"></div>
       <div id="endTotals" class="muted" style="margin-top:8px;font-size:13px;color:#bdc4eb"></div>
       <button class="btn secondary" id="viewResultsBtn" style="margin-top:14px">View My Results</button>
+      <button class="btn secondary" id="endEmailResultsBtn" style="margin-top:10px">📧 Email me my results</button>
+      <a class="btn" id="endCtaLink" rel="noopener noreferrer" target="_blank" style="display:none;margin-top:10px;text-decoration:none;box-sizing:border-box"></a>
       <p style="margin-top:14px;font-size:13px;opacity:.8">Check the big screen for the full results and lesson recap.</p>
     </div>
   </div>
@@ -415,6 +429,10 @@ async function applyBranding(){
     sessionClosed = !!b.sessionClosed;
     closedCtaLabel = b.closedSessionCtaLabel || '';
     closedCtaUrl   = b.closedSessionCtaUrl || '';
+    endCtaLabel = b.endGameCtaLabel || '';
+    endCtaUrl   = b.endGameCtaUrl || '';
+    brandingCategory = b.quizCategory || '';
+    setPresentation(b.presentationStyle === 'dramatic');
     applySessionClosedView();
     // If branding changed mid-question, re-render so the lock button shows/hides.
     if (myState) render();
@@ -428,6 +446,9 @@ async function applyBranding(){
 let sessionClosed = false;
 let closedCtaLabel = '';
 let closedCtaUrl = '';
+let endCtaLabel = '';
+let endCtaUrl = '';
+let brandingCategory = '';   // pack category; 'cyber' keeps the phishing end-screen copy
 function applySessionClosedView() {
   let panel = document.getElementById('sessionClosedPanel');
   if (!sessionClosed) {
@@ -599,6 +620,102 @@ function fieldsForServerError(text){
 /* =====================
    RENDER
    ===================== */
+/* =====================
+   PRESENTATION (dramatic mode) + SOUNDS
+   ===================== */
+// Everything here is inert in standard mode: sfx() returns immediately, no
+// .enter / .drumroll classes are added, and the speaker toggle stays hidden.
+let presentationDramatic = false;
+const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+let audioOn = localStorage.getItem('omegaquiz_audio') !== '0';
+let audioCtx = null;
+let enterAnimationPending = false;
+let lastQuestionKey = '';
+let lastRenderedPhase = null;
+const REVEAL_HOLD_MS = 1400;
+let revealHoldTimer = null;
+let revealHeldFor = '';
+function setPresentation(dramatic) {
+  presentationDramatic = !!dramatic;
+  document.documentElement.classList.toggle('dramatic', presentationDramatic);
+  const t = document.getElementById('audioToggle');
+  if (t) { t.hidden = !presentationDramatic; renderAudioToggle(); }
+}
+function renderAudioToggle() {
+  const t = document.getElementById('audioToggle');
+  if (!t) return;
+  t.textContent = audioOn ? '🔊' : '🔇';
+  t.setAttribute('aria-pressed', String(audioOn));
+  t.setAttribute('aria-label', audioOn ? 'Game sounds are on — tap to mute' : 'Game sounds are off — tap to enable');
+}
+// Sounds are synthesised — nothing to ship or download. A browser only lets
+// an AudioContext start inside a user gesture, so the first tap on an answer
+// is what unlocks it; cues that fire outside a gesture (a new question
+// landing) stay silent until then.
+function ensureAudio() {
+  try {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      audioCtx = new AC();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx.state === 'running';
+  } catch { return false; }
+}
+function playTone(freq, dur, type = 'sine', vol = 0.1, delay = 0) {
+  if (!audioCtx || audioCtx.state !== 'running') return;
+  const t0 = audioCtx.currentTime + delay;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(t0); o.stop(t0 + dur + 0.05);
+}
+function sfx(name) {
+  if (!presentationDramatic || !audioOn) return;
+  if (!ensureAudio()) return;
+  switch (name) {
+    case 'tap':      playTone(1200, 0.05, 'square', 0.05); break;
+    case 'lock':     playTone(440, 0.08, 'triangle', 0.1); playTone(660, 0.14, 'triangle', 0.1, 0.07); break;
+    case 'question': playTone(523, 0.1, 'sine', 0.08); playTone(784, 0.16, 'sine', 0.08, 0.09); break;
+    case 'drumroll': for (let i = 0; i < 14; i++) playTone(90 + i * 5, 0.06, 'square', 0.06, i * 0.09); break;
+    case 'reveal':   playTone(440, 0.1, 'triangle', 0.1); playTone(660, 0.18, 'triangle', 0.1, 0.08); break;
+    case 'correct':  playTone(523, 0.15, 'sine', 0.12); playTone(659, 0.15, 'sine', 0.12, 0.15); playTone(784, 0.4, 'sine', 0.12, 0.3); break;
+    case 'wrong':    playTone(220, 0.18, 'sawtooth', 0.1); playTone(180, 0.3, 'sawtooth', 0.08, 0.12); break;
+  }
+}
+// Returns true while the reveal is being held (caller skips rendering).
+function dramaticHoldReveal(s) {
+  if (s.phase !== 'reveal') { revealHeldFor = ''; return false; }
+  if (revealHoldTimer) return true;
+  const key = (s.inBonus ? 'b' : 'q') + (s.inBonus ? s.bonusIndex : s.questionIndex);
+  if (!presentationDramatic || lastRenderedPhase !== 'question' || revealHeldFor === key) return false;
+  revealHeldFor = key;
+  document.getElementById('answersStack').classList.add('drumroll');
+  sfx('drumroll');
+  revealHoldTimer = setTimeout(() => {
+    revealHoldTimer = null;
+    document.getElementById('answersStack').classList.remove('drumroll');
+    const cur = myState;
+    if (cur && cur.phase === 'reveal' && cur.question) {
+      const mine = cur.you && cur.you.myAnswer;
+      sfx(mine == null ? 'reveal' : (cur.question.revealedCorrect === mine ? 'correct' : 'wrong'));
+    }
+    render();
+  }, REVEAL_HOLD_MS);
+  return true;
+}
+document.getElementById('audioToggle').addEventListener('click', () => {
+  audioOn = !audioOn;
+  try { localStorage.setItem('omegaquiz_audio', audioOn ? '1' : '0'); } catch {}
+  renderAudioToggle();
+  if (audioOn) { ensureAudio(); setTimeout(() => sfx('question'), 80); }
+});
+
 function setView(name){
   ['joinView','lobbyView','gameView','endView','resultsView'].forEach(v => {
     document.getElementById(v).style.display = (v === name) ? 'block' : 'none';
@@ -632,6 +749,12 @@ function updatePageTitle(s) {
 function render(){
   if (!myState) return;
   const s = myState;
+  // Dramatic mode: hold the reveal behind a drum-roll so the phones never
+  // show the answer before the board does. Renders arriving during the hold
+  // are ignored; the timer re-renders once it ends.
+  if (dramaticHoldReveal(s)) return;
+  const prevRenderedPhase = lastRenderedPhase;
+  lastRenderedPhase = s.phase;
   updatePageTitle(s);
 
   // Lobby
@@ -644,13 +767,25 @@ function render(){
   // End
   if (s.phase === 'end'){
     setView('endView');
+    // Optional operator CTA (Branding → End-of-game CTA). Label is sanitised
+    // HTML from the server; the URL passed the server's scheme check.
+    const cta = document.getElementById('endCtaLink');
+    if (endCtaUrl && endCtaLabel) { cta.href = endCtaUrl; cta.innerHTML = endCtaLabel; cta.style.display = 'block'; }
+    else { cta.style.display = 'none'; cta.removeAttribute('href'); }
     const won = s.you.alive;
-    document.getElementById('endEmoji').textContent = won ? '🏆' : (s.you.score >= 7 ? '👏' : '🛡️');
-    document.getElementById('endTitle').textContent = won ? "You're a finalist!" : (s.you.score >= 7 ? 'Well played!' : 'Game Over');
+    // "Strong run" is 70% of the bank, not a fixed 7 — packs are not all ten
+    // questions long. The phishing wording is kept for cyber packs only; any
+    // other pack gets neutral copy.
+    const strong = s.totalQuestions ? (s.you.score / s.totalQuestions) >= 0.7 : s.you.score >= 7;
+    const cyber = brandingCategory === 'cyber';
+    document.getElementById('endEmoji').textContent = won ? '🏆' : (strong ? '👏' : (cyber ? '🛡️' : '🙌'));
+    document.getElementById('endTitle').textContent = won ? "You're a finalist!" : (strong ? 'Well played!' : 'Game Over');
     document.getElementById('endScore').textContent = `${s.you.score} pts`;
     document.getElementById('endMessage').textContent = won
       ? "You made it to the end. The host will announce the winner!"
-      : (s.you.score >= 7 ? "Strong run. You'd spot most phishing attempts in the wild." : "Every phishing attempt you spot in real life keeps the company secure.");
+      : (strong
+          ? (cyber ? "Strong run. You'd spot most phishing attempts in the wild." : 'Strong run — you got most of them right.')
+          : (cyber ? 'Every phishing attempt you spot in real life keeps the company secure.' : 'Thanks for playing — the big screen has the full recap.'));
     // Totals breakdown — visible for everyone, especially useful for eliminated
     // players who kept answering in engagement mode.
     const totalsEl = document.getElementById('endTotals');
@@ -699,6 +834,13 @@ function render(){
     if (s.questionIndex !== lastQuestionIndex) {
       pendingAnswer = null;
       lastQuestionIndex = s.questionIndex;
+    }
+    const questionKey = (s.inBonus ? 'b' : 'q') + (s.inBonus ? s.bonusIndex : s.questionIndex);
+    if (questionKey !== lastQuestionKey) {
+      lastQuestionKey = questionKey;
+      // A question landing (from the lobby, or after a reveal) gets the
+      // entrance; a reconnect straight into a question does not.
+      if (presentationDramatic && s.phase === 'question' && prevRenderedPhase !== null) { enterAnimationPending = true; sfx('question'); }
     }
     // If a 50:50 wiped the option the player had pending, clear it.
     if (pendingAnswer !== null && s.question.eliminatedOptions.includes(pendingAnswer)) {
@@ -787,6 +929,7 @@ function render(){
         if (!s.you.alive && !eliminatedCanAnswer) return;
         if (s.you.answered && answerLockMode === 'confirm') return;
         if (s.question.eliminatedOptions.includes(i)) return;
+        sfx('tap');
         if (answerLockMode === 'confirm') {
           // Stage the choice locally — committed only when "Lock In" is tapped.
           pendingAnswer = i;
@@ -797,6 +940,14 @@ function render(){
       };
       stack.appendChild(btn);
     });
+    if (enterAnimationPending) {
+      enterAnimationPending = false;
+      if (!REDUCED_MOTION) {
+        const card = document.querySelector('#gameView .question-card');
+        card.classList.remove('enter'); void card.offsetWidth; card.classList.add('enter');
+        [...stack.children].forEach((b, i) => { b.style.setProperty('--i', i); b.classList.add('enter'); });
+      }
+    }
 
     // Lock-In button only relevant in confirm mode, before the answer locks,
     // and only while you can still answer (alive, or eliminated + engagement on).
@@ -810,6 +961,7 @@ function render(){
         : `Lock In ${letters[pendingAnswer]}: ${truncate(s.question.options[pendingAnswer], 30)}`;
       lockBtn.onclick = () => {
         if (pendingAnswer === null) return;
+        sfx('lock');
         ws.send(JSON.stringify({ type: 'player:answer', answerIndex: pendingAnswer }));
         pendingAnswer = null;  // server will report answered=true; UI flips on next state push
       };
@@ -996,7 +1148,7 @@ function buildEmailBody() {
   return lines.join('\n');
 }
 
-document.getElementById('emailResultsBtn').addEventListener('click', () => {
+function emailMyResults() {
   const body = buildEmailBody();
   if (!body) { alert('No results to send yet.'); return; }
   const subject = 'My ' + brandLabel() + ' results';
@@ -1015,7 +1167,9 @@ document.getElementById('emailResultsBtn').addEventListener('click', () => {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-});
+}
+document.getElementById('emailResultsBtn').addEventListener('click', emailMyResults);
+document.getElementById('endEmailResultsBtn').addEventListener('click', emailMyResults);
 </script>
 </body>
 </html>

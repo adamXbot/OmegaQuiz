@@ -1183,6 +1183,14 @@ const DEFAULT_BRANDING = {
   // post-session survey or follow-up training. Empty disables the button.
   closedSessionCtaLabel: '',
   closedSessionCtaUrl: '',
+  // Optional call to action on every player's end-of-game screen, next to
+  // "Email me my results" — e.g. "Book time with IT". Empty disables it.
+  endGameCtaLabel: '',
+  endGameCtaUrl: '',
+  // 'standard' keeps transitions quiet. 'dramatic' adds a suspense sting and
+  // staged reveal when a question lands on the board, a drum-roll before the
+  // answer, and tap sounds plus richer transitions on the phones.
+  presentationStyle: 'standard',
   theme: { ...DEFAULT_THEME }
 };
 
@@ -1286,6 +1294,10 @@ function brandingFromEnv() {
   // data/config.json exists, same precedence as the other branding fields.
   setStr('closedSessionCtaLabel', e.CLOSED_SESSION_CTA_LABEL);
   setStr('closedSessionCtaUrl',   e.CLOSED_SESSION_CTA_URL);
+  // End-of-game CTA on every player's final screen, and the presentation style.
+  setStr('endGameCtaLabel', e.END_GAME_CTA_LABEL);
+  setStr('endGameCtaUrl',   e.END_GAME_CTA_URL);
+  if (e.PRESENTATION_STYLE === 'standard' || e.PRESENTATION_STYLE === 'dramatic') out.presentationStyle = e.PRESENTATION_STYLE;
 
   // Theme overrides — one env var per CSS variable, validated against the
   // same hex regex the admin form uses so bad values fall through to defaults.
@@ -1431,30 +1443,44 @@ function validateBranding(raw, { tolerant = false } = {}) {
     out.sessionClosed = !!raw.sessionClosed;
   }
 
-  // closedSessionCtaLabel: 0–60 chars, plain text after sanitisation.
-  if (typeof raw.closedSessionCtaLabel === 'string') {
-    out.closedSessionCtaLabel = sanitizeQuestionHtml(raw.closedSessionCtaLabel.trim().slice(0, 60));
-  } else if (!tolerant && raw.closedSessionCtaLabel !== undefined) {
-    throw new Error('closedSessionCtaLabel must be a string');
+  // Call-to-action pairs (label + URL): the "session ended" screen and the
+  // player's end-of-game screen. Label: 0–60 chars, plain text after
+  // sanitisation. URL: http(s) or mailto:, max 500 chars, empty allowed;
+  // obvious XSS / control characters are rejected.
+  for (const [labelKey, urlKey] of [['closedSessionCtaLabel', 'closedSessionCtaUrl'], ['endGameCtaLabel', 'endGameCtaUrl']]) {
+    if (typeof raw[labelKey] === 'string') {
+      out[labelKey] = sanitizeQuestionHtml(raw[labelKey].trim().slice(0, 60));
+    } else if (!tolerant && raw[labelKey] !== undefined) {
+      throw new Error(`${labelKey} must be a string`);
+    }
+    if (typeof raw[urlKey] === 'string') {
+      const v = raw[urlKey].trim().slice(0, 500);
+      if (v === '') {
+        out[urlKey] = '';
+      } else if (/^(https?:\/\/|mailto:)/i.test(v)) {
+        if (/[\x00-\x1f<>"`]/.test(v)) {
+          if (!tolerant) throw new Error(`${urlKey} contains invalid characters`);
+        } else {
+          out[urlKey] = v;
+        }
+      } else if (!tolerant) {
+        throw new Error(`${urlKey} must start with https://, http://, or mailto:`);
+      }
+    } else if (!tolerant && raw[urlKey] !== undefined) {
+      throw new Error(`${urlKey} must be a string`);
+    }
   }
 
-  // closedSessionCtaUrl: must be http(s) or mailto:, max 500 chars. Empty allowed.
-  if (typeof raw.closedSessionCtaUrl === 'string') {
-    const v = raw.closedSessionCtaUrl.trim().slice(0, 500);
-    if (v === '') {
-      out.closedSessionCtaUrl = '';
-    } else if (/^(https?:\/\/|mailto:)/i.test(v)) {
-      // Reject obvious XSS / control characters but otherwise let the URL through.
-      if (/[\x00-\x1f<>"`]/.test(v)) {
-        if (!tolerant) throw new Error('closedSessionCtaUrl contains invalid characters');
-      } else {
-        out.closedSessionCtaUrl = v;
-      }
+  // presentationStyle: 'standard' or 'dramatic'. Anything else keeps the
+  // default when tolerant and is rejected from the admin form.
+  if (typeof raw.presentationStyle === 'string') {
+    if (raw.presentationStyle === 'standard' || raw.presentationStyle === 'dramatic') {
+      out.presentationStyle = raw.presentationStyle;
     } else if (!tolerant) {
-      throw new Error('closedSessionCtaUrl must start with https://, http://, or mailto:');
+      throw new Error('presentationStyle must be "standard" or "dramatic"');
     }
-  } else if (!tolerant && raw.closedSessionCtaUrl !== undefined) {
-    throw new Error('closedSessionCtaUrl must be a string');
+  } else if (!tolerant && raw.presentationStyle !== undefined) {
+    throw new Error('presentationStyle must be a string');
   }
 
   // quizTitle: trimmed string, max 80 chars, HTML-escaped via the question
