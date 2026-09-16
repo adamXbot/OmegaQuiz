@@ -1457,9 +1457,13 @@ function validateBranding(raw, { tolerant = false } = {}) {
     throw new Error('closedSessionCtaUrl must be a string');
   }
 
-  // quizTitle: trimmed string, max 80 chars, HTML-escaped via the question sanitiser
+  // quizTitle: trimmed string, max 80 chars, HTML-escaped via the question
+  // sanitiser. Blank is allowed once a company name exists — the host board
+  // and player screen then show the organisation alone. With no company name
+  // either, fall back to the product name so no page renders an empty heading.
   if (typeof raw.quizTitle === 'string') {
-    out.quizTitle = sanitizeQuestionHtml(raw.quizTitle.trim().slice(0, 80)) || DEFAULT_BRANDING.quizTitle;
+    const title = sanitizeQuestionHtml(raw.quizTitle.trim().slice(0, 80));
+    out.quizTitle = title || (out.companyName ? '' : DEFAULT_BRANDING.quizTitle);
   } else if (!tolerant && raw.quizTitle !== undefined) {
     throw new Error('quizTitle must be a string');
   }
@@ -3137,9 +3141,15 @@ app.get('/auth/login', (req, res) => {
   const nextRaw = typeof req.query.next === 'string' ? req.query.next : ('/' + role);
   const safeNext = isSafeNext(nextRaw) ? nextRaw : ('/' + role);
   const error = req.query.error ? '<p class="err">Invalid token. Try again.</p>' : '';
+  // Brand the sign-in page like every other screen: "Company — Quiz title",
+  // or whichever of the two is set. Both values are sanitised HTML from
+  // validateBranding (allowlisted tags only), so they can go straight into
+  // the <h1>; <title> takes the text without tags.
+  const brandHtml = [branding.companyName, branding.quizTitle].filter(Boolean).join(' — ') || DEFAULT_BRANDING.quizTitle;
+  const brandText = brandHtml.replace(/<[^>]*>/g, '');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in — Omega Quiz</title>
+<title>Sign in — ${brandText}</title>
 <style>
   body{margin:0;font-family:Georgia,serif;background:#020625;color:#f5f3e8;min-height:100vh;display:flex;align-items:center;justify-content:center}
   .card{background:rgba(13,26,110,.6);border:2px solid #f4c430;border-radius:16px;padding:28px 30px;width:min(460px,92vw);box-shadow:0 0 24px rgba(244,196,48,.25)}
@@ -3159,7 +3169,7 @@ app.get('/auth/login', (req, res) => {
   .muted-inline{color:#9aa3d4;font-size:11px;font-weight:normal;letter-spacing:0;text-transform:none}
 </style></head><body>
 <form class="card" id="loginForm" method="POST" action="/auth/login" autocomplete="off">
-  <h1>Omega Quiz</h1><div class="sub">${role === 'admin' ? 'Admin recovery sign-in' : 'Host recovery sign-in'}</div>
+  <h1>${brandHtml}</h1><div class="sub">${role === 'admin' ? 'Admin recovery sign-in' : 'Host recovery sign-in'}</div>
   <div class="recovery-note">Use this form when your magic-link URL has expired. Most of the time you should just click the magic link from the server logs.</div>
   <input type="hidden" name="role" value="${role}">
   <input type="hidden" name="next" value="${safeNext.replace(/"/g, '&quot;')}">

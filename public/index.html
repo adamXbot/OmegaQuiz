@@ -372,19 +372,22 @@ async function applyBranding(){
     const b = await r.json();
     const titleEl = document.getElementById('brandTitle');
     const subEl   = document.getElementById('brandSubtitle');
-    // Title cascade: companyName overrides quizTitle. quizTitle defaults to
-    // "Omega Quiz" but is replaced when a sample pack is loaded.
-    brandingQuizTitle = b.quizTitle || 'Omega Quiz';
+    // Title cascade: the company name is the headline when set, with the
+    // tagline or the quiz title underneath. quizTitle may be blank once a
+    // company name exists; loading a sample pack replaces it with the pack's
+    // title. All three are sanitised HTML from the server (allowlisted tags
+    // only), so they are safe to render as markup.
+    brandingQuizTitle = b.quizTitle || '';
     brandingCompanyName = b.companyName || '';
     if (brandingCompanyName) {
-      titleEl.textContent = brandingCompanyName;
-      subEl.textContent = b.tagline || brandingQuizTitle;
+      titleEl.innerHTML = brandingCompanyName;
+      subEl.innerHTML = b.tagline || brandingQuizTitle;
     } else {
-      titleEl.textContent = brandingQuizTitle;
-      subEl.textContent = b.tagline || '';
+      titleEl.innerHTML = brandingQuizTitle || 'Omega Quiz';
+      subEl.innerHTML = b.tagline || '';
     }
     // Dynamic document.title is set by updatePageTitle() on every render.
-    if (myState) updatePageTitle(myState); else document.title = (brandingCompanyName ? brandingCompanyName + ' — ' : '') + brandingQuizTitle;
+    updatePageTitle(myState);
     const emailInput = document.getElementById('emailInput');
     if (b.companyDomain) {
       emailInput.placeholder = 'alex@' + b.companyDomain;
@@ -606,16 +609,24 @@ function truncate(s, n){ s = String(s || ''); return s.length > n ? s.slice(0, n
 
 // A11Y / UX: surface game state in the tab title so multi-tab operators can
 // see which tab is which and where each game is at.
+// Plain text of a sanitised branding string (entities decoded, tags dropped)
+// for the tab title and the results email.
+function brandText(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
+}
+function brandLabel() {
+  return [brandText(brandingCompanyName), brandText(brandingQuizTitle)].filter(Boolean).join(' — ') || 'Omega Quiz';
+}
 function updatePageTitle(s) {
-  const base = brandingCompanyName ? (brandingCompanyName + ' — ') : '';
-  const quiz = brandingQuizTitle || 'Omega Quiz';
   let prefix = '';
   if (!s) prefix = '';
   else if (s.phase === 'lobby')   prefix = 'Waiting — ';
   else if (s.phase === 'question') prefix = (s.inBonus ? `Tiebreaker ${(s.bonusIndex||0)+1} — ` : `Q${s.questionIndex+1} of ${s.totalQuestions} — `);
   else if (s.phase === 'reveal')   prefix = (s.inBonus ? 'Reveal — ' : `Reveal Q${s.questionIndex+1} — `);
   else if (s.phase === 'end')      prefix = (s.you && s.you.alive ? 'Finalist — ' : 'Game over — ');
-  document.title = prefix + base + quiz;
+  document.title = prefix + brandLabel();
 }
 
 function render(){
@@ -954,7 +965,7 @@ function buildEmailBody() {
   const score = myState.you.score || 0;
   const afterElim = correct - score;
 
-  lines.push((brandingCompanyName ? brandingCompanyName + ' — ' : '') + 'My Omega Quiz results');
+  lines.push('My ' + brandLabel() + ' results');
   lines.push('Player: ' + (myState.you.name || ''));
   lines.push('Score:  ' + score + ' pts  ·  ' + correct + ' correct of ' + answered + ' answered' + (afterElim > 0 ? '  (' + afterElim + ' after I was eliminated)' : ''));
   lines.push('');
@@ -988,7 +999,7 @@ function buildEmailBody() {
 document.getElementById('emailResultsBtn').addEventListener('click', () => {
   const body = buildEmailBody();
   if (!body) { alert('No results to send yet.'); return; }
-  const subject = (brandingCompanyName ? brandingCompanyName + ' — ' : '') + 'My Omega Quiz results';
+  const subject = 'My ' + brandLabel() + ' results';
   const to = savedEmail || '';  // pre-fill recipient with the player's own email
   const url = 'mailto:' + encodeURIComponent(to)
             + '?subject=' + encodeURIComponent(subject)

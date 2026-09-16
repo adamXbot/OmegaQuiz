@@ -3522,6 +3522,64 @@ async function hostScreenTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Branding: the quiz title is editable, may be blank with a company name, and
+// brands the sign-in page
+// ----------------------------------------------------------------------------
+async function quizTitleTests() {
+  section('Branding: quiz title is editable, blank-with-company allowed, sign-in page branded');
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const ws = await openWs({ cookie: admin.cookie });
+  ws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(ws, m => m.type === 'admin:init');
+  const before = JSON.parse((await request('GET', '/branding.json')).body);
+  async function setBranding(patch) {
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: patch } }));
+    const m = await waitMessage(ws, x => x.type === 'branding:saved' || x.type === 'error', 3000);
+    ok(m.type === 'branding:saved', 'branding:update accepted for ' + JSON.stringify(patch).slice(0, 60));
+    return JSON.parse((await request('GET', '/branding.json')).body);
+  }
+
+  const b1 = await setBranding({ companyName: 'ACME Corp', quizTitle: 'Security Challenge' });
+  ok(b1.quizTitle === 'Security Challenge' && b1.companyName === 'ACME Corp', 'custom quiz title persisted alongside the company name');
+  const login1 = await request('GET', '/auth/login?role=admin');
+  ok(login1.status === 200 && login1.body.includes('<title>Sign in — ACME Corp — Security Challenge</title>'), 'sign-in <title> shows company and quiz title');
+  ok(login1.body.includes('<h1>ACME Corp — Security Challenge</h1>'), 'sign-in heading shows company and quiz title');
+  ok(!/<h1>Omega Quiz<\/h1>/.test(login1.body), 'sign-in page no longer hard-codes the product name');
+
+  const b2 = await setBranding({ companyName: 'ACME Corp', quizTitle: '' });
+  ok(b2.quizTitle === '', 'blank quiz title is kept when a company name is set');
+  const login2 = await request('GET', '/auth/login?role=host');
+  ok(login2.body.includes('<h1>ACME Corp</h1>') && login2.body.includes('<title>Sign in — ACME Corp</title>'), 'sign-in page shows the company alone when the title is blank');
+
+  const b3 = await setBranding({ companyName: '', quizTitle: '' });
+  ok(b3.quizTitle === 'Omega Quiz', 'blank quiz title with no company name falls back to the default');
+  const login3 = await request('GET', '/auth/login?role=admin');
+  ok(login3.body.includes('<h1>Omega Quiz</h1>'), 'sign-in page falls back to the default title');
+
+  const b4 = await setBranding({ companyName: '', quizTitle: '<em>Cyber</em> Night <script>x</script>' });
+  ok(b4.quizTitle === '<em>Cyber</em> Night &lt;script&gt;x&lt;/script&gt;', 'quiz title goes through the HTML allowlist (got: ' + b4.quizTitle + ')');
+  const login4 = await request('GET', '/auth/login?role=admin');
+  ok(login4.body.includes('<title>Sign in — Cyber Night &lt;script&gt;x&lt;/script&gt;</title>'), 'sign-in <title> strips allowlisted tags and keeps escaped text');
+  ok(login4.body.includes('<h1><em>Cyber</em> Night &lt;script&gt;x&lt;/script&gt;</h1>'), 'sign-in heading keeps the allowlisted markup');
+
+  const b5 = await setBranding({ companyName: '', quizTitle: 'x'.repeat(120) });
+  ok(b5.quizTitle.length === 80, 'quiz title capped at 80 chars');
+
+  // Served markup: the field exists, and the host board no longer ships the old placeholder heading.
+  const adminPage = await request('GET', '/admin', { headers: { cookie: admin.cookie } });
+  ok(adminPage.status === 200 && adminPage.body.includes('id="brandingQuizTitleInput"'), 'Branding tab has the quiz-title input');
+  ok(adminPage.body.includes('brandingQuizTitleInput\').value,') || adminPage.body.includes("brandingQuizTitleInput').value,"), 'save handler reads the quiz-title input');
+  const hostPage = await request('GET', '/host', { headers: { cookie: admin.cookie } });
+  ok(hostPage.status === 200 && !hostPage.body.includes('OmegaQuiz Employee'), 'host board placeholder heading is gone');
+  const playerPage = await request('GET', '/');
+  ok(playerPage.status === 200 && !playerPage.body.includes("'My Omega Quiz results'"), 'results email no longer hard-codes the product name');
+
+  // Leave branding the way we found it for the tests that follow.
+  await setBranding({ companyName: before.companyName, quizTitle: before.quizTitle, tagline: before.tagline });
+  try { ws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -3540,6 +3598,7 @@ async function hostScreenTests() {
     await bonusBugTest();
     await magicLinkTests();
     await brandingTests();
+    await quizTitleTests();
     await themeAndLevelTests();
     await publicBaseUrlTests();
     await questionImageTests();

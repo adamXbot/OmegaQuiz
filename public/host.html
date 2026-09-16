@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Host — Who Wants to Be an OmegaQuiz Employee</title>
+<title>Host — Omega Quiz</title>
 <style>
 :root{
   --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
@@ -299,7 +299,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
 <div class="overlay active" id="lobbyScreen">
   <img id="brandLogo" alt="" style="max-height:80px;max-width:240px;margin-bottom:6px;display:none">
   <div class="subtitle" id="brandSubtitle">All Staff Cybersecurity Training</div>
-  <h1 id="brandTitle">Who Wants to Be a<br>OmegaQuiz Employee?</h1>
+  <h1 id="brandTitle">Omega Quiz</h1>
   <div class="tagline">Scan the QR code or visit the URL below to join</div>
   <div class="lobby-info">
     <div class="qr-wrap"><img src="/qr" alt="Join QR" id="qrImg"></div>
@@ -359,7 +359,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
 <div class="stage" id="gameStage" style="display:none">
   <div class="main">
     <div class="header">
-      <div class="title">Phishing Edition</div>
+      <div class="title" id="stageTitle">Omega Quiz</div>
       <div class="subtitle" id="questionLabel">Question 1 of 10</div>
     </div>
 
@@ -497,18 +497,23 @@ async function applyBranding(){
     const titleEl = document.getElementById('brandTitle');
     const subEl   = document.getElementById('brandSubtitle');
     const logoEl  = document.getElementById('brandLogo');
-    hostBrandTitle = b.quizTitle || 'Omega Quiz';
+    // quizTitle may be blank when a company name is set (the board then
+    // shows the organisation alone); with neither set the server already
+    // substituted the default. Both are sanitised HTML from the server.
+    hostBrandTitle = b.quizTitle || '';
     hostBrandCompany = b.companyName || '';
-    if (hostBrandCompany) titleEl.innerHTML = hostBrandCompany + '<br>' + hostBrandTitle;
-    else                  titleEl.innerHTML = hostBrandTitle;
-    if (b.tagline) subEl.textContent = b.tagline;
-    if (state) updatePageTitle(state); else document.title = (hostBrandCompany ? hostBrandCompany + ' — ' : '') + hostBrandTitle + ' (Host)';
+    titleEl.innerHTML = [hostBrandCompany, hostBrandTitle].filter(Boolean).join('<br>') || 'Omega Quiz';
+    // Game-stage header: the quiz title (or the company when there is none).
+    document.getElementById('stageTitle').innerHTML = hostBrandTitle || hostBrandCompany || 'Omega Quiz';
+    subEl.innerHTML = b.tagline || '';
+    subEl.style.display = b.tagline ? '' : 'none';
+    updatePageTitle(state);
     if (b.logoDataUri) {
       logoEl.src = b.logoDataUri;
       // A11Y: when companyName is set, the title text duplicates the logo so
       // leave alt empty (decorative). Otherwise the logo is the brand identity
       // and gets a real alt.
-      logoEl.alt = b.companyName ? '' : ((b.quizTitle || 'Omega Quiz') + ' logo');
+      logoEl.alt = b.companyName ? '' : (hostBrandLabel() + ' logo');
       logoEl.style.display = 'block';
     } else {
       logoEl.style.display = 'none';
@@ -696,15 +701,25 @@ const milestones = [4, 9];
 // A11Y / UX: tab title reflects game phase + question for multi-tab operators.
 let hostBrandTitle = 'Omega Quiz';
 let hostBrandCompany = '';
+// Plain text of a sanitised branding string (entities decoded, tags dropped)
+// for places that take text, not markup: the tab title, alt text.
+function brandText(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
+}
+// "Company — Quiz title", or whichever of the two is set; never empty.
+function hostBrandLabel() {
+  return [brandText(hostBrandCompany), brandText(hostBrandTitle)].filter(Boolean).join(' — ') || 'Omega Quiz';
+}
 function updatePageTitle(s) {
-  const base = hostBrandCompany ? (hostBrandCompany + ' — ') : '';
   let prefix = '';
   if (!s) prefix = '';
   else if (s.phase === 'lobby')    prefix = `Lobby (${s.playerCount} joined) — `;
   else if (s.phase === 'question') prefix = (s.inBonus ? `Tiebreaker ${(s.bonusIndex||0)+1} — ` : `Q${s.questionIndex+1} of ${s.totalQuestions} (${s.aliveCount} alive) — `);
   else if (s.phase === 'reveal')   prefix = (s.inBonus ? `Tiebreaker reveal — ` : `Reveal Q${s.questionIndex+1} — `);
   else if (s.phase === 'end')      prefix = 'Game over — ';
-  document.title = prefix + base + hostBrandTitle + ' (Host)';
+  document.title = prefix + hostBrandLabel() + ' (Host)';
 }
 
 // Track previous phase so we can emit "phase-entered" sfx on the host
