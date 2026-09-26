@@ -2973,9 +2973,12 @@ async function v111SecurityFixTests() {
   adminWs.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: 'start-game' } }));
   await new Promise(r => setTimeout(r, 60));
   adminWs.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: 'apply-lifeline', hostPayload: { type: 'askit' } } }));
-  // Player should receive askit; eavesdropper should not.
-  const playerSawAskit = await waitMessage(player, m => m.type === 'lifeline:askit', 1500).catch(() => null);
-  ok(playerSawAskit !== null && typeof playerSawAskit.correctLetter === 'string', 'authenticated player receives lifeline:askit');
+  // The board and admin get askit; players no longer do (the phones never
+  // showed it, and the correct letter was readable in any player's dev tools).
+  const playerAskit = waitMessage(player, m => m.type === 'lifeline:askit', 1500).catch(() => null);
+  const adminSawAskit = await waitMessage(adminWs, m => m.type === 'lifeline:askit', 1500).catch(() => null);
+  ok(adminSawAskit !== null && typeof adminSawAskit.correctLetter === 'string', 'admin receives lifeline:askit');
+  ok((await playerAskit) === null, 'player does NOT receive lifeline:askit (correct letter stays off the phones)');
   await new Promise(r => setTimeout(r, 250)); // give time for any stray broadcast
   const evilSawAskit = evilMsgs.some(m => m && m.type === 'lifeline:askit');
   ok(!evilSawAskit, 'unauthenticated WS did NOT receive lifeline:askit');
@@ -3651,6 +3654,228 @@ async function quizTitleTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Event hardening (30 Sep 2026 session): rejoin with a saved seat, lobby
+// reclaim, heartbeat, join limiter, persisted join code, reset notice,
+// per-player pushes, crash guards, and the page-side fixes
+// ----------------------------------------------------------------------------
+async function eventHardeningTests() {
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const host = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: action, hostPayload: payload || {} } }));
+  async function until(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await new Promise(r => setTimeout(r, 20)); }
+    throw new Error('until() timed out; phase=' + (adminState && adminState.phase));
+  }
+  async function freshLobby() {
+    const before = adminState && adminState.joinCode;
+    host('reset-game');
+    return until(s => s.phase === 'lobby' && s.joinCode !== before && s.playerCount === 0);
+  }
+  async function join(ws, fields) {
+    ws.send(JSON.stringify({ type: 'player:join', ...fields }));
+    return waitMessage(ws, m => m.type === 'player:joined' || m.type === 'error', 2000).catch(() => ({ type: 'timeout' }));
+  }
+  function collect(ws) { const list = []; ws.on('message', raw => { try { list.push(JSON.parse(raw)); } catch {} }); return list; }
+  const sockets = [];
+  async function phone() { const w = await openWs(); sockets.push(w); return w; }
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+
+  aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+  clearJoinFailures('127.0.0.1');
+
+  section('Event hardening: a phone rejoins with its saved seat while the server still holds its old connection');
+  const lobby = await freshLobby();
+  const a1 = await phone();
+  const j1 = await join(a1, { name: 'Quiet Drop', email: 'quiet@test.example', joinCode: lobby.joinCode });
+  ok(j1.type === 'player:joined', 'player joins');
+  const a1Closed = new Promise(r => a1.on('close', code => r(code)));
+  const a1Replaced = waitMessage(a1, m => m.type === 'player:replaced', 2000).then(() => true, () => false);
+  const a2 = await phone();
+  const j2 = await join(a2, { name: 'Quiet Drop', email: 'quiet@test.example', joinCode: lobby.joinCode, reconnectId: j1.playerId });
+  ok(j2.type === 'player:joined' && j2.playerId === j1.playerId, 'rejoin in the lobby is accepted while the old connection is open (was: "already registered")');
+  ok(await a1Replaced, 'the old connection is told it was replaced');
+  ok((await Promise.race([a1Closed, pause(2000).then(() => null)])) === 4001, 'the old connection is closed with code 4001');
+  await pause(150); // let a late close from the old connection land before checking
+  const swapped = await until(s => s.playerCount === 1 && s.players[0].online === true).catch(() => null);
+  ok(swapped && swapped.players[0].id === j1.playerId, 'one seat, still online after the old connection closed');
+
+  section('Event hardening: mid-game rejoin with the old connection open, and long after the reconnect window');
+  const b1 = await phone();
+  const jb = await join(b1, { name: 'Late Return', email: 'late@test.example', joinCode: lobby.joinCode });
+  host('start-game');
+  await until(s => s.phase === 'question');
+  const a3 = await phone();
+  const j3 = await join(a3, { name: 'Quiet Drop', email: 'quiet@test.example', joinCode: lobby.joinCode, reconnectId: j1.playerId });
+  ok(j3.type === 'player:joined' && j3.playerId === j1.playerId, 'mid-game rejoin with the old connection still open is accepted (was: "joining is closed")');
+  await pause(150);
+  const stillOnline = adminState.players.find(p => p.id === j1.playerId);
+  ok(stillOnline && stillOnline.online === true, 'the replaced connection closing late does not mark the player offline');
+  b1.close();
+  await until(s => { const p = s.players.find(x => x.id === jb.playerId); return p && !p.online && p.disconnectedAt; });
+  srv.game.players.get(jb.playerId).disconnectedAt = Date.now() - 10 * 60 * 1000;
+  const b2 = await phone();
+  const jb2 = await join(b2, { name: 'Late Return', email: 'late@test.example', joinCode: lobby.joinCode, reconnectId: jb.playerId });
+  ok(jb2.type === 'player:joined' && jb2.playerId === jb.playerId, 'rejoin 10 minutes after dropping is accepted (was: refused once the 5-minute window lapsed)');
+  const x1 = await phone();
+  const jx = await join(x1, { name: 'Late Return', email: 'someone-else@test.example', joinCode: lobby.joinCode, reconnectId: jb.playerId });
+  ok(jx.type === 'error' && jx.code === 'game-started', 'a seat ID presented with a different email does not get the seat');
+  const b2Msgs = collect(b2);
+  const a3Msgs = collect(a3);
+  host('close-question');
+  await until(s => s.phase === 'reveal');
+  await pause(150);
+  ok(b2Msgs.some(m => m.type === 'player:state' && m.state.phase === 'reveal'), 'the late rejoiner receives state updates');
+  ok(a3Msgs.some(m => m.type === 'player:state' && m.state.phase === 'reveal'), 'the phone that replaced a live connection receives state updates');
+
+  section('Event hardening: an answer updates the answering phone, the board and admin, not every phone');
+  const lobby2 = await freshLobby();
+  const pA = await phone();
+  await join(pA, { name: 'Answer A', email: 'answer-a@test.example', joinCode: lobby2.joinCode });
+  const pB = await phone();
+  await join(pB, { name: 'Answer B', email: 'answer-b@test.example', joinCode: lobby2.joinCode });
+  const hostLogin = await loginAs('host', process.env.HOST_TOKEN);
+  const hws = await openWs({ cookie: hostLogin.cookie });
+  sockets.push(hws);
+  hws.send(JSON.stringify({ type: 'host:hello' }));
+  await waitMessage(hws, m => m.type === 'host:state');
+  host('start-game');
+  await until(s => s.phase === 'question');
+  await pause(150);
+  const aMsgs = collect(pA), bMsgs = collect(pB), hMsgs = collect(hws);
+  pA.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+  await until(s => s.answeredCount === 1);
+  await pause(200);
+  ok(aMsgs.some(m => m.type === 'player:state' && m.state.you.myAnswer === 1), 'the answering phone gets its own state');
+  ok(!bMsgs.some(m => m.type === 'player:state'), 'the other phone gets nothing (was: every phone re-sent its whole state)');
+  ok(hMsgs.some(m => m.type === 'host:state' && m.state.answeredCount === 1), 'the board gets the new answered count');
+
+  section('Event hardening: Reset game tells connected phones and detaches them');
+  const resetSeen = waitMessage(pB, m => m.type === 'game:reset', 2000).then(() => true, () => false);
+  const lobby3 = await freshLobby();
+  ok(await resetSeen, 'a connected phone is told the game was reset');
+  pB.send(JSON.stringify({ type: 'player:answer', answerIndex: 0 }));
+  await pause(100);
+  ok(srv.game.players.size === 0, 'the detached phone is not part of the new game');
+  const jB2 = await join(pB, { name: 'Answer B', email: 'answer-b@test.example', joinCode: lobby3.joinCode });
+  ok(jB2.type === 'player:joined', 'the phone can join the new game on the same connection');
+
+  section('Event hardening: in the lobby, the same email from a new device takes over an offline seat');
+  const r1 = await phone();
+  const jr1 = await join(r1, { name: 'Reclaim Me', email: 'reclaim@test.example', joinCode: lobby3.joinCode });
+  const r2 = await phone();
+  const taken = await join(r2, { name: 'Reclaim Me', email: 'reclaim@test.example', joinCode: lobby3.joinCode });
+  ok(taken.type === 'error' && taken.code === 'email-taken', 'while the seat\'s phone is online the email is refused (email-taken)');
+  r1.close();
+  await until(s => { const p = s.players.find(x => x.id === jr1.playerId); return p && !p.online; });
+  const jr2 = await join(r2, { name: 'Reclaim Me (laptop)', email: 'Reclaim@Test.example', joinCode: lobby3.joinCode });
+  ok(jr2.type === 'player:joined' && jr2.playerId === jr1.playerId && jr2.name === 'Reclaim Me (laptop)', 'the new device gets the same seat under the name it typed');
+  const afterReclaim = await until(s => s.playerCount === 2).catch(() => null);
+  ok(!!afterReclaim, 'no duplicate seat after the takeover');
+
+  section('Event hardening: the heartbeat drops a connection that stops answering');
+  const h1 = await phone();
+  const jh1 = await join(h1, { name: 'Sleepy Phone', email: 'sleepy-hb@test.example', joinCode: lobby3.joinCode });
+  const h2 = await phone();
+  const jh2 = await join(h2, { name: 'Awake Phone', email: 'awake-hb@test.example', joinCode: lobby3.joinCode });
+  h1._socket.pause(); // stops reading: pings go unanswered, like a phone that lost Wi-Fi
+  srv.heartbeatSweep();
+  await pause(250);   // connections that are alive answer the ping in time
+  srv.heartbeatSweep();
+  const hb = await until(s => { const p = s.players.find(x => x.id === jh1.playerId); return p && !p.online && p.disconnectedAt; }).catch(() => null);
+  ok(!!hb, 'the silent connection is terminated and the player shows offline');
+  ok(hb && hb.players.find(x => x.id === jh2.playerId).online === true, 'a connection that answers pings is kept');
+  ok(srv.WS_HEARTBEAT_MS === 30000, 'heartbeat runs every 30 s');
+  try { h1._socket.resume(); } catch {}
+
+  section('Event hardening: join limiter allows 30 wrong codes, and saved seats always get back in');
+  ok(JOIN_FAILURE_MAX === 30, 'default limit is 30 wrong codes a minute per address (was 8)');
+  ok(srv.parseJoinFailureMax('10') === 10 && srv.parseJoinFailureMax('abc') === 30 && srv.parseJoinFailureMax('1') === 3 &&
+     srv.parseJoinFailureMax('99999') === 500 && srv.parseJoinFailureMax(undefined) === 30 && srv.parseJoinFailureMax('') === 30,
+     'JOIN_FAILURE_MAX parses and clamps to 3–500');
+  clearJoinFailures('127.0.0.1');
+  for (let i = 0; i < JOIN_FAILURE_MAX; i++) recordJoinFailure('127.0.0.1');
+  const blockedNew = await phone();
+  const jbn = await join(blockedNew, { name: 'Blocked Newcomer', email: 'newcomer@test.example', joinCode: lobby3.joinCode });
+  ok(jbn.type === 'error' && jbn.code === 'rate-limited', 'a new join from a blocked address is refused (rate-limited)');
+  const back = await phone();
+  const jback = await join(back, { name: 'Awake Phone', email: 'awake-hb@test.example', joinCode: lobby3.joinCode, reconnectId: jh2.playerId });
+  ok(jback.type === 'player:joined' && jback.playerId === jh2.playerId, 'a phone with its saved seat still gets back in from the blocked address');
+  clearJoinFailures('127.0.0.1');
+
+  section('Event hardening: malformed messages cannot crash the server');
+  const junk = await phone();
+  for (const frame of ['null', '42', '"text"', '[]', 'true', '{"type":null}']) junk.send(frame);
+  await pause(200);
+  ok((await request('GET', '/health')).status === 200, 'unauthenticated null / number / string / array frames leave the server up (null used to crash it)');
+  const tj = await phone();
+  const jt = await join(tj, { name: 123, email: 'num@test.example', joinCode: lobby3.joinCode });
+  ok(jt.type === 'error' && jt.code === 'invalid-details', 'a numeric name is refused as invalid (it used to crash the server)');
+  const jt2 = await join(tj, { name: 'Array Email', email: ['array@test.example'], joinCode: lobby3.joinCode });
+  ok(jt2.type === 'error' && jt2.code === 'invalid-details', 'an array email is refused as invalid');
+  ok((await request('GET', '/health')).status === 200, 'server still healthy after malformed joins');
+
+  section('Event hardening: the join code survives a restart');
+  const saved = JSON.parse(fs.readFileSync(srv.GAME_STATE_PATH, 'utf8'));
+  ok(saved.joinCode === adminState.joinCode, 'Reset game saves the new code to DATA_DIR/game.json');
+  ok(srv.loadPersistedJoinCode() === adminState.joinCode, 'loadPersistedJoinCode reads it back');
+  {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-code-'));
+    fs.writeFileSync(path.join(dataDir, 'game.json'), JSON.stringify({ joinCode: '246810' }));
+    const port = await freePort();
+    const env = { ...process.env, DATA_DIR: dataDir, PORT: String(port), NODE_ENV: 'test' };
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', d => { out += d; });
+    child.stderr.on('data', d => { out += d; });
+    const exited = new Promise(r => child.on('exit', r));
+    let up = false;
+    for (let i = 0; i < 100 && !up; i++) {
+      try { const r = await rawRequest(port, 'GET', '/health'); if (r.status === 200) up = true; } catch {}
+      if (!up) await pause(100);
+    }
+    ok(up, 'a server started on a DATA_DIR with a saved code came up' + (up ? '' : ': ' + out.slice(-400)));
+    if (up) {
+      const cws = await new Promise((resolve, reject) => { const w = new WebSocket('ws://127.0.0.1:' + port); w.on('open', () => resolve(w)); w.on('error', reject); });
+      cws.send(JSON.stringify({ type: 'player:join', name: 'After Restart', email: 'restart@test.example', joinCode: '246810' }));
+      const jr = await waitMessage(cws, m => m.type === 'player:joined' || m.type === 'error', 3000).catch(() => ({ type: 'timeout' }));
+      ok(jr.type === 'player:joined', 'it accepts the saved code, so phones re-register after a restart instead of tripping the limiter');
+      try { cws.close(); } catch {}
+    }
+    child.kill('SIGTERM');
+    await Promise.race([exited, pause(3000)]);
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  }
+  fs.writeFileSync(srv.GAME_STATE_PATH, JSON.stringify({ joinCode: 12345 }));
+  ok(srv.loadPersistedJoinCode() === null, 'a malformed saved code is ignored (a fresh one is used)');
+
+  section('Event hardening: the phone, board and admin pages carry the client-side fixes');
+  const page = (await request('GET', '/')).body;
+  ok(page.includes("msg.type === 'player:replaced'") && page.includes("msg.type === 'game:reset'"), 'phone page handles player:replaced and game:reset');
+  ok(page.includes('function scheduleReconnect') && !page.includes('setTimeout(connect, 1500)'), 'phone page reconnects with backoff and jitter, not a fixed 1.5 s loop');
+  ok(page.includes("addEventListener('visibilitychange'"), 'phone page reconnects as soon as it is back on screen');
+  ok((page.match(/if \(ws !== sock\) return;/g) || []).length === 3, 'phone page ignores open / message / close events from a socket it has already replaced (no false "another tab" notice, no extra reconnect)');
+  ok(page.includes('savedName = name;') && page.includes('savedEmail = email;'), 'phone page keeps the name and email it joined with, so the first drop rejoins without a reload');
+  ok(page.includes('function handleJoinError') && page.includes("setView('joinView')"), 'a refused rejoin brings the join form back instead of freezing');
+  const hostPage = (await request('GET', '/host', { headers: { cookie: hostLogin.cookie } })).body;
+  ok(hostPage.includes("'/qr?c=' + encodeURIComponent(state.joinCode)"), 'host board reloads the QR when the join code changes');
+  ok(/\.overlay\{[^}]*overflow-y:auto/.test(hostPage) && hostPage.includes('#lobbyScreen.overflowing .controls{position:sticky'), 'host lobby scrolls and pins Start Game when it overflows');
+  const qr = await request('GET', '/qr', { headers: { cookie: hostLogin.cookie } });
+  ok(qr.status === 200 && qr.headers['cache-control'] === 'no-store', '/qr is never cached');
+  const adminPage = (await request('GET', '/admin', { headers: { cookie: admin.cookie } })).body;
+  ok(!adminPage.includes('data-act="extend"'), 'admin roster no longer offers Extend (rejoining is not time-limited)');
+
+  await freshLobby();
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -3686,6 +3911,7 @@ async function quizTitleTests() {
     await v111SecurityFixTests();
     await keyRemintTests();
     await wsRobustnessTests();
+    await eventHardeningTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

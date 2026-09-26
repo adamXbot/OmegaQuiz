@@ -191,7 +191,11 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
   background:radial-gradient(ellipse at center, var(--navy-light), var(--navy-deep) 70%);
   display:none;flex-direction:column;align-items:center;justify-content:center;
   gap:30px;padding:40px;text-align:center;
+  /* 60+ names can make the lobby taller than a 1280x720 projector: scroll
+     instead of clipping. 'safe' keeps the top reachable where supported. */
+  overflow-y:auto;
 }
+.overlay{justify-content:safe center}
 .overlay.active{display:flex}
 .overlay h1{font-size:clamp(32px,5vw,56px);color:var(--gold);letter-spacing:.08em;text-shadow:0 0 30px rgba(244,196,48,.8), 0 4px 0 #000;text-transform:uppercase;line-height:1.1;max-width:1200px}
 .overlay .tagline{font-size:clamp(14px,1.4vw,18px);color:#bdc4eb;letter-spacing:.2em;text-transform:uppercase;max-width:800px}
@@ -206,7 +210,19 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 .join-url{font-size:14px;color:#9aa3d4;margin-top:14px;font-family:'Courier New',monospace}
 .lobby-joined{margin-top:20px;font-size:18px;color:var(--gold);letter-spacing:.15em}
 .lobby-joined .count{font-size:40px;font-weight:bold;display:inline-block;min-width:60px;text-align:center;margin:0 8px}
-.lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto}
+.lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto;flex-shrink:0}
+/* When the lobby has to scroll, Start Game stays pinned to the bottom edge. */
+#lobbyScreen.overflowing .controls{position:sticky;bottom:0;width:100%;padding:14px 0 12px;background:linear-gradient(to bottom, rgba(2,6,37,0), var(--navy-deep) 45%)}
+@media (max-height: 820px){
+  .overlay{gap:16px;padding:24px}
+  .overlay h1{font-size:clamp(26px,4vw,44px)}
+  .qr-wrap{padding:12px}
+  .qr-wrap img, .qr-wrap svg{width:200px;height:200px}
+  .join-code{font-size:64px}
+  .lobby-joined{margin-top:4px}
+  .lobby-joined .count{font-size:30px}
+  .lobby-players{max-height:120px}
+}
 .lobby-player-chip{background:rgba(244,196,48,.15);border:1px solid var(--gold-dim);color:var(--gold);padding:5px 12px;border-radius:14px;font-size:13px;animation:popIn .3s ease}
 @keyframes popIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
 
@@ -314,7 +330,7 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
   <h1 id="brandTitle">Omega Quiz</h1>
   <div class="tagline">Scan the QR code or visit the URL below to join</div>
   <div class="lobby-info">
-    <div class="qr-wrap"><img src="/qr" alt="Join QR" id="qrImg"></div>
+    <div class="qr-wrap"><img src="/qr" alt="QR code: scan to open the join page" id="qrImg"></div>
     <div class="join-details">
       <div class="join-code-label">Join Code</div>
       <div class="join-code" id="joinCode">----</div>
@@ -480,6 +496,8 @@ const REVEAL_HOLD_MS = 1400;
 let revealHoldTimer = null;
 let revealHeldFor = '';
 let lastQuestionKey = '';
+// Join code the QR image currently encodes (see the lobby render).
+let qrShownFor = '';
 let prevSurvivors = null;
 
 // Branding: fetch on load + on `branding:updated` push.
@@ -757,6 +775,13 @@ function updatePageTitle(s) {
 // Track previous phase so we can emit "phase-entered" sfx on the host
 // projector (the reveal whoosh, the end-game fanfare etc.).
 let prevPhase = null;
+// Pin Start Game to the bottom edge only while the lobby actually scrolls.
+function markLobbyOverflow(){
+  const lobby = document.getElementById('lobbyScreen');
+  lobby.classList.toggle('overflowing', lobby.scrollHeight > lobby.clientHeight + 1);
+}
+window.addEventListener('resize', markLobbyOverflow);
+
 function render(){
   if (!state) return;
   updatePageTitle(state);
@@ -806,6 +831,12 @@ function render(){
     document.getElementById('gameStage').style.display = 'none';
     document.getElementById('joinCode').textContent = state.joinCode;
     document.getElementById('joinUrl').textContent = location.origin + '/?code=' + state.joinCode;
+    // The QR is an image of the join URL. Reload it whenever the code changes
+    // (Reset game), or phones scanning the screen arrive with the old code.
+    if (state.joinCode && state.joinCode !== qrShownFor) {
+      qrShownFor = state.joinCode;
+      document.getElementById('qrImg').src = '/qr?c=' + encodeURIComponent(state.joinCode);
+    }
     document.getElementById('lobbyCount').textContent = state.playerCount;
     const chips = document.getElementById('lobbyPlayers');
     chips.innerHTML = '';
@@ -815,6 +846,7 @@ function render(){
       div.textContent = p.name;
       chips.appendChild(div);
     });
+    markLobbyOverflow();
     // Empty-bank guard — show a clear hint instead of letting the host hit a
     // dead-end Start button. The server also rejects start-game when empty.
     const startBtn = document.getElementById('startBtn');

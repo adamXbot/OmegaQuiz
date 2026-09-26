@@ -348,6 +348,13 @@ let playerId = localStorage.getItem('omegaquiz_pid') || null;
 let savedName = localStorage.getItem('omegaquiz_name') || '';
 let savedEmail = localStorage.getItem('omegaquiz_email') || '';
 let savedJoinCode = localStorage.getItem('omegaquiz_join_code') || '';
+// 'auto' while the page rejoins with its saved seat, 'manual' after the player
+// submits the form. A refused automatic rejoin means the saved seat is gone.
+let joinAttempt = null;
+// Set when another tab or device took this seat over (see player:replaced).
+let replacedElsewhere = false;
+let reconnectAttempt = 0;
+let reconnectTimer = null;
 let myState = null;
 let pendingAnswer = null;         // confirm-mode local selection (not sent until Lock In)
 let lastQuestionIndex = -1;       // resets pendingAnswer between questions
@@ -486,12 +493,20 @@ function applySessionClosedView() {
 applyBranding();
 
 function connect(){
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}`);
-  ws.onopen = () => {
+  const sock = new WebSocket(`${proto}//${location.host}`);
+  ws = sock;
+  // A socket this page has already replaced does nothing: its late close must
+  // not schedule another reconnect, and a 'player:replaced' sent to it is
+  // about this page's own newer socket, not another device.
+  sock.onopen = () => {
+    if (ws !== sock) return;
+    reconnectAttempt = 0;
     // Try reconnect first if we have a playerId
     if (playerId && savedName && savedEmail){
       const code = document.getElementById('joinCodeInput').value || urlCode || savedJoinCode || '';
+      joinAttempt = 'auto';
       ws.send(JSON.stringify({
         type: 'player:join',
         name: savedName, email: savedEmail,
@@ -499,9 +514,11 @@ function connect(){
       }));
     }
   };
-  ws.onmessage = e => {
+  sock.onmessage = e => {
+    if (ws !== sock) return;
     const msg = JSON.parse(e.data);
     if (msg.type === 'player:joined'){
+      joinAttempt = null;
       hideError();
       playerId = msg.playerId;
       localStorage.setItem('omegaquiz_pid', playerId);
@@ -516,7 +533,12 @@ function connect(){
       applySessionClosedView();
       render();
     } else if (msg.type === 'error'){
-      showError(msg.error, fieldsForServerError(msg.error));
+      handleJoinError(msg);
+    } else if (msg.type === 'player:replaced'){
+      replacedElsewhere = true;
+      showReplacedBanner();
+    } else if (msg.type === 'game:reset'){
+      leaveGame('The facilitator started a new game. Scan the QR code on the screen to join it.');
     } else if (msg.type === 'kicked'){
       localStorage.removeItem('omegaquiz_pid');
       alert('You were removed from the game' + (msg.reason ? ': ' + msg.reason : '.'));
@@ -548,14 +570,116 @@ function showShutdownBanner(text){
   b.textContent = text;
 }
 function clearShutdownBanner(){ const b = document.getElementById('shutdownBanner'); if (b) b.remove(); }
-  ws.onclose = () => {
+  sock.onclose = () => {
+    if (ws !== sock) return;
     // Skip reconnect after a final admin shutdown — the operator explicitly
     // ended the session, no point retrying.
-    if (finalShutdown) return;
-    setTimeout(connect, 1500);
+    if (finalShutdown || replacedElsewhere) return;
+    scheduleReconnect();
   };
 }
 connect();
+
+/* =====================
+   RECONNECT + REJOIN
+   ===================== */
+// Reconnect quickly after a blip, but spread out: after a restart every phone
+// in the room used to come back in the same 1.5 s tick.
+function scheduleReconnect(){
+  if (reconnectTimer) return;
+  const base = Math.min(8000, 1000 * Math.pow(1.5, reconnectAttempt));
+  reconnectAttempt++;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, Math.round(base * (0.5 + Math.random() * 0.5)));
+}
+// Back on screen (phone unlocked, browser in front again, network back):
+// reconnect now rather than waiting out the timer.
+function reconnectIfDropped(){
+  if (finalShutdown || replacedElsewhere) return;
+  reconnectAttempt = 0;
+  // Open or opening: nothing to do. Closing: its close handler reconnects.
+  if (ws && ws.readyState !== WebSocket.CLOSED) return;
+  connect();
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reconnectIfDropped(); });
+window.addEventListener('pageshow', e => { if (e.persisted) reconnectIfDropped(); });
+window.addEventListener('online', reconnectIfDropped);
+
+// Forget this phone's seat, and with `code` the join code it came with, so the
+// next attempt doesn't present them again. A stale code also counts against
+// the whole room's join limit each time it is sent.
+function forgetSeat({ code = false } = {}){
+  playerId = null;
+  try { localStorage.removeItem('omegaquiz_pid'); } catch {}
+  if (!code) return;
+  const stale = savedJoinCode;
+  savedJoinCode = '';
+  try { localStorage.removeItem('omegaquiz_join_code'); } catch {}
+  const input = document.getElementById('joinCodeInput');
+  if (!input.value || input.value === stale) input.value = (urlCode && urlCode !== stale) ? urlCode : '';
+}
+// Back to the join form with a message, dropping what the phone showed of the
+// old game.
+function showJoinForm(message, fields){
+  myState = null;
+  pendingAnswer = null;
+  lastQuestionIndex = -1;
+  lastRenderedPhase = null;
+  lastQuestionKey = '';
+  updatePageTitle(null);
+  setView('joinView');
+  showError(message, fields);
+}
+// A refused join or rejoin. The message belongs on the join form, so the form
+// comes back if the phone was showing the lobby or a question: a refused
+// rejoin used to write to the hidden form while the phone sat frozen on its
+// last screen. A refused automatic rejoin means the server no longer knows
+// this phone's seat, so it is forgotten.
+function handleJoinError(msg){
+  const wasAuto = joinAttempt === 'auto';
+  joinAttempt = null;
+  const codeEl = JOIN_FIELDS[0];
+  if (!wasAuto) { showJoinForm(msg.error, fieldsForServerError(msg.error)); return; }
+  if (msg.code === 'wrong-code') {
+    forgetSeat({ code: true });
+    showJoinForm('That game has finished. Scan the QR code on the screen to join the current one.', [codeEl]);
+  } else if (msg.code === 'game-started') {
+    forgetSeat();
+    showJoinForm('This game started without you, so it is closed to new players. Ask the facilitator if you should be in it.', []);
+  } else {
+    forgetSeat();
+    showJoinForm(msg.error, fieldsForServerError(msg.error));
+  }
+}
+// The facilitator reset the game: this phone's seat and code are gone.
+function leaveGame(message){
+  joinAttempt = null;
+  forgetSeat({ code: true });
+  showJoinForm(message, [JOIN_FIELDS[0]]);
+}
+// Another tab or device took this seat (the same person opened the quiz
+// twice). Stop reconnecting, or the two would take the seat back and forth,
+// and offer to move the game back here.
+function showReplacedBanner(){
+  let b = document.getElementById('replacedBanner');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'replacedBanner';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    b.style.cssText = 'position:fixed;top:10px;left:10px;right:10px;background:rgba(2,6,37,.96);border:1px solid var(--gold);color:#fff;padding:12px 16px;border-radius:10px;z-index:120;font-size:14px;text-align:center;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;box-shadow:0 4px 14px rgba(0,0,0,.45)';
+    document.body.appendChild(b);
+  }
+  b.textContent = '';
+  const text = document.createElement('span');
+  text.textContent = 'This game is now open in another tab or on another device.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn';
+  btn.textContent = 'Play here instead';
+  btn.style.cssText = 'width:auto;margin:0;padding:8px 16px';
+  btn.addEventListener('click', () => { replacedElsewhere = false; b.remove(); reconnectAttempt = 0; connect(); });
+  b.append(text, btn);
+}
 
 /* =====================
    JOIN
@@ -581,11 +705,21 @@ document.getElementById('joinForm').addEventListener('submit', e => {
     showError('Please enter a valid email.', [emailEl]);
     return;
   }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showError('Still connecting to the game. Try again in a moment.', []);
+    return;
+  }
   hideError();
   localStorage.setItem('omegaquiz_name', name);
   localStorage.setItem('omegaquiz_email', email);
+  // Keep the in-memory copies in step. The automatic rejoin after a dropped
+  // connection reads these, and they were only ever set at page load, so a
+  // first-time player's phone never rejoined without a reload.
+  savedName = name;
+  savedEmail = email;
   savedJoinCode = code;
   localStorage.setItem('omegaquiz_join_code', code);
+  joinAttempt = 'manual';
   ws.send(JSON.stringify({ type: 'player:join', name, email, joinCode: code }));
 });
 

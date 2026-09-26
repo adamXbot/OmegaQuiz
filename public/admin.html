@@ -1272,7 +1272,7 @@ function renderSnapshot() {
   document.getElementById('snapAnswered').textContent = `${state.answeredCount} / ${state.aliveCount}`;
   const legend = document.getElementById('playerRosterLegend');
   if (legend) {
-    legend.textContent = `Online · Disconnected (reconnectable for ${formatDuration(getReconnectWindowMs())}) · Offline (left/expired) · History cells: correct, wrong, timeout`;
+    legend.textContent = `Online · Disconnected (dropped in the last ${formatDuration(getReconnectWindowMs())}) · Offline (away longer; their phone can still rejoin) · History cells: correct, wrong, timeout`;
   }
 }
 
@@ -1327,7 +1327,6 @@ function renderPlayers() {
       <td>${currentLetter}</td>
       <td class="actions">
         <button class="btn small" data-pid="${p.id}" data-act="toggle">${p.alive ? 'Eliminate' : 'Revive'}</button>
-        ${isDisc ? `<button class="btn small ghost" data-pid="${p.id}" data-act="extend" title="Reset reconnect timer">Extend</button>` : ''}
         <button class="btn small danger" data-pid="${p.id}" data-act="kick">Kick</button>
       </td>
     `;
@@ -1347,9 +1346,6 @@ function renderPlayers() {
         confirmAction(`Kick ${player.name}?`, `This will disconnect and remove them from the game. Their answer history will be lost.`, () => {
           adminAction('player:kick', { playerId: pid });
         });
-      } else if (act === 'extend') {
-        adminAction('player:force-reconnect-window', { playerId: pid });
-        showBanner('info', `Reconnect window reset for ${player.name}. They have about ${formatDuration(getReconnectWindowMs())} to rejoin.`);
       }
     };
   });
