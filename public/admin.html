@@ -480,6 +480,16 @@ body{
               style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
           </div>
           <div style="grid-column:1 / -1">
+            <label class="lesson-label" for="brandingQuizTitleInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Quiz title</label>
+            <input type="text" id="brandingQuizTitleInput" maxlength="80" placeholder="Omega Quiz"
+              style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
+            <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.5">
+              Shown under the company name on the host board and the player screen, in browser tabs and on the
+              sign-in page. Leave it blank to show only the company name. Loading a sample pack replaces it with
+              the pack's title.
+            </div>
+          </div>
+          <div style="grid-column:1 / -1">
             <label class="lesson-label" for="brandingTaglineInput" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Tagline (optional)</label>
             <input type="text" id="brandingTaglineInput" maxlength="120" placeholder="e.g. All Staff Cybersecurity Training"
               style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px">
@@ -493,6 +503,18 @@ body{
             <div>
               <label class="lesson-label" for="brandingClosedCtaUrl" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">Session-closed CTA — URL <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— https://, http:// or mailto:. Leave both blank to hide the button.</span></label>
               <input type="text" id="brandingClosedCtaUrl" maxlength="500" placeholder="https://survey.example.com/post-session"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+          </div>
+          <div style="grid-column:1 / -1;display:grid;grid-template-columns:1fr 2fr;gap:12px">
+            <div>
+              <label class="lesson-label" for="brandingEndCtaLabel" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">End-of-game CTA — button label</label>
+              <input type="text" id="brandingEndCtaLabel" maxlength="60" placeholder="e.g. Book time with IT"
+                style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
+            </div>
+            <div>
+              <label class="lesson-label" for="brandingEndCtaUrl" style="color:var(--gray-text);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px;display:block">End-of-game CTA — URL <span class="muted" style="text-transform:none;letter-spacing:0;font-size:11px">— a button on every player's final screen, next to "Email me my results". https://, http:// or mailto:. Leave both blank to hide it.</span></label>
+              <input type="text" id="brandingEndCtaUrl" maxlength="500" placeholder="https://calendar.example.com/it-team"
                 style="width:100%;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;box-sizing:border-box">
             </div>
           </div>
@@ -550,7 +572,7 @@ body{
           <div class="muted" style="font-size:12px;margin-bottom:4px">Email placeholder players will see:</div>
           <div id="brandingPreview" style="font-family:'Courier New',monospace;color:var(--gold);font-size:14px">alex@company.com</div>
           <div class="muted" style="font-size:12px;margin-top:10px;margin-bottom:4px">Host screen title:</div>
-          <div id="brandingTitlePreview" style="color:var(--gold);font-family:Georgia,serif;font-size:18px">Who Wants to Be an OmegaQuiz Employee?</div>
+          <div id="brandingTitlePreview" style="color:var(--gold);font-family:Georgia,serif;font-size:18px">Omega Quiz</div>
           <div class="muted" style="font-size:12px;margin-top:10px;margin-bottom:4px">QR code &amp; magic-link base URL:</div>
           <div id="brandingUrlPreview" style="font-family:'Courier New',monospace;color:var(--gold);font-size:13px;word-break:break-all">http://localhost:3000</div>
         </div>
@@ -567,6 +589,22 @@ body{
             <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
               <input type="radio" name="brandingAnswerLockMode" value="confirm" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
               <span><strong>Lock-in confirmation</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Tap an option to highlight it, then tap "Lock In Answer" to commit. Reduces fat-finger mistakes.</span></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Presentation style: quiet vs dramatic transitions and sounds -->
+        <div class="panel" style="margin-top:18px">
+          <h2 style="margin-bottom:8px">Presentation</h2>
+          <p class="muted" style="font-size:12px;margin-bottom:10px">How much theatre the board and the phones put on. Sounds are synthesised on each device and always respect that device's own speaker toggle and reduced-motion setting.</p>
+          <div style="display:flex;gap:18px;flex-wrap:wrap">
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingPresentation" value="standard" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Standard</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Questions change instantly. Short cues on the board only, when its speaker is on. Phones stay silent.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="radio" name="brandingPresentation" value="dramatic" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Dramatic</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">A suspense sting and staged option reveal when a question lands, a drum-roll before the answer is shown, and tap / lock-in / result sounds with sweeping transitions on the phones (each phone gets a mute button).</span></span>
             </label>
           </div>
         </div>
@@ -1041,9 +1079,7 @@ document.getElementById('confirmCancelBtn').addEventListener('click', () => clos
    ===================== */
 // Tab title surfaces phase + key counts so multi-tab operators can scan.
 function updateAdminPageTitle() {
-  if (!state) { document.title = 'Omega Quiz Admin'; return; }
-  const company = (brandingDraft && brandingDraft.companyName) || '';
-  const quiz    = (brandingDraft && brandingDraft.quizTitle)   || 'Omega Quiz';
+  if (!state) { document.title = adminBrandLabel() + ' (Admin)'; return; }
   let prefix = '';
   if (state.phase === 'lobby') {
     prefix = state.totalQuestions === 0
@@ -1058,7 +1094,7 @@ function updateAdminPageTitle() {
   } else if (state.phase === 'end') {
     prefix = 'Game over — ';
   }
-  const tail = (company ? company + ' ' : '') + quiz + ' (Admin)';
+  const tail = adminBrandLabel() + ' (Admin)';
   document.title = prefix + tail;
 }
 
@@ -1236,7 +1272,7 @@ function renderSnapshot() {
   document.getElementById('snapAnswered').textContent = `${state.answeredCount} / ${state.aliveCount}`;
   const legend = document.getElementById('playerRosterLegend');
   if (legend) {
-    legend.textContent = `Online · Disconnected (reconnectable for ${formatDuration(getReconnectWindowMs())}) · Offline (left/expired) · History cells: correct, wrong, timeout`;
+    legend.textContent = `Online · Disconnected (dropped in the last ${formatDuration(getReconnectWindowMs())}) · Offline (away longer; their phone can still rejoin) · History cells: correct, wrong, timeout`;
   }
 }
 
@@ -1291,7 +1327,6 @@ function renderPlayers() {
       <td>${currentLetter}</td>
       <td class="actions">
         <button class="btn small" data-pid="${p.id}" data-act="toggle">${p.alive ? 'Eliminate' : 'Revive'}</button>
-        ${isDisc ? `<button class="btn small ghost" data-pid="${p.id}" data-act="extend" title="Reset reconnect timer">Extend</button>` : ''}
         <button class="btn small danger" data-pid="${p.id}" data-act="kick">Kick</button>
       </td>
     `;
@@ -1311,9 +1346,6 @@ function renderPlayers() {
         confirmAction(`Kick ${player.name}?`, `This will disconnect and remove them from the game. Their answer history will be lost.`, () => {
           adminAction('player:kick', { playerId: pid });
         });
-      } else if (act === 'extend') {
-        adminAction('player:force-reconnect-window', { playerId: pid });
-        showBanner('info', `Reconnect window reset for ${player.name}. They have about ${formatDuration(getReconnectWindowMs())} to rejoin.`);
       }
     };
   });
@@ -1833,6 +1865,34 @@ let brandingDraft = {
   publicBaseUrl:'', quizTitle:'Omega Quiz', quizCategory:'cyber',
   levelStyle:'money', theme: { ...THEME_DEFAULTS }
 };
+// Plain text of a sanitised branding string (entities decoded, tags dropped)
+// for the tab title and the top bar.
+function brandText(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
+}
+// "Company — Quiz title", or whichever of the two is set; never empty.
+function adminBrandLabel() {
+  const b = brandingDraft || {};
+  return [brandText(b.companyName), brandText(b.quizTitle)].filter(Boolean).join(' — ') || 'Omega Quiz';
+}
+function applyAdminBrandChrome() {
+  const el = document.querySelector('.topbar .brand-title');
+  if (el) el.textContent = adminBrandLabel() + ' · Admin';
+  updateAdminPageTitle();
+}
+// Brand the admin chrome as soon as the page loads. The Branding tab still
+// lazy-loads the full form on first open (and re-fetches then).
+(async function brandAdminChromeOnLoad() {
+  try {
+    const r = await fetch('/branding.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    brandingDraft = await r.json();
+    if (!brandingDraft.theme) brandingDraft.theme = { ...THEME_DEFAULTS };
+    applyAdminBrandChrome();
+  } catch {}
+})();
 function applyTheme(theme){
   if (!theme || typeof theme !== 'object') return;
   for (const [k, v] of Object.entries(theme)) {
@@ -1859,6 +1919,7 @@ function populateBrandingForm(){
   document.getElementById('brandingNameInput').value = brandingDraft.companyName || '';
   document.getElementById('brandingDomainInput').value = brandingDraft.companyDomain || '';
   document.getElementById('brandingTaglineInput').value = brandingDraft.tagline || '';
+  document.getElementById('brandingQuizTitleInput').value = brandingDraft.quizTitle || '';
   document.getElementById('brandingConsentInput').value = brandingDraft.consentText == null ? '' : brandingDraft.consentText;
   document.getElementById('brandingPublicUrlInput').value = brandingDraft.publicBaseUrl || '';
   document.getElementById('brandingRestrictInput').checked = !!brandingDraft.restrictDomain;
@@ -1879,6 +1940,13 @@ function populateBrandingForm(){
   const ctaUrlEl = document.getElementById('brandingClosedCtaUrl');
   if (ctaLabelEl) ctaLabelEl.value = brandingDraft.closedSessionCtaLabel || '';
   if (ctaUrlEl) ctaUrlEl.value = brandingDraft.closedSessionCtaUrl || '';
+  // End-of-game CTA + presentation style.
+  const endCtaLabelEl = document.getElementById('brandingEndCtaLabel');
+  const endCtaUrlEl = document.getElementById('brandingEndCtaUrl');
+  if (endCtaLabelEl) endCtaLabelEl.value = brandingDraft.endGameCtaLabel || '';
+  if (endCtaUrlEl) endCtaUrlEl.value = brandingDraft.endGameCtaUrl || '';
+  const presMode = brandingDraft.presentationStyle === 'dramatic' ? 'dramatic' : 'standard';
+  document.getElementsByName('brandingPresentation').forEach(r => { r.checked = (r.value === presMode); });
   // Session Control badge + button visibility.
   const closed = !!brandingDraft.sessionClosed;
   const badge = document.getElementById('sessionStatusBadge');
@@ -1918,7 +1986,8 @@ function refreshBrandingPreview(){
   const domain = document.getElementById('brandingDomainInput').value.trim().toLowerCase().replace(/^@/, '');
   document.getElementById('brandingPreview').textContent = 'alex@' + (domain || 'company.com');
   const name = document.getElementById('brandingNameInput').value.trim();
-  document.getElementById('brandingTitlePreview').textContent = name ? (name + ' Omega Quiz') : 'Who Wants to Be an OmegaQuiz Employee?';
+  const quizTitle = document.getElementById('brandingQuizTitleInput').value.trim();
+  document.getElementById('brandingTitlePreview').textContent = [name, quizTitle].filter(Boolean).join(' — ') || 'Omega Quiz';
   let urlPreview = document.getElementById('brandingPublicUrlInput').value.trim();
   if (urlPreview && !/^https?:\/\//i.test(urlPreview)) {
     // Mirror the server's protocol heuristic so the preview matches reality.
@@ -1938,7 +2007,7 @@ function refreshBrandingPreview(){
     src.textContent = 'Active source: PUBLIC_BASE_URL env var, or the request Host header if unset.';
   }
 }
-['brandingNameInput','brandingDomainInput','brandingTaglineInput','brandingPublicUrlInput'].forEach(id => {
+['brandingNameInput','brandingQuizTitleInput','brandingDomainInput','brandingTaglineInput','brandingPublicUrlInput'].forEach(id => {
   document.getElementById(id).addEventListener('input', refreshBrandingPreview);
 });
 document.getElementById('brandingRestrictInput').addEventListener('change', () => {
@@ -1973,6 +2042,7 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
   const levelStyleEl = document.querySelector('input[name="brandingLevelStyle"]:checked');
   const lockModeEl = document.querySelector('input[name="brandingAnswerLockMode"]:checked');
   const refillEl = document.querySelector('input[name="brandingLifelineRefill"]:checked');
+  const presEl = document.querySelector('input[name="brandingPresentation"]:checked');
   const next = {
     companyName: document.getElementById('brandingNameInput').value,
     companyDomain: document.getElementById('brandingDomainInput').value,
@@ -1986,10 +2056,13 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
     levelStyle: levelStyleEl ? levelStyleEl.value : 'money',
     answerLockMode: lockModeEl ? lockModeEl.value : 'quick',
     lifelineRefill: refillEl ? refillEl.value : 'never',
-    quizTitle: brandingDraft.quizTitle || 'Omega Quiz',
+    quizTitle: document.getElementById('brandingQuizTitleInput').value,
     quizCategory: brandingDraft.quizCategory || 'cyber',
     closedSessionCtaLabel: document.getElementById('brandingClosedCtaLabel').value,
     closedSessionCtaUrl: document.getElementById('brandingClosedCtaUrl').value,
+    endGameCtaLabel: document.getElementById('brandingEndCtaLabel').value,
+    endGameCtaUrl: document.getElementById('brandingEndCtaUrl').value,
+    presentationStyle: presEl ? presEl.value : 'standard',
     theme: brandingDraft.theme
   };
   adminAction('branding:update', { branding: next });
@@ -2138,6 +2211,7 @@ function bindBrandingMessages(){
       if (m.type === 'branding:saved') {
         brandingDraft = m.branding;
         populateBrandingForm();
+        applyAdminBrandChrome();
         showBanner('success', 'Branding saved.');
       }
     } catch {}

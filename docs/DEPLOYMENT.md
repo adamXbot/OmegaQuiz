@@ -187,7 +187,7 @@ Magic links printed by `links` or the boot banner are single-use and expire afte
 In the admin tab:
 
 - **Questions tab → Browse sample packs** loads a curated phishing / nature / pop-culture pack. Or **Import CSV / JSON** for your own bank — download the CSV template first, or download one of the [`samples/*.json`](../samples) packs from GitHub and import it as-is.
-- **Branding tab** — set company name, email domain (with optional join restriction), logo, tagline, and the **Privacy notice** that appears on the player join screen.
+- **Branding tab** — set company name, quiz title (the second line of the host board; leave it blank to show only the company name), email domain (with optional join restriction), logo, tagline, the **Privacy notice** that appears on the player join screen, an optional **end-of-game call to action** (e.g. "Book time with IT"), and the **presentation style** (standard or dramatic).
 - The Privacy notice ships with an Australian-Privacy-Act–compatible default. **Rewrite it for your jurisdiction** before sharing the join URL publicly.
 
 ---
@@ -232,8 +232,8 @@ Treat this like a pop-up shop, not a permanent storefront.
 | Boot banner appears but `Public URL` is `http://localhost:3000` | `PUBLIC_BASE_URL` not set. | Add `PUBLIC_BASE_URL=https://your-domain.example.com` as a platform env var, or set it via admin → Branding → Public server URL. Then the QR code and magic links will use the right host. |
 | Magic link returns `error=1` on click | Token already used / expired (10-min TTL) / server restarted since the boot banner. | Use the recovery URL — `/auth/login?role=admin` + your `ADMIN_TOKEN` — or mint a fresh link on the server: `fly ssh console -C "node /app/server.js links"` (see [Keys](#keys--lost-expired-or-compromised)). |
 | `/health` returns 503 | Server is mid-shutdown. | Wait 30s, retry. If it persists, check logs for `uncaughtException` or `unhandledRejection`. |
-| Player phones show "Wrong join code" but the code on the projector matches | A reset-game rotated the join code. Players need the QR or 6-digit code that's currently on the projector. | — |
-| Player phones show "Too many join attempts from this network" | Rate-limit guard kicked in (8 wrong codes / 60s from one IP, 5-minute cooldown). | Wait 5 minutes. If a corporate NAT puts everyone on one IP, expect this when a lot of players type the code wrong simultaneously — bump the rate-limit constants in `server.js` for high-NAT environments. |
+| Player phones show "Wrong join code" but the code on the projector matches | A reset-game rotated the join code while that phone was offline. Connected phones are sent back to the join form on a reset, and the host board reloads its QR when the code changes. | Scan the QR that's currently on the projector. A restart keeps the code (`DATA_DIR/game.json`). |
+| Player phones show "Too many join attempts from this network" | Rate-limit guard kicked in (30 wrong codes / 60 s from one IP by default, 5-minute cooldown). Everyone behind one office NAT shares the budget. | Phones on mobile data are unaffected; otherwise wait 5 minutes. Raise `JOIN_FAILURE_MAX` for very large rooms on one network. Phones rejoining their own seat are never blocked. |
 | Behind Cloudflare: scripts blocked, page broken | Cloudflare Rocket Loader injected a script the CSP refuses. | Cloudflare dashboard → Speed → Optimization → turn **Rocket Loader** off for this hostname. |
 | Behind Cloudflare: WebSocket disconnects every 100s | Cloudflare default WS idle timeout. | Players will auto-reconnect; the host/admin pages now do too. Or upgrade to a Cloudflare plan with higher limits. |
 | First boot: data/questions.json missing | Expected — a fresh deploy boots with an empty bank. | Admin → Questions tab → Browse sample packs or Import CSV / JSON. |

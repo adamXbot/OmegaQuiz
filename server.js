@@ -543,10 +543,26 @@ function logEvent(type, msg, meta) {
 }
 
 // --- Game state ---
-function newGame() {
+// The join code survives a restart. It is kept in DATA_DIR/game.json and read
+// back at boot, so a crash, deploy or Fly host move mid-session no longer
+// leaves every phone holding a code that is suddenly wrong: their automatic
+// rejoin lands them in the fresh lobby instead of tripping the join limiter
+// for the whole room. Reset game still issues a new code (A01-6).
+const GAME_STATE_PATH = path.join(DATA_DIR, 'game.json');
+function loadPersistedJoinCode() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(GAME_STATE_PATH, 'utf8'));
+    return saved && typeof saved.joinCode === 'string' && /^\d{6}$/.test(saved.joinCode) ? saved.joinCode : null;
+  } catch { return null; } // no file yet is the normal first-boot case
+}
+function persistJoinCode(joinCode) {
+  try { writePrivateJson(GAME_STATE_PATH, { joinCode, savedAt: new Date().toISOString() }); }
+  catch (e) { logJson('warn', 'game.join-code.save-failed', { error: e.message }); }
+}
+function newGame({ joinCode } = {}) {
   return {
     phase: 'lobby',                 // lobby | question | reveal | bonus | end
-    joinCode: String(crypto.randomInt(100000, 1000000)),
+    joinCode: joinCode || String(crypto.randomInt(100000, 1000000)),
     questionIndex: 0,
     bonusIndex: 0,
     inBonus: false,
@@ -566,8 +582,28 @@ function newGame() {
     audienceTally: null
   };
 }
-let game = newGame();
+let game = newGame({ joinCode: CLI.command ? null : loadPersistedJoinCode() });
+if (!CLI.command) persistJoinCode(game.joinCode);
 
+// A new game with a new join code (Reset game). Phones still connected to the
+// old game are told so and detached from it: they go back to the join form
+// and forget the old code, instead of freezing on the last screen they saw
+// and later rejoining with a code that no longer works.
+function startNewGame() {
+  game.players.forEach(p => {
+    const s = p.ws;
+    if (!s) return;
+    s.role = null;
+    s.playerId = null;
+    if (s.readyState === 1) { try { s.send(JSON.stringify({ type: 'game:reset' })); } catch {} }
+  });
+  game = newGame();
+  persistJoinCode(game.joinCode);
+}
+
+// How long Admin lists a dropped player as Disconnected (likely to be back)
+// before Offline. It no longer limits rejoining: a phone that kept its saved
+// seat can rejoin at any time (see handlePlayerJoin).
 const DEFAULT_PLAYER_RECONNECT_WINDOW_SECONDS = 300;
 const MIN_PLAYER_RECONNECT_WINDOW_SECONDS = 30;
 const MAX_PLAYER_RECONNECT_WINDOW_SECONDS = 900;
@@ -596,7 +632,7 @@ function scheduleReconnectExpiryPush(playerId) {
     if (cur.disconnectedAt && (Date.now() - cur.disconnectedAt) >= PLAYER_RECONNECT_WINDOW_MS && !cur.ws) {
       logEvent('disconnect-final', `${cur.name} reconnect window expired`, { playerId: cur.id });
     }
-    pushAll();
+    pushRosterChange();
   }, PLAYER_RECONNECT_WINDOW_MS + 500);
   timer.unref?.();
 }
@@ -1183,6 +1219,14 @@ const DEFAULT_BRANDING = {
   // post-session survey or follow-up training. Empty disables the button.
   closedSessionCtaLabel: '',
   closedSessionCtaUrl: '',
+  // Optional call to action on every player's end-of-game screen, next to
+  // "Email me my results" — e.g. "Book time with IT". Empty disables it.
+  endGameCtaLabel: '',
+  endGameCtaUrl: '',
+  // 'standard' keeps transitions quiet. 'dramatic' adds a suspense sting and
+  // staged reveal when a question lands on the board, a drum-roll before the
+  // answer, and tap sounds plus richer transitions on the phones.
+  presentationStyle: 'standard',
   theme: { ...DEFAULT_THEME }
 };
 
@@ -1286,6 +1330,10 @@ function brandingFromEnv() {
   // data/config.json exists, same precedence as the other branding fields.
   setStr('closedSessionCtaLabel', e.CLOSED_SESSION_CTA_LABEL);
   setStr('closedSessionCtaUrl',   e.CLOSED_SESSION_CTA_URL);
+  // End-of-game CTA on every player's final screen, and the presentation style.
+  setStr('endGameCtaLabel', e.END_GAME_CTA_LABEL);
+  setStr('endGameCtaUrl',   e.END_GAME_CTA_URL);
+  if (e.PRESENTATION_STYLE === 'standard' || e.PRESENTATION_STYLE === 'dramatic') out.presentationStyle = e.PRESENTATION_STYLE;
 
   // Theme overrides — one env var per CSS variable, validated against the
   // same hex regex the admin form uses so bad values fall through to defaults.
@@ -1431,35 +1479,53 @@ function validateBranding(raw, { tolerant = false } = {}) {
     out.sessionClosed = !!raw.sessionClosed;
   }
 
-  // closedSessionCtaLabel: 0–60 chars, plain text after sanitisation.
-  if (typeof raw.closedSessionCtaLabel === 'string') {
-    out.closedSessionCtaLabel = sanitizeQuestionHtml(raw.closedSessionCtaLabel.trim().slice(0, 60));
-  } else if (!tolerant && raw.closedSessionCtaLabel !== undefined) {
-    throw new Error('closedSessionCtaLabel must be a string');
-  }
-
-  // closedSessionCtaUrl: must be http(s) or mailto:, max 500 chars. Empty allowed.
-  if (typeof raw.closedSessionCtaUrl === 'string') {
-    const v = raw.closedSessionCtaUrl.trim().slice(0, 500);
-    if (v === '') {
-      out.closedSessionCtaUrl = '';
-    } else if (/^(https?:\/\/|mailto:)/i.test(v)) {
-      // Reject obvious XSS / control characters but otherwise let the URL through.
-      if (/[\x00-\x1f<>"`]/.test(v)) {
-        if (!tolerant) throw new Error('closedSessionCtaUrl contains invalid characters');
-      } else {
-        out.closedSessionCtaUrl = v;
-      }
-    } else if (!tolerant) {
-      throw new Error('closedSessionCtaUrl must start with https://, http://, or mailto:');
+  // Call-to-action pairs (label + URL): the "session ended" screen and the
+  // player's end-of-game screen. Label: 0–60 chars, plain text after
+  // sanitisation. URL: http(s) or mailto:, max 500 chars, empty allowed;
+  // obvious XSS / control characters are rejected.
+  for (const [labelKey, urlKey] of [['closedSessionCtaLabel', 'closedSessionCtaUrl'], ['endGameCtaLabel', 'endGameCtaUrl']]) {
+    if (typeof raw[labelKey] === 'string') {
+      out[labelKey] = sanitizeQuestionHtml(raw[labelKey].trim().slice(0, 60));
+    } else if (!tolerant && raw[labelKey] !== undefined) {
+      throw new Error(`${labelKey} must be a string`);
     }
-  } else if (!tolerant && raw.closedSessionCtaUrl !== undefined) {
-    throw new Error('closedSessionCtaUrl must be a string');
+    if (typeof raw[urlKey] === 'string') {
+      const v = raw[urlKey].trim().slice(0, 500);
+      if (v === '') {
+        out[urlKey] = '';
+      } else if (/^(https?:\/\/|mailto:)/i.test(v)) {
+        if (/[\x00-\x1f<>"`]/.test(v)) {
+          if (!tolerant) throw new Error(`${urlKey} contains invalid characters`);
+        } else {
+          out[urlKey] = v;
+        }
+      } else if (!tolerant) {
+        throw new Error(`${urlKey} must start with https://, http://, or mailto:`);
+      }
+    } else if (!tolerant && raw[urlKey] !== undefined) {
+      throw new Error(`${urlKey} must be a string`);
+    }
   }
 
-  // quizTitle: trimmed string, max 80 chars, HTML-escaped via the question sanitiser
+  // presentationStyle: 'standard' or 'dramatic'. Anything else keeps the
+  // default when tolerant and is rejected from the admin form.
+  if (typeof raw.presentationStyle === 'string') {
+    if (raw.presentationStyle === 'standard' || raw.presentationStyle === 'dramatic') {
+      out.presentationStyle = raw.presentationStyle;
+    } else if (!tolerant) {
+      throw new Error('presentationStyle must be "standard" or "dramatic"');
+    }
+  } else if (!tolerant && raw.presentationStyle !== undefined) {
+    throw new Error('presentationStyle must be a string');
+  }
+
+  // quizTitle: trimmed string, max 80 chars, HTML-escaped via the question
+  // sanitiser. Blank is allowed once a company name exists — the host board
+  // and player screen then show the organisation alone. With no company name
+  // either, fall back to the product name so no page renders an empty heading.
   if (typeof raw.quizTitle === 'string') {
-    out.quizTitle = sanitizeQuestionHtml(raw.quizTitle.trim().slice(0, 80)) || DEFAULT_BRANDING.quizTitle;
+    const title = sanitizeQuestionHtml(raw.quizTitle.trim().slice(0, 80));
+    out.quizTitle = title || (out.companyName ? '' : DEFAULT_BRANDING.quizTitle);
   } else if (!tolerant && raw.quizTitle !== undefined) {
     throw new Error('quizTitle must be a string');
   }
@@ -1797,7 +1863,19 @@ function clearLoginFailures(ip) { loginFailures.delete(ip); }
 // --- WebSocket player:join rate limiter (A01-6 follow-up) ---
 // Six-digit join code + per-client throttling keeps public joining practical
 // without trusting spoofable proxy headers from direct-to-origin traffic.
-const JOIN_FAILURE_MAX = 8;
+// The limit counts wrong codes per public address, and an office on one
+// Wi-Fi shares a single address: at 8, a handful of typos or stale saved
+// codes shut every phone in the room out for five minutes. 30 a minute
+// (JOIN_FAILURE_MAX to change it) still holds a brute-forcer to a few hundred
+// of the 900,000 codes per address per hour, and a phone rejoining with its
+// saved seat never reaches this check.
+function parseJoinFailureMax(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 30;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 30;
+  return Math.max(3, Math.min(500, Math.round(n)));
+}
+const JOIN_FAILURE_MAX = parseJoinFailureMax(process.env.JOIN_FAILURE_MAX);
 const JOIN_BLOCK_MS    = 5 * 60 * 1000;
 const JOIN_WINDOW_MS   = 60 * 1000;
 const joinFailures = new Map(); // ip -> { count, firstAt, blockedUntil }
@@ -2179,65 +2257,78 @@ function pushHostState() {
         lesson: game.phase === 'reveal' ? q.lesson : null
       } : null
     }
-  }, c => c.role === 'host');
+    // Every socket that announced itself as the host screen (host or admin
+    // session), plus host-role sockets that never said hello — the latter is
+    // the pre-existing behaviour, kept for older harnesses.
+  }, c => c.screen === 'host' || c.role === 'host');
 }
 
-function pushPlayerStates() {
-  const isEnd = game.phase === 'end';
-  // Build the post-game review payload once per push, not per player.
-  // Only emitted when phase === 'end' so we don't bloat every state push.
-  const review = isEnd ? {
+// The post-game review (every question with its answer). Only sent once the
+// game has ended, so it never bloats a mid-game push.
+function buildReview() {
+  return {
     main:  questions.map(qq => ({ q: qq.q, options: qq.options, correct: qq.correct, lesson: qq.lesson, image: qq.image || '' })),
     bonus: bonusQuestions.map(qq => ({ q: qq.q, options: qq.options, correct: qq.correct, lesson: qq.lesson, image: qq.image || '' }))
-  } : null;
+  };
+}
+function playerStateMessage(p, review) {
+  const q = currentQuestion();
+  const myAnswer = game.currentAnswers.get(p.id);
+  // history is built incrementally by close-question; expose to the player
+  // so the "running correct" badge and post-game review have data to render.
+  const history = p.history || [];
+  const correctCount = history.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
+  const answeredCount = history.reduce((n, h) => n + (h.answer != null ? 1 : 0), 0);
+  return JSON.stringify({
+    type: 'player:state',
+    state: {
+      phase: game.phase,
+      you: {
+        name: p.name, alive: p.alive,
+        score: p.answeredScore,
+        // Total questions the player got right across the whole game,
+        // including ones they answered after being eliminated (engagement mode).
+        correctCount,
+        answeredCount,
+        // Per-question record so the player can review at the end.
+        history,
+        answered: myAnswer != null,
+        myAnswer: myAnswer != null ? myAnswer : null
+      },
+      joinCode: game.joinCode,
+      questionIndex: game.questionIndex,
+      inBonus: game.inBonus,
+      totalQuestions: questions.length,
+      question: q ? {
+        q: q.q,
+        options: q.options,
+        image: q.image || '',
+        imageAlt: q.imageAlt || '',
+        eliminatedOptions: game.eliminatedOptions,
+        revealedCorrect: game.phase === 'reveal' ? q.correct : null,
+        audienceTally: game.phase === 'reveal' ? game.audienceTally : null
+      } : null,
+      lifelineActive: game.lifelineActive ? {
+        type: game.lifelineActive.type,
+        alreadyVoted: game.lifelineActive.votes.has(p.id)
+      } : null,
+      lifelineUsed: lifelinesAllUsed(),
+      lifelinesUsed: { ...game.lifelinesUsed },
+      review
+    }
+  });
+}
+function pushPlayerStates() {
+  // Build the review once per push, not per player.
+  const review = game.phase === 'end' ? buildReview() : null;
   game.players.forEach(p => {
     if (!p.ws || p.ws.readyState !== 1) return;
-    const q = currentQuestion();
-    const myAnswer = game.currentAnswers.get(p.id);
-    // history is built incrementally by close-question; expose to the player
-    // so the "running correct" badge and post-game review have data to render.
-    const history = p.history || [];
-    const correctCount = history.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
-    const answeredCount = history.reduce((n, h) => n + (h.answer != null ? 1 : 0), 0);
-    p.ws.send(JSON.stringify({
-      type: 'player:state',
-      state: {
-        phase: game.phase,
-        you: {
-          name: p.name, alive: p.alive,
-          score: p.answeredScore,
-          // Total questions the player got right across the whole game,
-          // including ones they answered after being eliminated (engagement mode).
-          correctCount,
-          answeredCount,
-          // Per-question record so the player can review at the end.
-          history,
-          answered: myAnswer != null,
-          myAnswer: myAnswer != null ? myAnswer : null
-        },
-        joinCode: game.joinCode,
-        questionIndex: game.questionIndex,
-        inBonus: game.inBonus,
-        totalQuestions: questions.length,
-        question: q ? {
-          q: q.q,
-          options: q.options,
-          image: q.image || '',
-          imageAlt: q.imageAlt || '',
-          eliminatedOptions: game.eliminatedOptions,
-          revealedCorrect: game.phase === 'reveal' ? q.correct : null,
-          audienceTally: game.phase === 'reveal' ? game.audienceTally : null
-        } : null,
-        lifelineActive: game.lifelineActive ? {
-          type: game.lifelineActive.type,
-          alreadyVoted: game.lifelineActive.votes.has(p.id)
-        } : null,
-        lifelineUsed: lifelinesAllUsed(),
-        lifelinesUsed: { ...game.lifelinesUsed },
-        review
-      }
-    }));
+    p.ws.send(playerStateMessage(p, review));
   });
+}
+function pushPlayerState(p) {
+  if (!p || !p.ws || p.ws.readyState !== 1) return;
+  p.ws.send(playerStateMessage(p, game.phase === 'end' ? buildReview() : null));
 }
 
 function buildLiveAnswerTally() {
@@ -2318,6 +2409,15 @@ function pushAdminState() {
 }
 
 function pushAll() { pushHostState(); pushPlayerStates(); pushAdminState(); }
+// One player's own view changed (their answer, vote, join or return). The
+// board and admin need the new counts and that phone needs its own state; no
+// other phone's screen depends on it. Answering used to re-send every phone
+// its whole state, question image included: 80 phones meant 80 × 80 messages
+// a question, and a 256 MB machine ran out of memory buffering them for
+// phones on weak Wi-Fi once a 150 KB screenshot was in the question.
+function pushPlayerChange(p) { pushHostState(); pushPlayerState(p); pushAdminState(); }
+// Someone left: only the board and admin show it.
+function pushRosterChange() { pushHostState(); pushAdminState(); }
 
 function currentQuestion() {
   if (game.inBonus) return bonusQuestions[game.bonusIndex] || null;
@@ -2375,12 +2475,12 @@ function hostAction(action, payload = {}) {
         const remove = wrongs.sort(()=>Math.random()-0.5).slice(0,2);
         game.eliminatedOptions = remove;
       } else if (type === 'askit') {
-        // Filter to authenticated roles — unauthenticated WS connections (no
-        // join code, just an open socket) would otherwise learn the correct
-        // letter for every question where askit fires.
+        // The board shows the hint; phones have no use for it. Sending it to
+        // player sockets (or unauthenticated ones, before 1.1.1) put the
+        // correct letter in reach of anyone with browser developer tools.
         broadcast(
           { type: 'lifeline:askit', correctLetter: 'ABCD'[q.correct], hint: (q.lesson || '').split('.')[0] + '.' },
-          c => c.role === 'player' || c.role === 'host' || c.role === 'admin'
+          c => c.role === 'host' || c.role === 'admin'
         );
       } else if (type === 'skip') {
         game.phase = 'reveal';
@@ -2490,7 +2590,7 @@ function hostAction(action, payload = {}) {
     }
     case 'reset-game': {
       // A01-6: rotate the join code on reset so old links don't carry over.
-      game = newGame();
+      startNewGame();
       pushAll();
       break;
     }
@@ -2933,179 +3033,277 @@ wss.on('connection', (ws, req) => {
     logJson('warn', 'ws.socket-error', { ip: ws.clientIp, role: ws.role || null, error: err && err.message ? err.message : String(err) });
   });
 
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   ws.on('message', raw => {
-    // maxPayload is sized for admin question-bank uploads; nobody else has a
-    // legitimate message anywhere near it, so don't even parse one.
-    if (ws.role !== 'admin' && raw.length > NON_ADMIN_MAX_WS_MESSAGE_BYTES) {
-      logJson('warn', 'ws.message-too-large', { ip: ws.clientIp, role: ws.role || null, bytes: raw.length });
-      try { ws.close(1009, 'Message too large'); } catch {}
-      return;
-    }
-    let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
-
-    if (msg.type === 'host:hello') {
-      if (ws.role !== 'host' && ws.role !== 'admin') {
-        ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as host' }));
-        ws.close();
-        return;
-      }
-      pushHostState();
-      return;
-    }
-
-    if (msg.type === 'admin:hello') {
-      if (ws.role !== 'admin') {
-        ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as admin' }));
-        ws.close();
-        return;
-      }
-      ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus() }));
-      pushAdminState();
-      return;
-    }
-
-    if (msg.type === 'admin:action' && ws.role === 'admin') {
-      adminAction(msg.action, msg.payload || {}, ws);
-      return;
-    }
-
-    if (msg.type === 'host:action' && (ws.role === 'host' || ws.role === 'admin')) {
-      hostAction(msg.action, msg.payload || {});
-      return;
-    }
-
-    if (msg.type === 'player:join') {
-      const { name, email, joinCode, reconnectId } = msg;
-      const ip = ws.clientIp || 'unknown';
-      // S2: per-IP rate limit. Reject before doing any work — the 6-digit
-      // join code space is still brute-forceable in minutes without throttling.
-      if (isJoinBlocked(ip)) {
-        logJson('warn', 'player.join.rate-limited', { ip });
-        ws.send(JSON.stringify({ type: 'error', error: 'Too many join attempts from this network. Please wait a few minutes and try again.' }));
-        return;
-      }
-      // Session closed: reject new joins. Existing players reconnecting with
-      // a valid reconnectId fall through to the reconnect branch below — that's
-      // intentional so they can still view their results.
-      if (branding.sessionClosed && !(reconnectId && game.players.has(reconnectId))) {
-        ws.send(JSON.stringify({ type: 'error', error: 'This session has ended. Reach out to the facilitator if this is unexpected.' }));
-        return;
-      }
-      if (joinCode !== game.joinCode) {
-        recordJoinFailure(ip);
-        logEvent('auth-fail', `player:join rejected — wrong join code from ${ip}`);
-        logJson('warn', 'player.join.wrong-code', { ip });
-        ws.send(JSON.stringify({ type: 'error', error: 'Wrong join code' }));
-        return;
-      }
-      if (!name || !email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-        ws.send(JSON.stringify({ type: 'error', error: 'Name and a valid email are required' }));
-        return;
-      }
-      // Branding: optionally restrict joins to the configured company domain.
-      if (branding.restrictDomain && branding.companyDomain) {
-        const emailDomain = String(email).trim().toLowerCase().split('@')[1] || '';
-        if (emailDomain !== branding.companyDomain) {
-          ws.send(JSON.stringify({ type: 'error', error: `Please use your ${branding.companyDomain} email address.` }));
-          return;
-        }
-      }
-      // A01-5: reconnect only when supplied (name, email) match the stored player.
-      if (reconnectId && game.players.has(reconnectId)) {
-        const p = game.players.get(reconnectId);
-        const sameEmail = p.email.toLowerCase() === String(email).trim().toLowerCase();
-        const sameName  = p.name === String(name).trim().slice(0, 40);
-        if (sameEmail && sameName && isWithinReconnectWindow(p)) {
-          p.ws = ws;
-          p.disconnectedAt = null;
-          p.lastSeen = Date.now();
-          ws.role = 'player';
-          ws.playerId = p.id;
-          ws.send(JSON.stringify({ type: 'player:joined', playerId: p.id, name: p.name }));
-          logEvent('reconnect', `${p.name} reconnected`, { playerId: p.id });
-          pushAll();
-          return;
-        }
-      }
-      if (game.phase !== 'lobby') {
-        ws.send(JSON.stringify({ type: 'error', error: 'The game has already started — joining is closed.' }));
-        return;
-      }
-      const dup = [...game.players.values()].find(p => p.email.toLowerCase() === email.toLowerCase());
-      if (dup) {
-        ws.send(JSON.stringify({ type: 'error', error: 'That email is already registered for this game.' }));
-        return;
-      }
-      // A02-3: CSPRNG player id.
-      const id = 'p_' + crypto.randomBytes(12).toString('hex');
-      const player = {
-        id, name: name.trim().slice(0, 40), email: email.trim().toLowerCase(),
-        alive: true, answeredScore: 0, history: [], ws, disconnectedAt: null,
-        joinedAt: Date.now(), lastSeen: Date.now()
-      };
-      game.players.set(id, player);
-      ws.role = 'player';
-      ws.playerId = id;
-      // Successful join clears any prior rate-limit strikes for this IP.
-      clearJoinFailures(ip);
-      ws.send(JSON.stringify({ type: 'player:joined', playerId: id, name: player.name }));
-      logEvent('join', `${player.name} (${player.email}) joined`, { playerId: id });
-      pushAll();
-      return;
-    }
-
-    if (msg.type === 'player:answer' && ws.role === 'player') {
-      const p = game.players.get(ws.playerId);
-      // Eliminated players can submit only when the admin has enabled
-      // engagement mode. They never score or revive — their picks just
-      // appear in the audience tally.
-      if (!p || (!p.alive && !branding.eliminatedCanAnswer)) return;
-      if (game.phase !== 'question') return;
-      const idx = msg.answerIndex;
-      if (![0,1,2,3].includes(idx)) return;
-      if (game.eliminatedOptions.includes(idx)) return;
-      // Track "changes" — when the player overrides a previous answer with a
-      // different option on the same question.
-      if (game.currentAnswers.has(p.id) && game.currentAnswers.get(p.id) !== idx) {
-        game.changesThisQuestion++;
-        game.playersChangedThisQuestion.add(p.id);
-      }
-      game.currentAnswers.set(p.id, idx);
-      p.lastSeen = Date.now();
-      pushAll();
-      return;
-    }
-
-    if (msg.type === 'player:lifeline-vote' && ws.role === 'player') {
-      if (!game.lifelineActive) return;
-      const p = game.players.get(ws.playerId);
-      if (!p || !p.alive) return;
-      const t = msg.lifelineType;
-      if (!['5050','askit','skip'].includes(t)) return;
-      // Reject votes for lifelines that have already been spent this round —
-      // shouldn't happen if the client is well-behaved, but a malicious client
-      // could try to push a vote for an unavailable type to skew the tally.
-      if (game.lifelinesUsed && game.lifelinesUsed[t]) return;
-      game.lifelineActive.votes.set(p.id, t);
-      pushAll();
-      return;
+    ws.isAlive = true;
+    // One malformed or unexpected message must never end the game. An
+    // exception in here used to reach uncaughtException, which shuts the
+    // server down and drops every phone. Log it and keep going.
+    try {
+      handleWsMessage(ws, raw);
+    } catch (err) {
+      logJson('error', 'ws.handler-error', { ip: ws.clientIp, role: ws.role || null, error: err && err.message ? err.message : String(err) });
     }
   });
 
   ws.on('close', () => {
-    if (ws.role === 'player' && ws.playerId) {
-      const p = game.players.get(ws.playerId);
-      if (p) {
-        p.ws = null;
-        p.disconnectedAt = Date.now();
-        logEvent('disconnect', `${p.name} disconnected`, { playerId: p.id });
-        scheduleReconnectExpiryPush(p.id);
-        pushAll();
-      }
-    }
+    if (ws.role !== 'player' || !ws.playerId) return;
+    const p = game.players.get(ws.playerId);
+    // Only the seat's current connection counts. An older one that closes
+    // late, after the phone already came back on a new connection, must not
+    // mark the player offline and cut that phone off from updates.
+    if (!p || p.ws !== ws) return;
+    p.ws = null;
+    p.disconnectedAt = Date.now();
+    logEvent('disconnect', `${p.name} disconnected`, { playerId: p.id });
+    scheduleReconnectExpiryPush(p.id);
+    pushRosterChange();
   });
 });
+
+function handleWsMessage(ws, raw) {
+  // maxPayload is sized for admin question-bank uploads; nobody else has a
+  // legitimate message anywhere near it, so don't even parse one.
+  if (ws.role !== 'admin' && raw.length > NON_ADMIN_MAX_WS_MESSAGE_BYTES) {
+    logJson('warn', 'ws.message-too-large', { ip: ws.clientIp, role: ws.role || null, bytes: raw.length });
+    try { ws.close(1009, 'Message too large'); } catch {}
+    return;
+  }
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return; }
+  // Valid JSON is not necessarily an object: `null` used to throw on msg.type.
+  if (!msg || typeof msg !== 'object') return;
+
+  if (msg.type === 'host:hello') {
+    if (ws.role !== 'host' && ws.role !== 'admin') {
+      ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as host' }));
+      ws.close();
+      return;
+    }
+    // Subscribe this socket to host-state pushes by the screen it announced,
+    // not by its role: an admin session may open /host too (requireRole and
+    // /qr already allow it), and previously it loaded the page and the QR
+    // but never received host:state — dashes for the join code, a Start
+    // button that never enabled.
+    ws.screen = 'host';
+    pushHostState();
+    return;
+  }
+
+  if (msg.type === 'admin:hello') {
+    if (ws.role !== 'admin') {
+      ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as admin' }));
+      ws.close();
+      return;
+    }
+    ws.screen = 'admin';
+    ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus() }));
+    pushAdminState();
+    return;
+  }
+
+  if (msg.type === 'admin:action' && ws.role === 'admin') {
+    adminAction(msg.action, msg.payload || {}, ws);
+    return;
+  }
+
+  if (msg.type === 'host:action' && (ws.role === 'host' || ws.role === 'admin')) {
+    hostAction(msg.action, msg.payload || {});
+    return;
+  }
+
+  if (msg.type === 'player:join') {
+    handlePlayerJoin(ws, msg);
+    return;
+  }
+
+  if (msg.type === 'player:answer' && ws.role === 'player') {
+    const p = game.players.get(ws.playerId);
+    // Eliminated players can submit only when the admin has enabled
+    // engagement mode. They never score or revive — their picks just
+    // appear in the audience tally.
+    if (!p || (!p.alive && !branding.eliminatedCanAnswer)) return;
+    if (game.phase !== 'question') return;
+    const idx = msg.answerIndex;
+    if (![0,1,2,3].includes(idx)) return;
+    if (game.eliminatedOptions.includes(idx)) return;
+    // Track "changes" — when the player overrides a previous answer with a
+    // different option on the same question.
+    if (game.currentAnswers.has(p.id) && game.currentAnswers.get(p.id) !== idx) {
+      game.changesThisQuestion++;
+      game.playersChangedThisQuestion.add(p.id);
+    }
+    game.currentAnswers.set(p.id, idx);
+    p.lastSeen = Date.now();
+    pushPlayerChange(p);
+    return;
+  }
+
+  if (msg.type === 'player:lifeline-vote' && ws.role === 'player') {
+    if (!game.lifelineActive) return;
+    const p = game.players.get(ws.playerId);
+    if (!p || !p.alive) return;
+    const t = msg.lifelineType;
+    if (!['5050','askit','skip'].includes(t)) return;
+    // Reject votes for lifelines that have already been spent this round —
+    // shouldn't happen if the client is well-behaved, but a malicious client
+    // could try to push a vote for an unavailable type to skew the tally.
+    if (game.lifelinesUsed && game.lifelinesUsed[t]) return;
+    game.lifelineActive.votes.set(p.id, t);
+    pushPlayerChange(p);
+    return;
+  }
+}
+
+function sendJoinError(ws, code, error) {
+  try { ws.send(JSON.stringify({ type: 'error', code, error })); } catch {}
+}
+function sameIdentity(p, name, email) {
+  return typeof name === 'string' && typeof email === 'string' &&
+    p.email === email.trim().toLowerCase() && p.name === name.trim().slice(0, 40);
+}
+function isPlayerOnline(p) { return !!(p.ws && p.ws.readyState === 1); }
+
+// Put a player's seat on this connection. Whatever connection held it before
+// is detached first, so its late 'close' and any message still in flight
+// from it can no longer touch the seat. If that connection is still open (a
+// second tab on the same phone) it is told why before it is closed, so that
+// tab stops reconnecting instead of taking the seat straight back.
+function seatPlayer(p, ws) {
+  const prev = p.ws;
+  if (prev && prev !== ws) {
+    prev.role = null;
+    prev.playerId = null;
+    if (prev.readyState === 1) {
+      try { prev.send(JSON.stringify({ type: 'player:replaced' })); } catch {}
+      try { prev.close(4001, 'Rejoined from another connection'); } catch {}
+    }
+  }
+  p.ws = ws;
+  p.disconnectedAt = null;
+  p.lastSeen = Date.now();
+  ws.role = 'player';
+  ws.playerId = p.id;
+  ws.send(JSON.stringify({ type: 'player:joined', playerId: p.id, name: p.name }));
+}
+
+// Join and rejoin, in the order that keeps a room full of phones playing.
+function handlePlayerJoin(ws, msg) {
+  const { name, email, joinCode, reconnectId } = msg;
+  const ip = ws.clientIp || 'unknown';
+
+  // 1. A phone presenting its saved seat (the player ID handed out at join: a
+  //    96-bit secret no other phone ever sees) with the same name and email
+  //    gets it back in any phase and at any time, even while the server still
+  //    holds its previous connection. Phones that drop off Wi-Fi or are
+  //    suspended by iOS usually return before that connection is known to be
+  //    dead, and used to be refused ("joining is closed") and left frozen.
+  //    This runs before the join limiter, so rejoining phones never trip it.
+  //    A closed session still lets players back in to see their results.
+  if (typeof reconnectId === 'string' && game.players.has(reconnectId)) {
+    const p = game.players.get(reconnectId);
+    if (sameIdentity(p, name, email)) {
+      seatPlayer(p, ws);
+      logEvent('reconnect', `${p.name} reconnected`, { playerId: p.id });
+      pushPlayerChange(p);
+      return;
+    }
+  }
+
+  // 2. Everything else is a join, throttled per address (S2). Reject before
+  //    doing any work: the 6-digit code space is brute-forceable without it.
+  if (isJoinBlocked(ip)) {
+    logJson('warn', 'player.join.rate-limited', { ip });
+    sendJoinError(ws, 'rate-limited', 'Too many join attempts from this network. Please wait a few minutes and try again.');
+    return;
+  }
+  if (branding.sessionClosed) {
+    sendJoinError(ws, 'session-closed', 'This session has ended. Reach out to the facilitator if this is unexpected.');
+    return;
+  }
+  if (joinCode !== game.joinCode) {
+    recordJoinFailure(ip);
+    logEvent('auth-fail', `player:join rejected — wrong join code from ${ip}`);
+    logJson('warn', 'player.join.wrong-code', { ip });
+    sendJoinError(ws, 'wrong-code', 'Wrong join code');
+    return;
+  }
+  // Strings only. A number or an array here used to throw further down and
+  // take the whole server with it, and anyone in the room knows the code.
+  if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() ||
+      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
+    sendJoinError(ws, 'invalid-details', 'Name and a valid email are required');
+    return;
+  }
+  const cleanName = name.trim().slice(0, 40);
+  const cleanEmail = email.trim().toLowerCase();
+  // Branding: optionally restrict joins to the configured company domain.
+  if (branding.restrictDomain && branding.companyDomain) {
+    const emailDomain = cleanEmail.split('@')[1] || '';
+    if (emailDomain !== branding.companyDomain) {
+      sendJoinError(ws, 'domain', `Please use your ${branding.companyDomain} email address.`);
+      return;
+    }
+  }
+
+  const existing = [...game.players.values()].find(p => p.email === cleanEmail);
+  if (existing && game.phase === 'lobby') {
+    // 3. The same email in the lobby from a phone that lost its saved seat
+    //    (another browser, cleared storage) takes the seat over when the
+    //    seat's own phone is offline. Nothing is scored in the lobby, so
+    //    nothing is lost; mid-game only the saved seat (step 1) gets back in.
+    if (!isPlayerOnline(existing)) {
+      existing.name = cleanName;
+      seatPlayer(existing, ws);
+      clearJoinFailures(ip);
+      logEvent('reconnect', `${existing.name} rejoined the lobby`, { playerId: existing.id });
+      pushPlayerChange(existing);
+      return;
+    }
+    sendJoinError(ws, 'email-taken', 'That email is already playing on another device. If that is you, close the quiz there, wait a minute and try again.');
+    return;
+  }
+  if (game.phase !== 'lobby') {
+    sendJoinError(ws, 'game-started', 'The game has already started — joining is closed.');
+    return;
+  }
+
+  // A02-3: CSPRNG player id.
+  const id = 'p_' + crypto.randomBytes(12).toString('hex');
+  const player = {
+    id, name: cleanName, email: cleanEmail,
+    alive: true, answeredScore: 0, history: [], ws: null, disconnectedAt: null,
+    joinedAt: Date.now(), lastSeen: Date.now()
+  };
+  game.players.set(id, player);
+  seatPlayer(player, ws);
+  // Successful join clears any prior rate-limit strikes for this IP.
+  clearJoinFailures(ip);
+  logEvent('join', `${player.name} (${player.email}) joined`, { playerId: id });
+  pushPlayerChange(player);
+}
+
+// --- WebSocket heartbeat ---
+// Every 30 s each socket is pinged, and one that did not answer the previous
+// ping is terminated. Browsers answer pings on their own, so only dead
+// connections go: a phone that lost Wi-Fi or was suspended without a goodbye
+// is noticed within a minute instead of whenever TCP gives up. That keeps
+// Admin's online count honest. Exported so the tests can run two sweeps.
+const WS_HEARTBEAT_MS = 30_000;
+function heartbeatSweep() {
+  wss.clients.forEach(c => {
+    if (c.isAlive === false) {
+      logJson('info', 'ws.heartbeat-timeout', { ip: c.clientIp, role: c.role || null });
+      try { c.terminate(); } catch {}
+      return;
+    }
+    c.isAlive = false;
+    try { c.ping(); } catch {}
+  });
+}
+if (!CLI.command) setInterval(heartbeatSweep, WS_HEARTBEAT_MS).unref();
 
 // ----------------------------------------------------------------------------
 // Routes
@@ -3127,9 +3325,15 @@ app.get('/auth/login', (req, res) => {
   const nextRaw = typeof req.query.next === 'string' ? req.query.next : ('/' + role);
   const safeNext = isSafeNext(nextRaw) ? nextRaw : ('/' + role);
   const error = req.query.error ? '<p class="err">Invalid token. Try again.</p>' : '';
+  // Brand the sign-in page like every other screen: "Company — Quiz title",
+  // or whichever of the two is set. Both values are sanitised HTML from
+  // validateBranding (allowlisted tags only), so they can go straight into
+  // the <h1>; <title> takes the text without tags.
+  const brandHtml = [branding.companyName, branding.quizTitle].filter(Boolean).join(' — ') || DEFAULT_BRANDING.quizTitle;
+  const brandText = brandHtml.replace(/<[^>]*>/g, '');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in — Omega Quiz</title>
+<title>Sign in — ${brandText}</title>
 <style>
   body{margin:0;font-family:Georgia,serif;background:#020625;color:#f5f3e8;min-height:100vh;display:flex;align-items:center;justify-content:center}
   .card{background:rgba(13,26,110,.6);border:2px solid #f4c430;border-radius:16px;padding:28px 30px;width:min(460px,92vw);box-shadow:0 0 24px rgba(244,196,48,.25)}
@@ -3149,7 +3353,7 @@ app.get('/auth/login', (req, res) => {
   .muted-inline{color:#9aa3d4;font-size:11px;font-weight:normal;letter-spacing:0;text-transform:none}
 </style></head><body>
 <form class="card" id="loginForm" method="POST" action="/auth/login" autocomplete="off">
-  <h1>Omega Quiz</h1><div class="sub">${role === 'admin' ? 'Admin recovery sign-in' : 'Host recovery sign-in'}</div>
+  <h1>${brandHtml}</h1><div class="sub">${role === 'admin' ? 'Admin recovery sign-in' : 'Host recovery sign-in'}</div>
   <div class="recovery-note">Use this form when your magic-link URL has expired. Most of the time you should just click the magic link from the server logs.</div>
   <input type="hidden" name="role" value="${role}">
   <input type="hidden" name="next" value="${safeNext.replace(/"/g, '&quot;')}">
@@ -3314,6 +3518,9 @@ app.get('/qr', requireRole('host', 'admin'), async (req, res) => {
   const url = `${base}/?code=${game.joinCode}`;
   try {
     const svg = await QRCode.toString(url, { type: 'svg', margin: 1, color: { dark: '#f4c430', light: '#020625' } });
+    // The board reloads this whenever the join code changes; a cached copy
+    // would put the old code back on the screen.
+    res.set('Cache-Control', 'no-store');
     res.set('Content-Type', 'image/svg+xml');
     res.send(svg);
   } catch (e) {
@@ -3550,6 +3757,7 @@ app.post('/admin/data:wipe', requireRole('admin'), (req, res) => {
   // Reset in-memory state. New game (new join code, empty players), default
   // branding, empty question bank.
   game = newGame();
+  persistJoinCode(game.joinCode);
   branding = brandingFromEnv();    // env-driven defaults; respects CONSENT_TEXT etc.
   questions = [];
   bonusQuestions = [];
@@ -3974,7 +4182,9 @@ module.exports = {
   pruneExpiredState, inMemoryStateSizes, SESSION_TTL_MS,
   parseReconnectWindowSeconds, reconnectRemainingMs, isWithinReconnectWindow,
   PLAYER_RECONNECT_WINDOW_MS,
-  JOIN_FAILURE_MAX, JOIN_BLOCK_MS, JOIN_WINDOW_MS,
+  JOIN_FAILURE_MAX, JOIN_BLOCK_MS, JOIN_WINDOW_MS, parseJoinFailureMax,
+  heartbeatSweep, WS_HEARTBEAT_MS, GAME_STATE_PATH, loadPersistedJoinCode,
+  get game() { return game; },
   CONFIG_PATH, DATA_DIR, MAGIC_TTL_MS,
   get ENV_PUBLIC_BASE_URL() { return ENV_PUBLIC_BASE_URL; },
   get branding()    { return branding; },

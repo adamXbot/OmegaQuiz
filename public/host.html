@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Host — Who Wants to Be an OmegaQuiz Employee</title>
+<title>Host — Omega Quiz</title>
 <style>
 :root{
   --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
@@ -95,6 +95,18 @@ body::after{right:-10%;transform:rotate(-15deg)}
   transition:all .25s ease;
 }
 .answer .letter{color:var(--gold);font-weight:bold;letter-spacing:.1em;min-width:24px}
+/* Dramatic presentation (admin → Branding → Presentation): the question box
+   and options sweep in, and the grid pulses during the drum-roll that runs
+   before the answer is revealed. Standard mode never adds these classes. */
+html.dramatic .question-box.enter{animation:qEnter .7s cubic-bezier(.2,.8,.2,1) both}
+@keyframes qEnter{from{opacity:0;transform:translateY(22px) scale(.96)}to{opacity:1;transform:none}}
+html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i, 0) * .22s + .35s)}
+@keyframes aEnter{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+.answers.drumroll .answer{animation:drumPulse .3s ease-in-out infinite alternate}
+@keyframes drumPulse{from{box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold-dim)}to{box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold), 0 0 28px rgba(244,196,48,.75)}}
+@media (prefers-reduced-motion: reduce){ html.dramatic .answer.enter{animation-delay:0s !important} }
+.end-cta{margin:0 0 18px;color:var(--gold);font-size:clamp(14px,1.4vw,20px);letter-spacing:.06em;text-align:center}
+.end-cta .url{color:#bdc4eb;font-family:'Courier New',monospace;font-size:.85em;display:block;margin-top:4px}
 /* A11Y: darker green + white text/letter — gold on #16a34a was 2.0:1, off-white
    3.0:1. White on #15803d is 5.0:1 (top of gradient), 7.1:1 at the bottom. */
 .answer.correct{background:linear-gradient(180deg,#15803d,#166534);color:#fff;border-color:#4ade80;box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px #4ade80, 0 0 35px rgba(34,197,94,.9);animation:flash-green .5s 3}
@@ -179,7 +191,11 @@ body::after{right:-10%;transform:rotate(-15deg)}
   background:radial-gradient(ellipse at center, var(--navy-light), var(--navy-deep) 70%);
   display:none;flex-direction:column;align-items:center;justify-content:center;
   gap:30px;padding:40px;text-align:center;
+  /* 60+ names can make the lobby taller than a 1280x720 projector: scroll
+     instead of clipping. 'safe' keeps the top reachable where supported. */
+  overflow-y:auto;
 }
+.overlay{justify-content:safe center}
 .overlay.active{display:flex}
 .overlay h1{font-size:clamp(32px,5vw,56px);color:var(--gold);letter-spacing:.08em;text-shadow:0 0 30px rgba(244,196,48,.8), 0 4px 0 #000;text-transform:uppercase;line-height:1.1;max-width:1200px}
 .overlay .tagline{font-size:clamp(14px,1.4vw,18px);color:#bdc4eb;letter-spacing:.2em;text-transform:uppercase;max-width:800px}
@@ -188,12 +204,25 @@ body::after{right:-10%;transform:rotate(-15deg)}
 .qr-wrap{background:var(--navy-deep);border:3px solid var(--gold);border-radius:16px;padding:18px;box-shadow:var(--shadow-gold)}
 .qr-wrap img, .qr-wrap svg{width:280px;height:280px;display:block}
 .join-details{text-align:left}
+.state-wait{margin:14px auto 0;max-width:560px;color:#bdc4eb;font-size:14px;line-height:1.5;text-align:center}
 .join-code-label{font-size:14px;color:#bdc4eb;letter-spacing:.3em;text-transform:uppercase;margin-bottom:8px}
 .join-code{font-size:90px;color:var(--gold);font-weight:bold;letter-spacing:.15em;text-shadow:0 0 25px rgba(244,196,48,.7),0 4px 0 #000;line-height:1;font-family:'Courier New',monospace}
 .join-url{font-size:14px;color:#9aa3d4;margin-top:14px;font-family:'Courier New',monospace}
 .lobby-joined{margin-top:20px;font-size:18px;color:var(--gold);letter-spacing:.15em}
 .lobby-joined .count{font-size:40px;font-weight:bold;display:inline-block;min-width:60px;text-align:center;margin:0 8px}
-.lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto}
+.lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto;flex-shrink:0}
+/* When the lobby has to scroll, Start Game stays pinned to the bottom edge. */
+#lobbyScreen.overflowing .controls{position:sticky;bottom:0;width:100%;padding:14px 0 12px;background:linear-gradient(to bottom, rgba(2,6,37,0), var(--navy-deep) 45%)}
+@media (max-height: 820px){
+  .overlay{gap:16px;padding:24px}
+  .overlay h1{font-size:clamp(26px,4vw,44px)}
+  .qr-wrap{padding:12px}
+  .qr-wrap img, .qr-wrap svg{width:200px;height:200px}
+  .join-code{font-size:64px}
+  .lobby-joined{margin-top:4px}
+  .lobby-joined .count{font-size:30px}
+  .lobby-players{max-height:120px}
+}
 .lobby-player-chip{background:rgba(244,196,48,.15);border:1px solid var(--gold-dim);color:var(--gold);padding:5px 12px;border-radius:14px;font-size:13px;animation:popIn .3s ease}
 @keyframes popIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
 
@@ -298,10 +327,10 @@ body::after{right:-10%;transform:rotate(-15deg)}
 <div class="overlay active" id="lobbyScreen">
   <img id="brandLogo" alt="" style="max-height:80px;max-width:240px;margin-bottom:6px;display:none">
   <div class="subtitle" id="brandSubtitle">All Staff Cybersecurity Training</div>
-  <h1 id="brandTitle">Who Wants to Be a<br>OmegaQuiz Employee?</h1>
+  <h1 id="brandTitle">Omega Quiz</h1>
   <div class="tagline">Scan the QR code or visit the URL below to join</div>
   <div class="lobby-info">
-    <div class="qr-wrap"><img src="/qr" alt="Join QR" id="qrImg"></div>
+    <div class="qr-wrap"><img src="/qr" alt="QR code: scan to open the join page" id="qrImg"></div>
     <div class="join-details">
       <div class="join-code-label">Join Code</div>
       <div class="join-code" id="joinCode">----</div>
@@ -309,6 +338,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
     </div>
   </div>
   <div class="lobby-joined"><span class="count" id="lobbyCount">0</span> players joined</div>
+  <div class="state-wait" id="stateWait" role="status" hidden>Waiting for the game state from the server… If this does not clear, the WebSocket connection is being blocked (a proxy without WebSocket support) or your sign-in has expired — reload the page.</div>
   <div class="lobby-players" id="lobbyPlayers"></div>
   <div class="controls">
     <button class="btn primary" id="startBtn">Start Game →</button>
@@ -317,6 +347,9 @@ body::after{right:-10%;transform:rotate(-15deg)}
 
 <!-- END SCREEN -->
 <div class="overlay" id="endScreen">
+  <!-- Optional operator CTA (Branding → End-of-game CTA), spelled out because
+       a projector can't be tapped. Players get it as a button on their phones. -->
+  <div class="end-cta" id="endCtaLine" hidden></div>
   <!-- CEREMONY VIEW (interactive top-5 reveal) -->
   <div id="ceremonyView" style="display:none;width:100%;max-width:1100px;text-align:center">
     <div class="ceremony-place-label" id="ceremonyPlaceLabel" aria-live="polite">And the top 5 are…</div>
@@ -357,7 +390,7 @@ body::after{right:-10%;transform:rotate(-15deg)}
 <div class="stage" id="gameStage" style="display:none">
   <div class="main">
     <div class="header">
-      <div class="title">Phishing Edition</div>
+      <div class="title" id="stageTitle">Omega Quiz</div>
       <div class="subtitle" id="questionLabel">Question 1 of 10</div>
     </div>
 
@@ -456,6 +489,15 @@ body::after{right:-10%;transform:rotate(-15deg)}
 let state = null;
 let ws = null;
 let audioOn = false;
+// Dramatic presentation state (see the CSS block of the same name).
+let presentationDramatic = false;
+const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const REVEAL_HOLD_MS = 1400;
+let revealHoldTimer = null;
+let revealHeldFor = '';
+let lastQuestionKey = '';
+// Join code the QR image currently encodes (see the lobby render).
+let qrShownFor = '';
 let prevSurvivors = null;
 
 // Branding: fetch on load + on `branding:updated` push.
@@ -495,18 +537,23 @@ async function applyBranding(){
     const titleEl = document.getElementById('brandTitle');
     const subEl   = document.getElementById('brandSubtitle');
     const logoEl  = document.getElementById('brandLogo');
-    hostBrandTitle = b.quizTitle || 'Omega Quiz';
+    // quizTitle may be blank when a company name is set (the board then
+    // shows the organisation alone); with neither set the server already
+    // substituted the default. Both are sanitised HTML from the server.
+    hostBrandTitle = b.quizTitle || '';
     hostBrandCompany = b.companyName || '';
-    if (hostBrandCompany) titleEl.innerHTML = hostBrandCompany + '<br>' + hostBrandTitle;
-    else                  titleEl.innerHTML = hostBrandTitle;
-    if (b.tagline) subEl.textContent = b.tagline;
-    if (state) updatePageTitle(state); else document.title = (hostBrandCompany ? hostBrandCompany + ' — ' : '') + hostBrandTitle + ' (Host)';
+    titleEl.innerHTML = [hostBrandCompany, hostBrandTitle].filter(Boolean).join('<br>') || 'Omega Quiz';
+    // Game-stage header: the quiz title (or the company when there is none).
+    document.getElementById('stageTitle').innerHTML = hostBrandTitle || hostBrandCompany || 'Omega Quiz';
+    subEl.innerHTML = b.tagline || '';
+    subEl.style.display = b.tagline ? '' : 'none';
+    updatePageTitle(state);
     if (b.logoDataUri) {
       logoEl.src = b.logoDataUri;
       // A11Y: when companyName is set, the title text duplicates the logo so
       // leave alt empty (decorative). Otherwise the logo is the brand identity
       // and gets a real alt.
-      logoEl.alt = b.companyName ? '' : ((b.quizTitle || 'Omega Quiz') + ' logo');
+      logoEl.alt = b.companyName ? '' : (hostBrandLabel() + ' logo');
       logoEl.style.display = 'block';
     } else {
       logoEl.style.display = 'none';
@@ -517,6 +564,16 @@ async function applyBranding(){
     levelStyle = (b.levelStyle === 'levels') ? 'levels' : 'money';
     showNamesAtEnd = b.showNamesAtEnd !== false;  // default true if unset
     sessionClosed  = !!b.sessionClosed;
+    presentationDramatic = b.presentationStyle === 'dramatic';
+    document.documentElement.classList.toggle('dramatic', presentationDramatic);
+    const ctaLine = document.getElementById('endCtaLine');
+    if (b.endGameCtaLabel && b.endGameCtaUrl) {
+      ctaLine.innerHTML = 'Next step: ' + b.endGameCtaLabel + '<span class="url">' + escapeHtml(b.endGameCtaUrl) + '</span>';
+      ctaLine.hidden = false;
+    } else {
+      ctaLine.hidden = true;
+      ctaLine.innerHTML = '';
+    }
     applySessionClosedBanner();
     const count = (state && state.totalQuestions) || 10;
     prizes = makePrizes(levelStyle, count);
@@ -592,17 +649,31 @@ function showReconnectPrompt(){
   };
 }
 
+// The board is only as good as its first host:state. If the socket opens but
+// no state arrives (a proxy that drops WebSockets, or a session the server no
+// longer recognises), say so instead of sitting on dashes forever.
+let stateWaitTimer = null;
+function armStateWait(){
+  clearTimeout(stateWaitTimer);
+  stateWaitTimer = setTimeout(() => { if (!state) document.getElementById('stateWait').hidden = false; }, 6000);
+}
+function clearStateWait(){
+  clearTimeout(stateWaitTimer);
+  document.getElementById('stateWait').hidden = true;
+}
 function connect(){
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}`);
   ws.onopen = () => {
     reconnectAttempt = 0;
     ws.send(JSON.stringify({ type: 'host:hello' }));
+    armStateWait();
   };
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'host:state') {
       state = msg.state;
+      clearStateWait();
       clearShutdownBanner();
       render();
     } else if (msg.type === 'lifeline:askit') {
@@ -680,20 +751,37 @@ const milestones = [4, 9];
 // A11Y / UX: tab title reflects game phase + question for multi-tab operators.
 let hostBrandTitle = 'Omega Quiz';
 let hostBrandCompany = '';
+// Plain text of a sanitised branding string (entities decoded, tags dropped)
+// for places that take text, not markup: the tab title, alt text.
+function brandText(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return d.textContent || '';
+}
+// "Company — Quiz title", or whichever of the two is set; never empty.
+function hostBrandLabel() {
+  return [brandText(hostBrandCompany), brandText(hostBrandTitle)].filter(Boolean).join(' — ') || 'Omega Quiz';
+}
 function updatePageTitle(s) {
-  const base = hostBrandCompany ? (hostBrandCompany + ' — ') : '';
   let prefix = '';
   if (!s) prefix = '';
   else if (s.phase === 'lobby')    prefix = `Lobby (${s.playerCount} joined) — `;
   else if (s.phase === 'question') prefix = (s.inBonus ? `Tiebreaker ${(s.bonusIndex||0)+1} — ` : `Q${s.questionIndex+1} of ${s.totalQuestions} (${s.aliveCount} alive) — `);
   else if (s.phase === 'reveal')   prefix = (s.inBonus ? `Tiebreaker reveal — ` : `Reveal Q${s.questionIndex+1} — `);
   else if (s.phase === 'end')      prefix = 'Game over — ';
-  document.title = prefix + base + hostBrandTitle + ' (Host)';
+  document.title = prefix + hostBrandLabel() + ' (Host)';
 }
 
 // Track previous phase so we can emit "phase-entered" sfx on the host
 // projector (the reveal whoosh, the end-game fanfare etc.).
 let prevPhase = null;
+// Pin Start Game to the bottom edge only while the lobby actually scrolls.
+function markLobbyOverflow(){
+  const lobby = document.getElementById('lobbyScreen');
+  lobby.classList.toggle('overflowing', lobby.scrollHeight > lobby.clientHeight + 1);
+}
+window.addEventListener('resize', markLobbyOverflow);
+
 function render(){
   if (!state) return;
   updatePageTitle(state);
@@ -705,13 +793,35 @@ function render(){
     document.getElementById('confettiCanvas').style.display = 'none';
   }
 
+  // Dramatic mode: hold the reveal behind a drum-roll. Renders that arrive
+  // during the hold are ignored; the timer re-renders when it ends and the
+  // normal reveal path (sound, green flash, tally bars) runs then.
+  if (state.phase !== 'reveal') revealHeldFor = '';
+  if (revealHoldTimer) return;
+  const questionKey = (state.inBonus ? 'b' : 'q') + (state.inBonus ? state.bonusIndex : state.questionIndex);
+  if (presentationDramatic && state.phase === 'reveal' && prevPhase === 'question' && revealHeldFor !== questionKey) {
+    revealHeldFor = questionKey;
+    document.getElementById('answersGrid').classList.add('drumroll');
+    sfx('drumroll');
+    revealHoldTimer = setTimeout(() => {
+      revealHoldTimer = null;
+      document.getElementById('answersGrid').classList.remove('drumroll');
+      render();
+    }, REVEAL_HOLD_MS);
+    return;
+  }
+
   // Phase-transition sounds — entering reveal plays a quick "ding", entering
   // end plays a fanfare. Suppressed on first render so we don't fire on reconnect.
   if (prevPhase !== null && prevPhase !== state.phase) {
     if (state.phase === 'reveal') sfx('reveal');
     else if (state.phase === 'end') sfx('fanfare');
-    else if (state.phase === 'question' && prevPhase === 'lobby') sfx('chime');
+    else if (state.phase === 'question' && prevPhase === 'lobby' && !presentationDramatic) sfx('chime');
   }
+  // A question landing on the board (first or next) is the dramatic moment.
+  const newQuestion = state.phase === 'question' && questionKey !== lastQuestionKey;
+  if (state.phase === 'question') lastQuestionKey = questionKey;
+  if (newQuestion && presentationDramatic && prevPhase !== null) sfx('suspense');
   prevPhase = state.phase;
 
   // Lobby
@@ -721,6 +831,12 @@ function render(){
     document.getElementById('gameStage').style.display = 'none';
     document.getElementById('joinCode').textContent = state.joinCode;
     document.getElementById('joinUrl').textContent = location.origin + '/?code=' + state.joinCode;
+    // The QR is an image of the join URL. Reload it whenever the code changes
+    // (Reset game), or phones scanning the screen arrive with the old code.
+    if (state.joinCode && state.joinCode !== qrShownFor) {
+      qrShownFor = state.joinCode;
+      document.getElementById('qrImg').src = '/qr?c=' + encodeURIComponent(state.joinCode);
+    }
     document.getElementById('lobbyCount').textContent = state.playerCount;
     const chips = document.getElementById('lobbyPlayers');
     chips.innerHTML = '';
@@ -730,6 +846,7 @@ function render(){
       div.textContent = p.name;
       chips.appendChild(div);
     });
+    markLobbyOverflow();
     // Empty-bank guard — show a clear hint instead of letting the host hit a
     // dead-end Start button. The server also rejects start-game when empty.
     const startBtn = document.getElementById('startBtn');
@@ -819,6 +936,15 @@ function render(){
       div.innerHTML = html;
       grid.appendChild(div);
     });
+    if (newQuestion && presentationDramatic && !REDUCED_MOTION) {
+      const box = document.querySelector('.question-box');
+      box.classList.remove('enter'); void box.offsetWidth; box.classList.add('enter');
+      [...grid.children].forEach((el, i) => {
+        el.style.setProperty('--i', i);
+        el.classList.add('enter');
+        sfx('tick', 0.35 + i * 0.22);
+      });
+    }
   }
 
   // Top survivors panel (only show when field is narrowed — ≤ 5 alive after Q3+)
@@ -1018,7 +1144,7 @@ function playTone(freq, dur, type='sine', vol=0.1, delay=0){
   o.connect(g); g.connect(audioCtx.destination);
   o.start(t0); o.stop(t0 + dur + 0.05);
 }
-function sfx(name){
+function sfx(name, delay = 0){
   if (!audioOn) return;
   // Lazy resume — handles the case where the tab was backgrounded and the
   // context auto-suspended. Fire-and-forget here is fine; if it lands late,
@@ -1033,6 +1159,12 @@ function sfx(name){
     case 'chime':   playTone(523,0.1,'sine',0.12); playTone(784,0.18,'sine',0.12,0.08); break;
     case 'tada':    playTone(523,0.12,'triangle',0.14); playTone(659,0.12,'triangle',0.14,0.12); playTone(784,0.12,'triangle',0.14,0.24); playTone(1046,0.45,'triangle',0.16,0.36); break;
     case 'fanfare': playTone(392,0.15,'square',0.1); playTone(523,0.15,'square',0.1,0.15); playTone(659,0.3,'square',0.12,0.3); break;
+    // Dramatic presentation extras: a low drone with a rising triad when a
+    // question lands, a tick per option as it sweeps in, a drum-roll before
+    // the answer is revealed.
+    case 'suspense': playTone(98,1.4,'sine',0.09); playTone(196,1.0,'sawtooth',0.04); playTone(261.6,0.28,'triangle',0.1,0.15); playTone(329.6,0.28,'triangle',0.1,0.42); playTone(392,0.7,'triangle',0.13,0.7); break;
+    case 'tick':     playTone(1400,0.04,'square',0.05,delay); break;
+    case 'drumroll': for (let i = 0; i < 14; i++) playTone(90 + i * 5, 0.06, 'square', 0.07, i * 0.09); break;
   }
 }
 // A11Y: keyboard users can close the popups with Escape.
