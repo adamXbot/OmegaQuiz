@@ -47,9 +47,12 @@ primary_region = "syd"   # change to your nearest region (sjc, lhr, fra, etc.)
 
   [http_service.concurrency]
     type = "connections"
-    # ~50 player phones + host + admin = ~52 WS clients. Plenty of headroom.
-    hard_limit = 200
-    soft_limit = 150
+    # Fly counts TCP connections, and a phone usually holds its game socket
+    # plus a browser connection, so 80 phones can pass 160. At hard_limit Fly
+    # queues new connections (then returns 503). One Node process holds 1,000
+    # idle sockets without measurable memory growth, so leave plenty of room.
+    hard_limit = 1000
+    soft_limit = 800
 
 [checks.health]
   port = 3000

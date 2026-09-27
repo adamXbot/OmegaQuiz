@@ -54,6 +54,8 @@ const QRCode = require('qrcode');
 const { QUESTIONS: DEFAULT_QUESTIONS, BONUS_QUESTIONS: DEFAULT_BONUS } = require('./questions');
 
 const app = express();
+// Don't advertise the framework on every response.
+app.disable('x-powered-by');
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: false, limit: '64kb' }));
 const server = http.createServer(app);
@@ -599,6 +601,9 @@ function startNewGame() {
   });
   game = newGame();
   persistJoinCode(game.joinCode);
+  // Everyone rejoins a new game as a new player; the per-address cap is
+  // about fake seats in this game, so it starts again too.
+  newJoins.clear();
 }
 
 // How long Admin lists a dropped player as Disconnected (likely to be back)
@@ -1897,6 +1902,33 @@ function isJoinBlocked(ip) {
 }
 function clearJoinFailures(ip) { joinFailures.delete(ip); }
 
+// --- New seats per public address ---
+// Anyone who can read the join code off the projector could script a single
+// connection into hundreds of fake players, each needing its own Kick. One
+// seat per connection (see handlePlayerJoin) stops that per connection; this
+// caps new players per address in a 10-minute window. An office on one Wi-Fi
+// shares one address, so the default (150, JOINS_PER_ADDRESS_MAX) is sized
+// for the whole room. Rejoins and lobby takeovers don't count.
+function parseJoinsPerAddressMax(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 150;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 150;
+  return Math.max(10, Math.min(5000, Math.round(n)));
+}
+const JOINS_PER_ADDRESS_MAX = parseJoinsPerAddressMax(process.env.JOINS_PER_ADDRESS_MAX);
+const JOINS_PER_ADDRESS_WINDOW_MS = 10 * 60 * 1000;
+const newJoins = new Map(); // ip -> { count, firstAt }
+function newJoinsExhausted(ip, now = Date.now()) {
+  const e = newJoins.get(ip);
+  return !!(e && now - e.firstAt <= JOINS_PER_ADDRESS_WINDOW_MS && e.count >= JOINS_PER_ADDRESS_MAX);
+}
+function recordNewJoin(ip, now = Date.now()) {
+  let e = newJoins.get(ip);
+  if (!e || now - e.firstAt > JOINS_PER_ADDRESS_WINDOW_MS) { e = { count: 0, firstAt: now }; newJoins.set(ip, e); }
+  e.count++;
+}
+function clearNewJoins(ip) { newJoins.delete(ip); }
+
 // --- Periodic sweep of expiring in-memory state ---
 // Failure buckets used to be removed only on a successful sign-in / join, and
 // sessions only when their cookie was next presented. A client who could mint
@@ -1915,6 +1947,7 @@ function pruneExpiredState(now = Date.now()) {
   pruneExpiredMagic(now);
   pruneFailureMap(loginFailures, LOGIN_WINDOW_MS, now);
   pruneFailureMap(joinFailures, JOIN_WINDOW_MS, now);
+  for (const [ip, e] of newJoins) if (now - e.firstAt > JOINS_PER_ADDRESS_WINDOW_MS) newJoins.delete(ip);
   for (const [id, s] of sessions) if (s.expiresAt < now) sessions.delete(id);
 }
 setInterval(pruneExpiredState, 60_000).unref?.();
@@ -2213,12 +2246,40 @@ function topSurvivorsByScore(n = 5) {
     .slice(0, n)
     .map(p => ({ name: p.name, score: p.answeredScore }));
 }
+// State pushes are complete snapshots, so a connection that can't keep up
+// only needs the newest one. Once a socket has more than
+// WS_MAX_BUFFERED_BYTES queued, the newest snapshot of each type is held
+// instead of queued and sent when the socket drains. Without this a slow
+// admin laptop, or a phone flooding answers, queued updates until the server
+// ran out of memory (measured: ~8,700 answers a second from one phone took a
+// 256 MB server down in under 20 s).
+const SNAPSHOT_TYPES = new Set(['host:state', 'admin:state', 'player:state']);
+const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+function sendSnapshot(ws, type, data) {
+  if (ws.readyState !== 1) return;
+  if (!ws.heldSnapshots && ws.bufferedAmount <= WS_MAX_BUFFERED_BYTES) { ws.send(data); return; }
+  (ws.heldSnapshots || (ws.heldSnapshots = new Map())).set(type, data);
+  if (!ws.drainTimer) {
+    ws.drainTimer = setInterval(() => flushHeldSnapshots(ws), 250);
+    if (ws.drainTimer.unref) ws.drainTimer.unref();
+  }
+}
+function flushHeldSnapshots(ws) {
+  if (ws.readyState === 1 && ws.bufferedAmount > WS_MAX_BUFFERED_BYTES) return;
+  clearInterval(ws.drainTimer);
+  ws.drainTimer = null;
+  const held = ws.heldSnapshots;
+  ws.heldSnapshots = null;
+  if (held && ws.readyState === 1) held.forEach(d => ws.send(d));
+}
 function broadcast(obj, filterFn = null) {
   const msg = JSON.stringify(obj);
+  const snapshot = SNAPSHOT_TYPES.has(obj.type);
   wss.clients.forEach(client => {
     if (client.readyState !== 1) return;
     if (filterFn && !filterFn(client)) return;
-    client.send(msg);
+    if (snapshot) sendSnapshot(client, obj.type, msg);
+    else client.send(msg);
   });
 }
 
@@ -2323,12 +2384,12 @@ function pushPlayerStates() {
   const review = game.phase === 'end' ? buildReview() : null;
   game.players.forEach(p => {
     if (!p.ws || p.ws.readyState !== 1) return;
-    p.ws.send(playerStateMessage(p, review));
+    sendSnapshot(p.ws, 'player:state', playerStateMessage(p, review));
   });
 }
 function pushPlayerState(p) {
   if (!p || !p.ws || p.ws.readyState !== 1) return;
-  p.ws.send(playerStateMessage(p, game.phase === 'end' ? buildReview() : null));
+  sendSnapshot(p.ws, 'player:state', playerStateMessage(p, game.phase === 'end' ? buildReview() : null));
 }
 
 function buildLiveAnswerTally() {
@@ -3038,6 +3099,7 @@ wss.on('connection', (ws, req) => {
 
   ws.on('message', raw => {
     ws.isAlive = true;
+    if (!takeMessageToken(ws)) return;
     // One malformed or unexpected message must never end the game. An
     // exception in here used to reach uncaughtException, which shuts the
     // server down and drops every phone. Log it and keep going.
@@ -3129,6 +3191,8 @@ function handleWsMessage(ws, raw) {
     const idx = msg.answerIndex;
     if (![0,1,2,3].includes(idx)) return;
     if (game.eliminatedOptions.includes(idx)) return;
+    // The same option again changes nothing, so there is nothing to push.
+    if (game.currentAnswers.get(p.id) === idx) return;
     // Track "changes" — when the player overrides a previous answer with a
     // different option on the same question.
     if (game.currentAnswers.has(p.id) && game.currentAnswers.get(p.id) !== idx) {
@@ -3194,6 +3258,21 @@ function handlePlayerJoin(ws, msg) {
   const { name, email, joinCode, reconnectId } = msg;
   const ip = ws.clientIp || 'unknown';
 
+  // 0. One seat per connection. A phone joins once per connection and rejoins
+  //    on a new one, so a connection that already holds a seat and asks for
+  //    another is scripting fake players (one socket could add hundreds). Its
+  //    own seat is simply confirmed again.
+  if (ws.role === 'player' && ws.playerId && game.players.has(ws.playerId) && game.players.get(ws.playerId).ws === ws) {
+    const mine = game.players.get(ws.playerId);
+    if (reconnectId === mine.id) {
+      ws.send(JSON.stringify({ type: 'player:joined', playerId: mine.id, name: mine.name }));
+      pushPlayerState(mine);
+      return;
+    }
+    sendJoinError(ws, 'already-joined', 'This device is already in the game.');
+    return;
+  }
+
   // 1. A phone presenting its saved seat (the player ID handed out at join: a
   //    96-bit secret no other phone ever sees) with the same name and email
   //    gets it back in any phase and at any time, even while the server still
@@ -3232,8 +3311,10 @@ function handlePlayerJoin(ws, msg) {
   }
   // Strings only. A number or an array here used to throw further down and
   // take the whole server with it, and anyone in the room knows the code.
+  // 254 characters is the longest address SMTP allows; the admin screen gets
+  // every email on every update, so nothing longer is worth storing.
   if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() ||
-      !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
+      email.trim().length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) {
     sendJoinError(ws, 'invalid-details', 'Name and a valid email are required');
     return;
   }
@@ -3270,6 +3351,12 @@ function handlePlayerJoin(ws, msg) {
     return;
   }
 
+  if (newJoinsExhausted(ip)) {
+    logJson('warn', 'player.join.address-cap', { ip });
+    sendJoinError(ws, 'join-cap', 'This network has reached its limit of new players for now. Ask the facilitator.');
+    return;
+  }
+
   // A02-3: CSPRNG player id.
   const id = 'p_' + crypto.randomBytes(12).toString('hex');
   const player = {
@@ -3279,10 +3366,35 @@ function handlePlayerJoin(ws, msg) {
   };
   game.players.set(id, player);
   seatPlayer(player, ws);
+  recordNewJoin(ip);
   // Successful join clears any prior rate-limit strikes for this IP.
   clearJoinFailures(ip);
   logEvent('join', `${player.name} (${player.email}) joined`, { playerId: id });
   pushPlayerChange(player);
+}
+
+// --- Per-connection message budget ---
+// Phones and anonymous sockets get a message budget; signed-in host and admin
+// sockets are exempt. A phone sends a handful of messages a question (join, a
+// tap or two, a lifeline vote), so bursts of 20 and 5 a second sustained never
+// touch a real player. Messages over budget are dropped before they are
+// parsed, and a socket that keeps flooding is closed with 1008.
+const WS_MSG_BURST = 20;
+const WS_MSG_PER_SEC = 5;
+const WS_FLOOD_CLOSE_AFTER = 200;
+function takeMessageToken(ws, now = Date.now()) {
+  if (ws.role === 'admin' || ws.role === 'host') return true;
+  const b = ws.msgBudget || (ws.msgBudget = { tokens: WS_MSG_BURST, at: now, dropped: 0 });
+  b.tokens = Math.min(WS_MSG_BURST, b.tokens + ((now - b.at) / 1000) * WS_MSG_PER_SEC);
+  b.at = now;
+  if (b.tokens >= 1) { b.tokens -= 1; return true; }
+  b.dropped++;
+  if (b.dropped === 1) logJson('warn', 'ws.rate-limited', { ip: ws.clientIp, role: ws.role || null });
+  if (b.dropped === WS_FLOOD_CLOSE_AFTER) {
+    logJson('warn', 'ws.flood-closed', { ip: ws.clientIp, role: ws.role || null, dropped: b.dropped });
+    try { ws.close(1008, 'Too many messages'); } catch {}
+  }
+  return false;
 }
 
 // --- WebSocket heartbeat ---
@@ -3493,6 +3605,10 @@ app.get('/health', (req, res) => {
   if (shuttingDown) {
     return res.status(503).json({ ok: false, reason: 'shutting down' });
   }
+  // Health checks only need the 200. Game details (phase, player count,
+  // uptime) are for a signed-in admin; anyone could read them before.
+  const session = sessionFromReq(req);
+  if (!session || session.role !== 'admin') return res.status(200).json({ ok: true });
   res.status(200).json({
     ok: true,
     uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
@@ -3758,6 +3874,7 @@ app.post('/admin/data:wipe', requireRole('admin'), (req, res) => {
   // branding, empty question bank.
   game = newGame();
   persistJoinCode(game.joinCode);
+  newJoins.clear();
   branding = brandingFromEnv();    // env-driven defaults; respects CONSENT_TEXT etc.
   questions = [];
   bonusQuestions = [];
@@ -4184,6 +4301,9 @@ module.exports = {
   PLAYER_RECONNECT_WINDOW_MS,
   JOIN_FAILURE_MAX, JOIN_BLOCK_MS, JOIN_WINDOW_MS, parseJoinFailureMax,
   heartbeatSweep, WS_HEARTBEAT_MS, GAME_STATE_PATH, loadPersistedJoinCode,
+  takeMessageToken, WS_MSG_BURST, WS_MSG_PER_SEC, WS_FLOOD_CLOSE_AFTER,
+  sendSnapshot, WS_MAX_BUFFERED_BYTES,
+  parseJoinsPerAddressMax, JOINS_PER_ADDRESS_MAX, recordNewJoin, newJoinsExhausted, clearNewJoins,
   get game() { return game; },
   CONFIG_PATH, DATA_DIR, MAGIC_TTL_MS,
   get ENV_PUBLIC_BASE_URL() { return ENV_PUBLIC_BASE_URL; },

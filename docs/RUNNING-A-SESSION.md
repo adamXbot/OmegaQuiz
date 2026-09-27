@@ -55,6 +55,8 @@ page. The board's results screen spells the same link out for anyone who has put
 | Someone dropped mid-question | Their phone slept, lost Wi-Fi or switched networks | The phone rejoins its own seat by itself when it comes back on screen, at any point in the game. If its screen stops changing, reload the page. Questions closed while they were away count as unanswered. |
 | "That email is already playing on another device" | The same email is connected from another phone, tab or laptop, or a phone that dropped hasn't been timed out yet | Close the quiz on the other device, or wait a minute (silent connections are dropped within a minute) and join again. In the lobby a seat whose phone is offline is handed to the new device automatically. |
 | "Too many join attempts from this network" | 30 wrong join codes in a minute from one network (everyone on the office Wi-Fi shares one address) | Phones on mobile data are unaffected, so have that phone switch off Wi-Fi and scan again. The block lifts after 5 minutes. Raise `JOIN_FAILURE_MAX` for very large rooms. Phones rejoining their own seat are never blocked. |
+| "This network has reached its limit of new players for now" | 150 new players joined from one network within 10 minutes (the office Wi-Fi counts as one) | Set `JOINS_PER_ADDRESS_MAX` higher for very large rooms; **Reset game** also starts the count again. Rejoining phones are never counted. |
+| "This device is already in the game" | That browser tab already holds a seat and tried to join again under another name | Use the seat it has, or open the quiz on another device for a second player. |
 | Phones went back to the join form: "The facilitator started a new game" | **Reset game** was pressed | Everyone scans the QR on the board again. The board reloads its QR when the code changes. |
 | Scoring dispute | — | Admin → Players → edit the score field in that player's row directly. |
 | Wrong player eliminated | — | Admin → Players → **Eliminate** / **Revive** toggles their status. |
@@ -70,6 +72,10 @@ within about a minute.
 
 `PLAYER_RECONNECT_WINDOW_SECONDS` (default 300, clamped to 30–900) only sets how long Admin lists a
 dropped player as **Disconnected** before **Offline**. It no longer limits rejoining.
+
+Each phone connection can send about 20 messages in a burst and 5 a second after that, far more than
+anyone playing needs. A connection that keeps sending past that (a script, not a person) is
+disconnected. The board and admin always get the newest state, even over a slow connection.
 
 If the server restarts mid-session (a crash, a deploy, a Fly host move), the game in progress is
 lost but the join code is not: it is kept in `DATA_DIR/game.json`. Phones re-register in the fresh

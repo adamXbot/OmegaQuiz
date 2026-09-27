@@ -198,8 +198,12 @@ In the admin tab:
 
 ```bash
 curl https://your-public-url/health
-# {"ok":true,"uptimeSec":42,"questionsLoaded":10,...}
+# {"ok":true}
 ```
+
+The public response is deliberately just `{"ok":true}`. Signed in as admin (open it in the browser you use for `/admin`), it adds `uptimeSec`, `questionsLoaded`, `bonusLoaded`, `phase` and `players`.
+
+On Fly, `fly.toml` allows 1,000 concurrent connections (soft limit 800). Fly counts TCP connections and each phone usually holds two (its game socket and a browser connection), so keep this well above twice your room size if you change it; at the limit Fly queues new connections and then returns 503s.
 
 ---
 

@@ -19,6 +19,10 @@ process.env.ADMIN_TOKEN = 'test-admin-token-' + Math.random().toString(36).slice
 process.env.NODE_ENV    = 'test';
 process.env.PORT        = '0';
 process.env.SAMPLE_PACKS_URL = 'https://samples.test/manifest.json';
+// Every in-process player joins from 127.0.0.1, and the suite creates a few
+// hundred players, so lift the per-address new-player cap (default 150 per
+// 10 minutes). followUpHardeningTests fills it deliberately.
+process.env.JOINS_PER_ADDRESS_MAX = '5000';
 // Pin the proxy policy the assertions assume: auto-detect, one hop, and never
 // "on Fly" — getClientIp only honours Fly-Client-IP on a Fly Machine, and the
 // spoofing tests below prove the header is ignored everywhere else.
@@ -2683,10 +2687,14 @@ async function healthEndpointTests() {
   let j;
   try { j = JSON.parse(r.body); } catch { j = null; }
   ok(j && j.ok === true, 'body parses as JSON with ok:true');
-  ok(typeof j.uptimeSec === 'number' && j.uptimeSec >= 0, 'uptimeSec is a non-negative number');
-  ok(typeof j.questionsLoaded === 'number', 'questionsLoaded is exposed (may be 0 in a fresh deploy)');
-  ok(j.phase === 'lobby' || j.phase === 'question' || j.phase === 'reveal' || j.phase === 'end', 'phase is a known game phase');
+  ok(j && Object.keys(j).join(',') === 'ok', 'public /health reveals nothing but ok (no phase, player count or uptime)');
   ok(r.headers['cache-control'] && /no-store/.test(r.headers['cache-control']), 'response sets cache-control: no-store');
+  const adminH = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const rd = await request('GET', '/health', { headers: { cookie: adminH.cookie } });
+  let jd; try { jd = JSON.parse(rd.body); } catch { jd = null; }
+  ok(jd && jd.ok === true && typeof jd.uptimeSec === 'number' && jd.uptimeSec >= 0, 'signed-in admin: uptimeSec is a non-negative number');
+  ok(jd && typeof jd.questionsLoaded === 'number', 'signed-in admin: questionsLoaded is exposed (may be 0 in a fresh deploy)');
+  ok(jd && (jd.phase === 'lobby' || jd.phase === 'question' || jd.phase === 'reveal' || jd.phase === 'end'), 'signed-in admin: phase is a known game phase');
 }
 
 // ----------------------------------------------------------------------------
@@ -3121,14 +3129,17 @@ async function v111SecurityFixTests() {
   // resolved once at upgrade time by the same getClientIp.
   const joinBucket = '203.0.113.70';
   ['6.6.6.6', '203.0.113.71', '203.0.113.72', joinBucket].forEach(clearJoinFailures);
-  const spoofWs = await openWs({ headers: { 'X-Forwarded-For': `6.6.6.6, ${joinBucket}`, 'Fly-Client-IP': '203.0.113.71', 'CF-Connecting-IP': '203.0.113.72' } });
+  // A fresh connection per attempt: each connection has its own message
+  // budget (20), and the limiter under test is keyed on the address.
+  const spoofHeaders = { 'X-Forwarded-For': `6.6.6.6, ${joinBucket}`, 'Fly-Client-IP': '203.0.113.71', 'CF-Connecting-IP': '203.0.113.72' };
   let limitedAt = null;
   for (let i = 1; i <= JOIN_FAILURE_MAX + 1; i++) {
+    const spoofWs = await openWs({ headers: spoofHeaders });
     spoofWs.send(JSON.stringify({ type: 'player:join', name: 'X', email: 'x@x.test', joinCode: '0000' }));
     const m = await waitMessage(spoofWs, msg => msg.type === 'error');
+    try { spoofWs.close(); } catch {}
     if (/too many join attempts/i.test(m.error || '')) { limitedAt = i; break; }
   }
-  try { spoofWs.close(); } catch {}
   ok(limitedAt === JOIN_FAILURE_MAX + 1, `WS join: ${JOIN_FAILURE_MAX} wrong codes behind spoofed headers trip the limiter on attempt ${JOIN_FAILURE_MAX + 1} (got ${limitedAt})`);
   ok(isJoinBlocked(joinBucket), 'WS join: the bucket is the proxy-appended XFF entry');
   ok(!isJoinBlocked('6.6.6.6') && !isJoinBlocked('203.0.113.71') && !isJoinBlocked('203.0.113.72'), 'WS join: no client-supplied header value acquired a bucket');
@@ -3876,6 +3887,174 @@ async function eventHardeningTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Follow-up hardening: per-connection message budget, snapshot backpressure,
+// one seat per connection, per-address new-player cap, email length, headers,
+// Fly connection limits
+// ----------------------------------------------------------------------------
+async function followUpHardeningTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { takeMessageToken, WS_MSG_BURST, WS_MSG_PER_SEC, WS_FLOOD_CLOSE_AFTER, sendSnapshot, WS_MAX_BUFFERED_BYTES,
+          parseJoinsPerAddressMax, JOINS_PER_ADDRESS_MAX, recordNewJoin, newJoinsExhausted, clearNewJoins } = srv;
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const host = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: action, hostPayload: payload || {} } }));
+  async function until(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); }
+    return null;
+  }
+  async function freshLobby() {
+    const before = adminState && adminState.joinCode;
+    host('reset-game');
+    return until(s => s.phase === 'lobby' && s.joinCode !== before && s.playerCount === 0);
+  }
+  async function join(ws, fields) {
+    ws.send(JSON.stringify({ type: 'player:join', ...fields }));
+    return waitMessage(ws, m => m.type === 'player:joined' || m.type === 'error', 2000).catch(() => ({ type: 'timeout' }));
+  }
+  function collect(ws) { const list = []; ws.on('message', raw => { try { list.push(JSON.parse(raw)); } catch {} }); return list; }
+  const sockets = [];
+  async function phone() { const w = await openWs(); w.on('error', () => {}); sockets.push(w); return w; }
+  aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+  clearJoinFailures('127.0.0.1');
+  clearNewJoins('127.0.0.1');
+
+  section('Follow-up: responses no longer advertise Express');
+  for (const p of ['/', '/health', '/branding.json']) {
+    const r = await request('GET', p);
+    ok(!('x-powered-by' in r.headers), p + ' has no X-Powered-By header');
+  }
+
+  section('Follow-up: per-connection message budget');
+  {
+    const fake = { role: 'player', close(code) { this.closedWith = code; } };
+    let allowed = 0;
+    for (let i = 0; i < 30; i++) if (takeMessageToken(fake, 1000)) allowed++;
+    ok(allowed === WS_MSG_BURST, 'a burst of 30 messages lets ' + WS_MSG_BURST + ' through (got ' + allowed + ')');
+    let later = 0;
+    for (let i = 0; i < 10; i++) if (takeMessageToken(fake, 2000)) later++;
+    ok(later === WS_MSG_PER_SEC, 'one second later ' + WS_MSG_PER_SEC + ' more are allowed (got ' + later + ')');
+    ok(fake.closedWith === undefined, 'a short burst over budget is dropped, not disconnected');
+    const flood = { role: null, close(code) { this.closedWith = code; } };
+    for (let i = 0; i < WS_MSG_BURST + WS_FLOOD_CLOSE_AFTER; i++) takeMessageToken(flood, 5000);
+    ok(flood.closedWith === 1008, 'a connection that keeps flooding is closed with 1008 after ' + WS_FLOOD_CLOSE_AFTER + ' dropped messages');
+    ok(takeMessageToken({ role: 'admin' }, 0) && takeMessageToken({ role: 'host' }, 0), 'signed-in admin and host sockets are exempt');
+  }
+  const lobby = await freshLobby();
+  const flooder = await phone();
+  await join(flooder, { name: 'Flooder', email: 'flooder@test.example', joinCode: lobby.joinCode });
+  const calm = await phone();
+  const jc = await join(calm, { name: 'Calm Phone', email: 'calm@test.example', joinCode: lobby.joinCode });
+  host('start-game');
+  await until(s => s.phase === 'question');
+  await pause(150);
+  {
+    const acks = collect(flooder);
+    const closed = new Promise(r => flooder.on('close', code => r(code)));
+    for (let i = 0; i < 300; i++) flooder.send(JSON.stringify({ type: 'player:answer', answerIndex: i % 2 }));
+    const code = await Promise.race([closed, pause(3000).then(() => 'still open')]);
+    const answerAcks = acks.filter(m => m.type === 'player:state').length;
+    ok(answerAcks <= WS_MSG_BURST, '300 rapid answers from one phone: at most ' + WS_MSG_BURST + ' processed (got ' + answerAcks + ')');
+    ok(code === 1008, 'the flooding connection is closed with 1008 (got ' + code + ')');
+    ok((await request('GET', '/health')).status === 200, 'the server stays healthy');
+    const calmMsgs = collect(calm);
+    calm.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    await pause(200);
+    ok(calmMsgs.some(m => m.type === 'player:state' && m.state.you.myAnswer === 2), 'another phone answering at the same time is unaffected');
+  }
+
+  section('Follow-up: repeating the same answer sends nothing new');
+  {
+    const msgs = collect(calm);
+    calm.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    await pause(200);
+    ok(!msgs.some(m => m.type === 'player:state'), 'the same option again produces no update');
+  }
+
+  section('Follow-up: one seat per connection');
+  {
+    const before = adminState.playerCount;
+    const r = await join(calm, { name: 'Second Seat', email: 'second-seat@test.example', joinCode: lobby.joinCode });
+    ok(r.type === 'error' && r.code === 'already-joined', 'a connection that holds a seat cannot join as someone else (one socket used to add hundreds)');
+    await pause(100);
+    ok(adminState.playerCount === before, 'no extra player was created');
+    const again = await join(calm, { name: 'Calm Phone', email: 'calm@test.example', joinCode: lobby.joinCode, reconnectId: jc.playerId });
+    ok(again.type === 'player:joined' && again.playerId === jc.playerId, 'asking for its own seat again just confirms it');
+  }
+
+  section('Follow-up: new players per network address are capped');
+  {
+    ok(parseJoinsPerAddressMax(undefined) === 150 && parseJoinsPerAddressMax('') === 150 && parseJoinsPerAddressMax('x') === 150 &&
+       parseJoinsPerAddressMax('40') === 40 && parseJoinsPerAddressMax('1') === 10 && parseJoinsPerAddressMax('999999') === 5000,
+       'JOINS_PER_ADDRESS_MAX defaults to 150 and clamps to 10–5000');
+    const ip = '203.0.113.80';
+    clearNewJoins(ip);
+    for (let i = 0; i < JOINS_PER_ADDRESS_MAX; i++) recordNewJoin(ip);
+    ok(newJoinsExhausted(ip), JOINS_PER_ADDRESS_MAX + ' new players from one address exhaust it');
+    ok(!newJoinsExhausted(ip, Date.now() + 11 * 60 * 1000), 'the count starts again after 10 minutes');
+    clearNewJoins(ip);
+    const lobby2 = await freshLobby();
+    for (let i = 0; i < JOINS_PER_ADDRESS_MAX; i++) recordNewJoin('127.0.0.1');
+    const capped = await phone();
+    const jcap = await join(capped, { name: 'One Too Many', email: 'one-too-many@test.example', joinCode: lobby2.joinCode });
+    ok(jcap.type === 'error' && jcap.code === 'join-cap', 'the next new player from that address is refused (join-cap)');
+    const lobby3 = await freshLobby();
+    const jok = await join(capped, { name: 'After Reset', email: 'after-reset@test.example', joinCode: lobby3.joinCode });
+    ok(jok.type === 'player:joined', 'Reset game starts the count again');
+    clearNewJoins('127.0.0.1');
+
+    section('Follow-up: email addresses are capped at 254 characters');
+    const domain = '@test.example';
+    const e254 = 'a'.repeat(254 - domain.length) + domain;
+    const w1 = await phone();
+    const j254 = await join(w1, { name: 'Long But Fine', email: e254, joinCode: lobby3.joinCode });
+    ok(j254.type === 'player:joined', '254 characters is accepted');
+    const w2 = await phone();
+    const j255 = await join(w2, { name: 'Too Long', email: 'a' + e254, joinCode: lobby3.joinCode });
+    ok(j255.type === 'error' && j255.code === 'invalid-details', '255 characters is refused as invalid (15 KB used to be accepted)');
+    const page = (await request('GET', '/')).body;
+    ok(/id="emailInput"[^>]*maxlength="254"/.test(page), 'the join form limits the email field to 254 characters');
+  }
+
+  section('Follow-up: a slow connection gets the newest update instead of a growing queue');
+  {
+    const fake = { readyState: 1, bufferedAmount: 0, sent: [], send(d) { this.sent.push(d); } };
+    sendSnapshot(fake, 'admin:state', 'A0');
+    ok(fake.sent.join() === 'A0', 'a connection that keeps up gets every update straight away');
+    fake.bufferedAmount = WS_MAX_BUFFERED_BYTES + 1;
+    sendSnapshot(fake, 'admin:state', 'A1');
+    sendSnapshot(fake, 'admin:state', 'A2');
+    sendSnapshot(fake, 'host:state', 'H1');
+    ok(fake.sent.length === 1, 'while more than 1 MB behind, updates are held rather than queued');
+    fake.bufferedAmount = 0;
+    await pause(400);
+    ok(fake.sent.slice(1).join() === 'A2,H1', 'once drained it gets only the newest update of each kind (got ' + fake.sent.slice(1).join() + ')');
+    const gone = { readyState: 1, bufferedAmount: WS_MAX_BUFFERED_BYTES + 1, sent: [], send(d) { this.sent.push(d); } };
+    sendSnapshot(gone, 'player:state', 'P1');
+    gone.readyState = 3;
+    await pause(400);
+    ok(gone.sent.length === 0 && !gone.drainTimer, 'a connection that closes while behind is let go cleanly');
+  }
+
+  section('Follow-up: Fly connection limits leave room for a big room');
+  {
+    const toml = fs.readFileSync(path.join(__dirname, '..', 'fly.toml'), 'utf8');
+    const hard = Number((toml.match(/hard_limit\s*=\s*(\d+)/) || [])[1]);
+    const soft = Number((toml.match(/soft_limit\s*=\s*(\d+)/) || [])[1]);
+    ok(hard >= 500 && soft < hard, 'fly.toml hard_limit ' + hard + ' / soft_limit ' + soft + ' (each phone holds about two connections; was 200 / 150)');
+  }
+
+  await freshLobby();
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -3912,6 +4091,7 @@ async function eventHardeningTests() {
     await keyRemintTests();
     await wsRobustnessTests();
     await eventHardeningTests();
+    await followUpHardeningTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
