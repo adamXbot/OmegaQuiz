@@ -270,7 +270,7 @@ html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) b
       <label for="nameInput">Your Name</label>
       <input id="nameInput" type="text" placeholder="e.g. Alex Chen" autocomplete="name" required aria-describedby="errorMsg">
       <label for="emailInput">Work Email</label>
-      <input id="emailInput" type="email" placeholder="alex@company.com" autocomplete="email" required aria-describedby="errorMsg">
+      <input id="emailInput" type="email" placeholder="alex@company.com" autocomplete="email" maxlength="254" required aria-describedby="errorMsg">
       <p class="consent-text" id="consentText" style="display:none"></p>
       <button class="btn" id="joinBtn" type="submit">Join</button>
       <div class="error" id="errorMsg" role="alert"></div>
