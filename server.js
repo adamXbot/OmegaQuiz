@@ -402,6 +402,12 @@ async function fetchJsonSafe(url) {
 let questions = [];
 let bonusQuestions = [];
 const QUESTIONS_PATH = path.join(DATA_DIR, 'questions.json');
+// Read by sanitizeQuestionImage, which runs from the boot-time load below, so
+// they must be declared before it. Declared further down they were still
+// uninitialised at boot: any saved bank with an image threw, and the server
+// came back from every restart with an empty bank.
+const QUESTION_IMAGE_MAX_BYTES = 256 * 1024;
+const QUESTION_IMAGE_MIME_ALLOW = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
 function loadQuestionsFromDisk() {
   try {
     const raw = fs.readFileSync(QUESTIONS_PATH, 'utf8');
@@ -409,6 +415,10 @@ function loadQuestionsFromDisk() {
     return normalizeQuestionBank(parsed, { label: 'saved question bank' });
   } catch (e) {
     // Missing or corrupt — fall back to the empty state. Admin can re-import.
+    // A file that exists but will not load is worth saying so: the boot
+    // banner only shows an empty bank. (Plain console: logJson is not
+    // initialised yet when this runs at boot.)
+    if (e.code !== 'ENOENT') console.warn(`Saved question bank ${QUESTIONS_PATH} could not be loaded (${e.message}); starting with an empty bank.`);
     return { main: [], bonus: [] };
   }
 }
@@ -698,10 +708,9 @@ function sanitizeQuestionHtml(s) {
     .replace(/&lt;\/span&gt;/g, '</span>');
   return out;
 }
-// Per-question image cap. Inline the MIME allowlist (this function runs at
-// module-load time when LOGO_MIME_ALLOW is still in TDZ). Empty string → no image.
-const QUESTION_IMAGE_MAX_BYTES = 256 * 1024;
-const QUESTION_IMAGE_MIME_ALLOW = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+// Per-question image cap and MIME allowlist (QUESTION_IMAGE_*, declared
+// above loadQuestionsFromDisk: this runs at module-load time). Empty string →
+// no image.
 function sanitizeQuestionImage(s) {
   if (typeof s !== 'string' || s === '') return '';
   const m = s.match(/^data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/i);

@@ -4055,6 +4055,34 @@ async function followUpHardeningTests() {
 }
 
 // ----------------------------------------------------------------------------
+// A saved question bank must survive a restart. The boot-time load used to
+// run before the image limits it checks were initialised, so any bank with a
+// question image came back empty.
+// ----------------------------------------------------------------------------
+async function savedBankRestartTests() {
+  section('Restart: a saved bank with question images comes back after a restart');
+  {
+    // A fresh process on its own DATA_DIR, as after a deploy or a crash.
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omegaquiz-bank-'));
+    const boot = () => require('child_process').spawnSync(process.execPath, ['-e',
+      "const s = require(process.argv[1]); process.stdout.write('\\nRESULT ' + JSON.stringify({ main: s.questions.length, image: !!(s.questions[0] && s.questions[0].image) })); process.exit(0);",
+      path.join(__dirname, '..', 'server.js')],
+      { env: { ...process.env, DATA_DIR: dataDir, PORT: '0', NODE_ENV: 'test' }, encoding: 'utf8', timeout: 20000 });
+    fs.writeFileSync(path.join(dataDir, 'questions.json'), JSON.stringify({ main: [
+      { q: 'What is wrong with this sign-in page?', options: ['a', 'b', 'c', 'd'], correct: 2, lesson: 'Look closely.', image: 'data:image/png;base64,' + 'iVBORw0KGgo'.padEnd(96, 'A'), imageAlt: 'A sign-in page' },
+      { q: 'Plain question?', options: ['a', 'b', 'c', 'd'], correct: 0, lesson: 'No image here.' }
+    ], bonus: [] }));
+    const r = boot();
+    const got = (() => { try { return JSON.parse((r.stdout.match(/RESULT (.*)$/) || [])[1]); } catch { return null; } })();
+    ok(got && got.main === 2 && got.image, 'both questions and the image load at boot (a bank with an image came back empty after every restart)' + (got ? '' : ': ' + (r.stdout + r.stderr).slice(-300)));
+    fs.writeFileSync(path.join(dataDir, 'questions.json'), '{ not json');
+    const bad = boot();
+    ok(/could not be loaded/.test(bad.stderr), 'a saved bank that will not load says so at boot instead of starting empty in silence');
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4092,6 +4120,7 @@ async function followUpHardeningTests() {
     await wsRobustnessTests();
     await eventHardeningTests();
     await followUpHardeningTests();
+    await savedBankRestartTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
