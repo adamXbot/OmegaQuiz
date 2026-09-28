@@ -91,6 +91,8 @@ input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,
 .lobby-state h3{color:var(--gold);font-size:16px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:10px}
 .lobby-state p{color:#bdc4eb;font-size:14px;line-height:1.5}
 .lobby-state .you{color:var(--gold);font-size:18px;margin-top:14px;font-weight:bold}
+.lobby-state .tip{color:#9aa3d4;font-size:13px;margin-top:16px}
+.lobby-state .lobby-sound{width:auto;padding:10px 18px;font-size:13px;letter-spacing:.1em;margin-top:16px}
 
 /* STATUS BANNER */
 .status-banner{
@@ -197,6 +199,17 @@ html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) b
 
 .waiting-msg{text-align:center;color:#bdc4eb;padding:14px;font-size:14px;font-style:italic;margin-top:10px}
 
+/* The lesson, shown with the reveal (sanitised HTML, like the question). */
+.why-card{
+  margin-top:14px;padding:14px 16px;border-radius:12px;
+  background:rgba(13,26,110,.45);border:1px solid var(--gold-dim);border-left:4px solid var(--gold);
+  font-size:14px;line-height:1.55;color:#dfe3f7;
+  animation:whyIn .4s ease .5s both;
+}
+.why-card .why-label{display:block;color:var(--gold);font-size:11px;font-weight:bold;letter-spacing:.2em;text-transform:uppercase;margin-bottom:4px}
+.why-card .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 5px;border-radius:3px;color:var(--gold-bright);font-size:.92em}
+@keyframes whyIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
 /* LIFELINE VOTE */
 .lifeline-vote{
   background:rgba(244,196,48,.1);border:2px dashed var(--gold);border-radius:14px;
@@ -284,6 +297,10 @@ html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) b
       <h3>You're In</h3>
       <p>Waiting for the host to start the game…</p>
       <div class="you" id="lobbyName"></div>
+      <p class="tip" id="lobbyTip">Keep this page open: the questions appear here. Answer each one correctly to stay in the running.</p>
+      <!-- Dramatic mode only. A phone plays sound only after a tap on the
+           page, so without this the first question lands silently. -->
+      <button class="btn secondary lobby-sound" id="lobbySoundBtn" type="button" hidden>🔈 Tap to turn on sound</button>
     </div>
   </div>
 
@@ -298,6 +315,7 @@ html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) b
       <div class="answers-stack" id="answersStack"></div>
       <button class="lock-in-btn" id="lockInBtn" style="display:none" disabled>Lock In Answer</button>
     </div>
+    <div class="why-card" id="whyCard" hidden><span class="why-label">Why</span><div id="whyText"></div></div>
     <div id="lifelineVote" class="lifeline-vote" style="display:none">
       <h3>🎯 Room Lifeline Vote</h3>
       <div class="vote-options" id="voteOptions"></div>
@@ -766,6 +784,7 @@ let audioCtx = null;
 let enterAnimationPending = false;
 let lastQuestionKey = '';
 let lastRenderedPhase = null;
+let whyShownFor = '';             // question whose "why" was last brought into view
 const REVEAL_HOLD_MS = 1400;
 let revealHoldTimer = null;
 let revealHeldFor = '';
@@ -774,6 +793,18 @@ function setPresentation(dramatic) {
   document.documentElement.classList.toggle('dramatic', presentationDramatic);
   const t = document.getElementById('audioToggle');
   if (t) { t.hidden = !presentationDramatic; renderAudioToggle(); }
+  renderLobbySound();
+}
+// "Sound on" only counts once the browser has let audio start, which takes a
+// tap; until then the lobby offers that tap.
+function lobbySoundLive() { return audioOn && !!audioCtx && audioCtx.state === 'running'; }
+function renderLobbySound() {
+  const b = document.getElementById('lobbySoundBtn');
+  if (!b) return;
+  b.hidden = !presentationDramatic;
+  const live = lobbySoundLive();
+  b.textContent = live ? '🔊 Sound is on' : '🔈 Tap to turn on sound';
+  b.setAttribute('aria-pressed', String(live));
 }
 function renderAudioToggle() {
   const t = document.getElementById('audioToggle');
@@ -843,12 +874,19 @@ function dramaticHoldReveal(s) {
   }, REVEAL_HOLD_MS);
   return true;
 }
-document.getElementById('audioToggle').addEventListener('click', () => {
-  audioOn = !audioOn;
+function setAudioOn(on) {
+  audioOn = on;
   try { localStorage.setItem('omegaquiz_audio', audioOn ? '1' : '0'); } catch {}
   renderAudioToggle();
-  if (audioOn) { ensureAudio(); setTimeout(() => sfx('question'), 80); }
-});
+  renderLobbySound();
+  if (audioOn) {
+    ensureAudio();
+    // resume() settles just after the tap; confirm with a chime once it has.
+    setTimeout(() => { sfx('question'); renderLobbySound(); }, 80);
+  }
+}
+document.getElementById('audioToggle').addEventListener('click', () => setAudioOn(!audioOn));
+document.getElementById('lobbySoundBtn').addEventListener('click', () => setAudioOn(!lobbySoundLive()));
 
 function setView(name){
   ['joinView','lobbyView','gameView','endView','resultsView'].forEach(v => {
@@ -857,6 +895,7 @@ function setView(name){
 }
 
 function truncate(s, n){ s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function pts(n){ return n + (n === 1 ? ' pt' : ' pts'); }
 
 // A11Y / UX: surface game state in the tab title so multi-tab operators can
 // see which tab is which and where each game is at.
@@ -895,6 +934,10 @@ function render(){
   if (s.phase === 'lobby'){
     setView('lobbyView');
     document.getElementById('lobbyName').textContent = s.you.name;
+    document.getElementById('lobbyTip').textContent =
+      'Keep this page open: the questions appear here. Answer each one correctly to stay in the running.'
+      + (eliminatedCanAnswer ? ' Knocked out? You can keep playing along.' : '');
+    renderLobbySound();
     return;
   }
 
@@ -914,7 +957,7 @@ function render(){
     const cyber = brandingCategory === 'cyber';
     document.getElementById('endEmoji').textContent = won ? '🏆' : (strong ? '👏' : (cyber ? '🛡️' : '🙌'));
     document.getElementById('endTitle').textContent = won ? "You're a finalist!" : (strong ? 'Well played!' : 'Game Over');
-    document.getElementById('endScore').textContent = `${s.you.score} pts`;
+    document.getElementById('endScore').textContent = pts(s.you.score);
     document.getElementById('endMessage').textContent = won
       ? "You made it to the end. The host will announce the winner!"
       : (strong
@@ -943,7 +986,7 @@ function render(){
   const banner = document.getElementById('statusBanner');
   if (s.you.alive){
     banner.className = 'status-banner alive';
-    banner.innerHTML = `✓ Still in the running — <span class="score">${s.you.score} pts</span>`;
+    banner.innerHTML = `✓ Still in the running — <span class="score">${pts(s.you.score)}</span>`;
   } else {
     banner.className = 'status-banner dead';
     const tail = eliminatedCanAnswer
@@ -954,7 +997,7 @@ function render(){
     const extra = (s.you.correctCount != null && s.you.correctCount > s.you.score)
       ? ` <span class="score" style="opacity:.85;font-weight:normal">(${s.you.correctCount} correct overall)</span>`
       : '';
-    banner.innerHTML = `${tail} <span class="score">${s.you.score} pts</span>${extra}`;
+    banner.innerHTML = `${tail} <span class="score">${pts(s.you.score)}</span>${extra}`;
   }
 
   // Question counter
@@ -1092,7 +1135,9 @@ function render(){
       lockBtn.disabled = pendingAnswer === null;
       lockBtn.textContent = pendingAnswer === null
         ? 'Pick an answer first'
-        : `Lock In ${letters[pendingAnswer]}: ${truncate(s.question.options[pendingAnswer], 30)}`;
+        // Plain text: options are sanitised HTML ("It&#39;s…", <em>) and the
+        // button shows text.
+        : `Lock In ${letters[pendingAnswer]}: ${truncate(brandText(s.question.options[pendingAnswer]), 30)}`;
       lockBtn.onclick = () => {
         if (pendingAnswer === null) return;
         sfx('lock');
@@ -1103,6 +1148,19 @@ function render(){
       lockBtn.style.display = 'none';
     }
   }
+
+  // The "why" arrives with the reveal (the server sends the lesson only then).
+  // Below four answers with tally bars it starts off-screen on most phones,
+  // so bring it into view once per reveal.
+  const lesson = s.question && s.phase === 'reveal' ? (s.question.lesson || '') : '';
+  const whyCard = document.getElementById('whyCard');
+  if (lesson) document.getElementById('whyText').innerHTML = lesson;
+  whyCard.hidden = !lesson;
+  const whyKey = lesson ? (s.inBonus ? 'b' : 'q') + (s.inBonus ? s.bonusIndex : s.questionIndex) : '';
+  if (whyKey && whyKey !== whyShownFor) {
+    requestAnimationFrame(() => whyCard.scrollIntoView({ block: 'nearest', behavior: REDUCED_MOTION ? 'auto' : 'smooth' }));
+  }
+  whyShownFor = whyKey;
 
   // Lifeline vote — only show options that haven't been used yet. If they're
   // all spent, hide the vote panel entirely (server should already refuse a
@@ -1145,7 +1203,7 @@ function render(){
       : 'Answer in — tap another to change before the host reveals.';
   } else if (s.phase === 'reveal'){
     wm.style.display = 'block';
-    wm.textContent = 'Watch the big screen for the explanation.';
+    wm.textContent = lesson ? 'Next question soon — keep this page open.' : 'Watch the big screen for the explanation.';
   } else {
     wm.style.display = 'none';
   }
@@ -1253,7 +1311,7 @@ function buildEmailBody() {
 
   lines.push('My ' + brandLabel() + ' results');
   lines.push('Player: ' + (myState.you.name || ''));
-  lines.push('Score:  ' + score + ' pts  ·  ' + correct + ' correct of ' + answered + ' answered' + (afterElim > 0 ? '  (' + afterElim + ' after I was eliminated)' : ''));
+  lines.push('Score:  ' + pts(score) + '  ·  ' + correct + ' correct of ' + answered + ' answered' + (afterElim > 0 ? '  (' + afterElim + ' after I was eliminated)' : ''));
   lines.push('');
   lines.push('────────────────────────────────────────');
   lines.push('');

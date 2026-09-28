@@ -4083,6 +4083,179 @@ async function savedBankRestartTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Presentation + admin polish (UX review before the 2026-09-30 session): the
+// Ask IT hint, the lesson at the reveal, tie-aware places on the board, and
+// the new controls on each page.
+// ----------------------------------------------------------------------------
+// Pulls named top-level functions out of a page's inline script so their
+// logic can be run here without a browser.
+function pageFunctions(html, names) {
+  const src = names.map(name => {
+    const start = html.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error('function ' + name + ' not found');
+    let depth = 0;
+    for (let i = html.indexOf('{', start); i < html.length; i++) {
+      if (html[i] === '{') depth++;
+      else if (html[i] === '}' && --depth === 0) return html.slice(start, i + 1);
+    }
+    throw new Error('function ' + name + ' is not closed');
+  }).join('\n');
+  return new Function(src + '\nreturn { ' + names.join(', ') + ' };')();
+}
+
+async function presentationPolishTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { askItHint } = srv;
+
+  section('Polish: the Ask IT hint is the lesson\'s first whole sentence');
+  {
+    const domain = 'Look-alike domains (paypa1.com) swap letters for numbers. Always check the sender.';
+    ok(askItHint(domain) === 'Look-alike domains (paypa1.com) swap letters for numbers.', 'a domain name no longer cuts the hint short (was "Look-alike domains (paypa1.")');
+    ok(askItHint('Use a password manager, e.g. Bitwarden, for every account. Reuse is the risk.') === 'Use a password manager, e.g. Bitwarden, for every account.', '"e.g." is not the end of a sentence');
+    ok(askItHint('No. Banks never ask for your PIN by email. Call them.') === 'No. Banks never ask for your PIN by email.', 'a one-word opener keeps going to a useful hint');
+    ok(askItHint('Is the sender who they claim to be? Check the address.') === 'Is the sender who they claim to be?', 'a question mark ends a sentence');
+    ok(askItHint('IT will never ask for your code "just this once." Report it.') === 'IT will never ask for your code "just this once."', 'a closing quote stays with its sentence');
+    ok(askItHint('Check the <span class="mono">From</span> address. Display names can be faked.') === 'Check the <span class="mono">From</span> address.', 'markup in the lesson is kept whole');
+    ok(askItHint('Hover over links before clicking') === 'Hover over links before clicking', 'a lesson with no full stop is used as it is');
+    ok(askItHint('') === '' && askItHint(undefined) === '', 'no lesson gives an empty hint (was ".")');
+  }
+
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const host = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: action, hostPayload: payload || {} } }));
+  async function until(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); }
+    return null;
+  }
+  const sockets = [];
+
+  section('Polish: the reveal takes the lesson to the phones and the board');
+  {
+    const before = adminState && adminState.joinCode;
+    host('reset-game');
+    await until(s => s.phase === 'lobby' && s.joinCode !== before);
+    const lesson = 'Look-alike domains (paypa1.com) swap letters for numbers. Hover before you click.';
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:update', payload: {
+      main: [
+        { q: 'Which sender is fake?', options: ['paypal.com', 'paypa1.com', 'Both', 'Neither'], correct: 1, lesson },
+        { q: 'Second question?', options: ['a', 'b', 'c', 'd'], correct: 0, lesson: 'Second lesson.' }
+      ],
+      bonus: []
+    } }));
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    const lobby = await until(s => s.phase === 'lobby' && s.totalQuestions === 2);
+
+    // The board (an admin session that said host:hello, as on the day).
+    const board = await openWs({ cookie: admin.cookie });
+    sockets.push(board);
+    const boardMsgs = [];
+    board.on('message', raw => { try { boardMsgs.push(JSON.parse(raw)); } catch {} });
+    board.send(JSON.stringify({ type: 'host:hello' }));
+    const phone = await openWs();
+    sockets.push(phone);
+    let phoneState = null;
+    phone.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'player:state') phoneState = m.state; } catch {} });
+    phone.send(JSON.stringify({ type: 'player:join', name: 'Lesson Reader', email: 'lesson@test.example', joinCode: lobby.joinCode }));
+    await waitMessage(phone, m => m.type === 'player:joined');
+    const guesser = await openWs();
+    sockets.push(guesser);
+    guesser.send(JSON.stringify({ type: 'player:join', name: 'Wrong Guesser', email: 'guesser@test.example', joinCode: lobby.joinCode }));
+    await waitMessage(guesser, m => m.type === 'player:joined');
+    // Knocked-out players answer along, as in engagement mode on the day.
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { eliminatedCanAnswer: true } } }));
+    await waitMessage(aws, m => m.type === 'branding:saved');
+    host('start-game');
+    await until(s => s.phase === 'question');
+    await pause(150);
+    ok(phoneState && phoneState.phase === 'question' && phoneState.question.lesson === null, 'while the question is open the phone gets no lesson');
+    const lastHost = () => [...boardMsgs].reverse().find(m => m.type === 'host:state');
+    ok(lastHost() && typeof lastHost().state.envPublicBaseUrl === 'string', 'the board is told which address the QR uses');
+
+    host('apply-lifeline', { type: 'askit' });
+    const hint = await waitMessage(board, m => m.type === 'lifeline:askit', 2000).catch(() => null);
+    ok(hint && hint.hint === 'Look-alike domains (paypa1.com) swap letters for numbers.' && hint.correctLetter === 'B', 'Ask IT on the board carries the whole first sentence and the letter');
+
+    phone.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    guesser.send(JSON.stringify({ type: 'player:answer', answerIndex: 0 }));
+    await until(s => s.liveAnswerTally && s.liveAnswerTally.answeredAlive === 2);
+    host('close-question');
+    await until(s => s.phase === 'reveal');
+    await pause(150);
+    ok(phoneState && phoneState.phase === 'reveal' && phoneState.question.lesson === lesson, 'at the reveal the phone gets the lesson');
+    ok(lastHost() && lastHost().state.currentQuestion.lesson === lesson, 'and so does the board');
+    const atReveal = lastHost().state;
+    ok(atReveal.aliveCount === 1 && atReveal.answeredCount === 1 && atReveal.audienceTally.wasAliveCount === 2,
+       'at the reveal the answered count is out of who is still in (was 2 / 1), and the board can say 1 was knocked out');
+    host('next-question');
+    await until(s => s.phase === 'question' && s.questionIndex === 1);
+    await pause(150);
+    ok(phoneState && phoneState.question.lesson === null, 'the next question hides it again');
+    guesser.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    const tallied = await until(s => s.liveAnswerTally && s.liveAnswerTally.answeredEliminated === 1);
+    await pause(100);
+    ok(tallied && tallied.answeredCount === 0 && lastHost().state.answeredCount === 0,
+       'a knocked-out player answering along does not count towards "answered" on the board or admin');
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { eliminatedCanAnswer: false } } }));
+    await waitMessage(aws, m => m.type === 'branding:saved');
+  }
+
+  section('Polish: places on the board share ties instead of going by name');
+  {
+    const page = (await request('GET', '/host', { headers: { Cookie: admin.cookie } })).body;
+    const { rankPlayers, placeGroups, ceremonyFinalists, ordinal, placeLabel } =
+      pageFunctions(page, ['rankPlayers', 'placeGroups', 'ceremonyFinalists', 'ordinal', 'placeLabel']);
+    const P = (name, score, alive) => ({ id: name, name, score, alive });
+    const ranked = rankPlayers([P('Zoe', 3, true), P('Adam', 3, true), P('Cara', 2, false), P('Dev', 1, false), P('Bea', 1, false)]);
+    ok(ranked.map(p => p.name + p.place).join(' ') === 'Adam1 Zoe1 Cara3 Bea4 Dev4', 'level scores share a place and the next place skips (1, 1, 3, 4, 4)');
+    const groups = placeGroups(ranked);
+    ok(groups.map(g => g.place + ':' + g.players.length).join(' ') === '1:2 3:1 4:2', 'players are grouped by place');
+    ok(placeLabel(groups[0]) === 'And our joint winners are…', 'two survivors on top are joint winners, not "the winner" by alphabet');
+    ok(placeLabel({ place: 1, players: [P('Solo', 5, true)] }) === 'And the winner is…', 'a lone survivor is the winner');
+    ok(placeLabel({ place: 1, players: [P('Top', 4, false)] }) === 'And the top score goes to…', 'with no survivors the top score is not called a survivor');
+    ok(placeLabel(groups[2]) === 'Joint 4th place…' && placeLabel(groups[1]) === 'In 3rd place…', 'lower places say when they are shared');
+    ok([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal).join(' ') === '1st 2nd 3rd 4th 11th 12th 13th 21st 22nd 23rd 101st 111th', 'ordinals');
+    const big = placeGroups(rankPlayers([P('A', 5, true), P('B', 5, true), P('C', 5, true)]
+      .concat(Array.from({ length: 25 }, (_, i) => P('Out' + i, 4, false))).concat([P('Last', 1, false)])));
+    ok(ceremonyFinalists(big).length === 1, 'a 25-way 4th place is left to the results list, not read out');
+    const spread = placeGroups(rankPlayers([P('A', 6, true), P('B', 6, true), P('C', 5, false), P('D', 4, false), P('E', 3, false), P('F', 2, false)]));
+    ok(ceremonyFinalists(spread).map(g => g.place).join(',') === '1,3,4,5', 'the ceremony covers the places inside the top five');
+    const crowd = placeGroups(rankPlayers(Array.from({ length: 8 }, (_, i) => P('W' + i, 7, true))));
+    ok(ceremonyFinalists(crowd).length === 1 && ceremonyFinalists(crowd)[0].players.length === 8, 'eight joint winners are all named together');
+  }
+
+  section('Polish: the pages carry the new controls');
+  {
+    const hostPage = (await request('GET', '/host', { headers: { Cookie: admin.cookie } })).body;
+    ok(hostPage.includes('id="lessonBox"'), 'board: lesson panel at the reveal');
+    ok(hostPage.includes('id="soundPromptBtn"'), 'board: lobby prompt to turn sound on (dramatic mode)');
+    ok(/wire\('resetGameBtn',[\s\S]{0,120}confirm\(/.test(hostPage), 'board: Reset on the results screen asks first');
+    ok(!hostPage.includes("location.origin + '/?code='"), 'board: join address comes from the QR\'s address, not the board\'s own origin');
+    ok(/if \(state\.phase !== 'question' \|\| questionKey !== askitShownFor\) closeAskItPopup\(\)/.test(hostPage), 'board: the Ask IT pop-up closes when its question is over');
+    const phonePage = (await request('GET', '/')).body;
+    ok(phonePage.includes('id="whyCard"') && phonePage.includes('id="lobbySoundBtn"'), 'phone: Why card and lobby sound button');
+    ok(phonePage.includes('truncate(brandText(s.question.options[pendingAnswer]), 30)'), 'phone: Lock In label is plain text (no "&#39;")');
+    const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(adminPage.includes('id="rosterSearch"') && adminPage.includes('id="liveAnswerWaiting"'), 'admin: roster search and still-to-answer list');
+    ok(adminPage.includes("href: '/results.xlsx'"), 'admin: Download results sits next to Reset at the end');
+    for (const [name, html] of [['host', hostPage], ['player', phonePage], ['admin', adminPage]]) {
+      ok(!/<[a-z][^>]*\son[a-z]+\s*=/i.test(html), name + ' page: no inline event handlers');
+    }
+  }
+
+  host('reset-game');
+  await until(s => s.phase === 'lobby');
+  aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4121,6 +4294,7 @@ async function savedBankRestartTests() {
     await eventHardeningTests();
     await followUpHardeningTests();
     await savedBankRestartTests();
+    await presentationPolishTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
