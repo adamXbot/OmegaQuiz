@@ -227,6 +227,16 @@ body{
 
 .muted{color:var(--gray-text);font-size:12px}
 
+.roster-tools{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.roster-tools input{
+  flex:1 1 260px;max-width:420px;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);
+  color:var(--white);padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px;
+}
+.roster-tools input:focus{border-color:var(--gold);box-shadow:0 0 8px rgba(244,196,48,.2)}
+.talking-point{margin-top:8px;padding:8px 12px;border-left:3px solid var(--gold);background:rgba(244,196,48,.06);border-radius:6px;color:var(--white);line-height:1.5}
+.talking-point strong{color:var(--gold);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-right:6px}
+.offline-tag{color:#fbbf24}
+
 /* Audience tally bars on admin overview */
 .audience-panel{display:none}
 .audience-panel.active{display:block}
@@ -344,6 +354,7 @@ body{
         </h2>
         <div class="audience-bars" id="liveAnswerBars"></div>
         <div class="muted" id="liveAnswerChanges" style="margin-top:10px;font-size:12px;line-height:1.5"></div>
+        <div class="muted" id="liveAnswerWaiting" style="margin-top:6px;font-size:12px;line-height:1.5"></div>
       </div>
 
       <div class="panel audience-panel" id="audiencePanel">
@@ -367,6 +378,10 @@ body{
             <a href="/results.csv" download class="btn ghost" title="Plain CSV (no colour formatting)">Plain CSV</a>
           </span>
         </h2>
+        <div class="roster-tools">
+          <input type="search" id="rosterSearch" placeholder="Find a player by name or email" aria-label="Find a player by name or email" autocomplete="off">
+          <span class="muted" id="rosterCount" aria-live="polite"></span>
+        </div>
         <table class="tbl">
           <thead>
             <tr>
@@ -1167,6 +1182,21 @@ function renderLiveAnswerTally() {
   } else {
     changesEl.innerHTML = '<span style="color:var(--gray-text)">No-one has changed their answer yet.</span>';
   }
+
+  // Who the room is waiting on: players still in without an answer, those
+  // online first (they can be nudged), offline ones marked.
+  const waiting = state.players
+    .filter(p => p.alive && p.currentAnswer == null)
+    .sort((a, b) => (b.online - a.online) || a.name.localeCompare(b.name));
+  const waitEl = document.getElementById('liveAnswerWaiting');
+  if (!waiting.length) {
+    waitEl.innerHTML = t.aliveTotal ? '<span style="color:#86efac">Everyone still in has answered.</span>' : '';
+  } else {
+    const SHOW = 15;
+    const names = waiting.slice(0, SHOW).map(p => escapeHtml(p.name) + (p.online ? '' : ' <span class="offline-tag">(offline)</span>'));
+    waitEl.innerHTML = `<strong>Still to answer (${waiting.length}):</strong> ${names.join(', ')}`
+      + (waiting.length > SHOW ? ` and ${waiting.length - SHOW} more` : '');
+  }
 }
 
 function renderAudienceTally() {
@@ -1216,8 +1246,19 @@ function renderGameControl() {
       buttons.push({ label: 'Open Lifeline Vote', action: () => hostActionFromAdmin('open-lifeline-vote') });
     }
     if (state.lifelineActive) {
-      ['5050','askit','skip'].forEach(t => {
-        buttons.push({ label: `Apply ${t.toUpperCase()}`, action: () => hostActionFromAdmin('apply-lifeline', { type: t }) });
+      // One button per lifeline still available, with the votes so far and
+      // the leader marked, so the vote can be settled from here.
+      const votes = state.lifelineActive.voteCounts || {};
+      const used = state.lifelinesUsed || {};
+      const names = { '5050': '50/50', askit: 'Ask IT', skip: 'Skip' };
+      const open = ['5050','askit','skip'].filter(t => !used[t]);
+      const most = Math.max(0, ...open.map(t => votes[t] || 0));
+      open.forEach(t => {
+        const n = votes[t] || 0;
+        buttons.push({
+          label: `Apply ${names[t]} · ${n} vote${n === 1 ? '' : 's'}${most > 0 && n === most ? ' · leading' : ''}`,
+          action: () => hostActionFromAdmin('apply-lifeline', { type: t })
+        });
       });
       buttons.push({ label: 'Cancel Vote', ghost: true, action: () => hostActionFromAdmin('cancel-lifeline-vote') });
     }
@@ -1236,26 +1277,32 @@ function renderGameControl() {
   } else if (state.phase === 'reveal') {
     buttons.push({ label: 'Next Question →', primary: true, action: () => hostActionFromAdmin('next-question') });
   } else if (state.phase === 'end') {
-    buttons.push({ label: 'Reset (New Game)', danger: true, action: () => confirmAction('Reset game?', 'This will clear all players and scores and return to a new lobby.', () => hostActionFromAdmin('reset-game')) });
+    // The results live on the Players tab too; the end of the game is when
+    // they are needed, so the download sits next to Reset.
+    buttons.push({ label: '📊 Download results', primary: true, href: '/results.xlsx', title: 'Per-question history as an Excel file (Players tab has a plain CSV too)' });
+    buttons.push({ label: 'Reset (New Game)', danger: true, action: () => confirmAction('Reset for a new game?', 'This clears every player and score and opens a new lobby with a new join code. Download the results first if you need them: they cannot be recovered afterwards.', () => hostActionFromAdmin('reset-game')) });
   }
 
   c.innerHTML = '';
   buttons.forEach(b => {
-    const btn = document.createElement('button');
+    const btn = document.createElement(b.href ? 'a' : 'button');
     btn.className = 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : '') + (b.ghost ? ' ghost' : '');
     btn.textContent = b.label;
+    if (b.href) { btn.href = b.href; btn.setAttribute('download', ''); btn.style.textDecoration = 'none'; }
     if (b.disabled) btn.disabled = true;
     if (b.title) btn.title = b.title;
-    btn.onclick = b.action;
+    if (b.action) btn.onclick = b.action;
     c.appendChild(btn);
   });
 
-  // Current question display
+  // Current question display, with the lesson as the host's talking point.
   const qd = document.getElementById('currentQDisplay');
   if (state.currentQuestionRef && state.phase !== 'lobby' && state.phase !== 'end') {
     const letters = ['A','B','C','D'];
-    qd.innerHTML = `<strong style="color:var(--gold)">Current question:</strong> ${state.currentQuestionRef.q}
-      <br><span style="opacity:.7">Correct: ${letters[state.currentQuestionRef.correct]} — "${escapeHtml(state.currentQuestionRef.options[state.currentQuestionRef.correct])}"</span>`;
+    const ref = state.currentQuestionRef;
+    qd.innerHTML = `<strong style="color:var(--gold)">Current question:</strong> ${ref.q}
+      <br><span style="opacity:.7">Correct: ${letters[ref.correct]} — "${escapeHtml(ref.options[ref.correct])}"</span>`
+      + (ref.lesson ? `<div class="talking-point"><strong>Talking point</strong> ${ref.lesson}</div>` : '');
   } else {
     qd.innerHTML = '';
   }
@@ -1290,14 +1337,28 @@ function formatDuration(ms) {
 
 function renderPlayers() {
   const tbody = document.getElementById('playerTbody');
+  const countEl = document.getElementById('rosterCount');
   if (!state.players.length) {
+    countEl.textContent = '';
     tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">👥</div>No players yet</td></tr>';
     return;
   }
-  const rows = [...state.players].sort((a,b) => {
-    if (a.alive !== b.alive) return a.alive ? -1 : 1;
-    return b.score - a.score;
-  });
+  const query = document.getElementById('rosterSearch').value.trim().toLowerCase();
+  // During a game, anyone offline goes to the top: they are the ones who may
+  // need a hand getting back in. At the end the list is results order.
+  const offlineFirst = state.phase !== 'end';
+  const rows = [...state.players]
+    .filter(p => !query || p.name.toLowerCase().includes(query) || String(p.email || '').toLowerCase().includes(query))
+    .sort((a,b) => {
+      if (offlineFirst && a.online !== b.online) return a.online ? 1 : -1;
+      if (a.alive !== b.alive) return a.alive ? -1 : 1;
+      return b.score - a.score || a.name.localeCompare(b.name);
+    });
+  countEl.textContent = query ? `${rows.length} of ${state.players.length} shown` : '';
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No player matches “${escapeHtml(query)}”</td></tr>`;
+    return;
+  }
 
   tbody.innerHTML = '';
   rows.forEach(p => {
@@ -1357,6 +1418,8 @@ function renderPlayers() {
     };
   });
 }
+
+document.getElementById('rosterSearch').addEventListener('input', () => { if (state) renderPlayers(); });
 
 function renderQuestionLockState() {
   const locked = !(state.phase === 'lobby' || state.phase === 'end');

@@ -32,11 +32,38 @@ Admin → **Branding → Presentation** picks how much theatre the game puts on:
   answer before the board does.
 
 Sounds are synthesised in the browser — nothing to download. Browsers only start audio after a
-click, so: on the **board**, click the speaker icon once (it starts muted); on a **phone**, the first
-tap on an answer unlocks sound, and a speaker button in the corner mutes it for that phone. Both
-pages honour the device's reduced-motion setting for the animations.
+click, so in dramatic mode the **board** lobby shows **Turn on sound** next to Start Game until the
+sound is on (the speaker icon in the corner does the same, and starts muted). **Phones** show
+**Tap to turn on sound** in the lobby; otherwise the first tap on an answer unlocks it, and a
+speaker button in the corner mutes it for that phone. Both pages honour the device's reduced-motion
+setting for the animations.
 
-## End-of-game actions
+## Running the questions
+
+- **Joining.** The board prints the join address beside the QR code in large type: the same address
+  the QR encodes (Admin → Branding → **Public server URL**, else `PUBLIC_BASE_URL`, else the address
+  the board was opened on). Newest names appear first, so people can spot their own.
+- **While a question is open.** Admin → Overview shows the correct answer and the lesson as a
+  **Talking point**, the live answer split, and **Still to answer** — who is still in and has not
+  answered yet, people online first, offline ones marked.
+- **Lifeline votes.** While a vote is open, the admin's **Apply** buttons show each lifeline's votes
+  so far with the leader marked; the board's **Apply Winner** applies the leader. The **Ask IT**
+  pop-up closes itself when the answer is revealed.
+- **The reveal.** The board shows how many people were knocked out and the lesson (**Why**) under the
+  answers; every phone shows the same lesson under its answers.
+- **Finding someone.** Admin → Players has a search box (name or email). During a game anyone offline
+  is listed first.
+
+## End of the game
+
+The board's ceremony names the top five places from fifth up. Players on the same score share a
+place and are named together ("Joint 4th place…", "And our joint winners are…"); a big tie
+below the top place is left to the results list. With no survivors the results are titled **Top
+Scores**. Download the results before starting again: Admin → Game Control → **Download results**
+(or the Players tab). **Reset (New Game)** clears every player and score; it asks first on both
+the board and the admin page.
+
+### End-of-game actions
 
 Every player's final screen has **View My Results** and **Email me my results** (which opens their
 mail app with the per-question breakdown pre-filled). Admin → **Branding → End-of-game CTA** adds an
@@ -47,7 +74,8 @@ page. The board's results screen spells the same link out for anyone who has put
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Players' phones cannot connect after scanning the QR | The QR encodes a URL the phones cannot reach | Admin → Branding → **Public server URL**. Set it to whatever the phones can actually reach, or set `PUBLIC_BASE_URL` on the server. |
+| Players' phones cannot connect after scanning the QR | The QR encodes a URL the phones cannot reach | Admin → Branding → **Public server URL**. Set it to whatever the phones can actually reach, or set `PUBLIC_BASE_URL` on the server. The board prints the same address beside the QR. |
+| The boot banner says `Questions: 0 main + 0 bonus` after a restart, though a pack was loaded | Before this release a saved bank with any question image loaded as empty after every restart | Update the server. On an older build, import the pack again after each restart. The boot log now names the file and the reason if a saved bank cannot be loaded. |
 | Magic link redirects to a sign-in error | Token already used, expired, or the server restarted | A restart mints a new one — check the latest boot banner, or use `/auth/login` with your recovery token. |
 | Host board shows `----` for the join code and **Start Game** never enables, but the QR code renders | The page loaded over HTTP but no game state is arriving over the WebSocket. After a few seconds the board says so. Usually a proxy that does not pass WebSockets (Cloudflare: check **WebSockets** is on under Network), or a sign-in the server no longer recognises after a restart. | Reload the page; if it persists, check the proxy. Before v1.1.2 this also happened whenever `/host` was opened with the *admin* session — fixed, both sessions now drive the board. |
 | "Please use your *example.com* email address" | **Only accept joins from this domain** is ticked in Branding | Either untick it, or have the player join with their company email. The domain itself is the **Company email domain** field. |

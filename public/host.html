@@ -95,6 +95,23 @@ body::after{right:-10%;transform:rotate(-15deg)}
   transition:all .25s ease;
 }
 .answer .letter{color:var(--gold);font-weight:bold;letter-spacing:.1em;min-width:24px}
+#questionImage{max-width:min(700px,80vw);max-height:36vh;object-fit:contain;border-radius:12px;background:rgba(0,0,0,.25);box-shadow:0 0 0 2px var(--gold-dim),0 8px 24px rgba(0,0,0,.5);transition:max-height .4s ease}
+/* The lesson joins the board at the reveal, so the question block tightens
+   up to keep the answers, tally bars and lesson on a 1280x720 projector. */
+.lesson-box{
+  width:100%;max-width:1000px;text-align:left;
+  background:rgba(2,6,37,.8);border:1px solid var(--gold-dim);border-left:4px solid var(--gold);border-radius:12px;
+  padding:12px 20px;font-size:clamp(14px,1.35vw,19px);line-height:1.45;color:var(--white);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;
+  animation:lessonIn .5s ease .9s both;
+}
+.lesson-box[hidden]{display:none}
+.lesson-box .lesson-label{color:var(--gold);font-weight:bold;letter-spacing:.2em;text-transform:uppercase;font-size:.75em;margin-right:10px}
+.lesson-box .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;color:var(--gold-bright)}
+@keyframes lessonIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.stage.revealing .question-wrap{gap:14px}
+.stage.revealing #questionImage{max-height:18vh}
+.stage.revealing .question-box{padding:16px 48px;min-height:0}
 /* Dramatic presentation (admin → Branding → Presentation): the question box
    and options sweep in, and the grid pulses during the drum-roll that runs
    before the answer is revealed. Standard mode never adds these classes. */
@@ -207,7 +224,8 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 .state-wait{margin:14px auto 0;max-width:560px;color:#bdc4eb;font-size:14px;line-height:1.5;text-align:center}
 .join-code-label{font-size:14px;color:#bdc4eb;letter-spacing:.3em;text-transform:uppercase;margin-bottom:8px}
 .join-code{font-size:90px;color:var(--gold);font-weight:bold;letter-spacing:.15em;text-shadow:0 0 25px rgba(244,196,48,.7),0 4px 0 #000;line-height:1;font-family:'Courier New',monospace}
-.join-url{font-size:14px;color:#9aa3d4;margin-top:14px;font-family:'Courier New',monospace}
+.join-url-label{font-size:14px;color:#bdc4eb;letter-spacing:.3em;text-transform:uppercase;margin-top:22px}
+.join-url{font-size:clamp(22px,2.4vw,34px);color:var(--white);margin-top:6px;font-family:'Courier New',monospace;font-weight:bold;word-break:break-all;max-width:560px}
 .lobby-joined{margin-top:20px;font-size:18px;color:var(--gold);letter-spacing:.15em}
 .lobby-joined .count{font-size:40px;font-weight:bold;display:inline-block;min-width:60px;text-align:center;margin:0 8px}
 .lobby-players{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:1100px;margin-top:14px;max-height:200px;overflow:auto;flex-shrink:0}
@@ -219,11 +237,16 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
   .qr-wrap{padding:12px}
   .qr-wrap img, .qr-wrap svg{width:200px;height:200px}
   .join-code{font-size:64px}
+  .join-url-label{margin-top:14px}
+  .join-url{font-size:24px}
   .lobby-joined{margin-top:4px}
   .lobby-joined .count{font-size:30px}
   .lobby-players{max-height:120px}
 }
-.lobby-player-chip{background:rgba(244,196,48,.15);border:1px solid var(--gold-dim);color:var(--gold);padding:5px 12px;border-radius:14px;font-size:13px;animation:popIn .3s ease}
+/* Newest first, so the name someone just typed is on screen without
+   scrolling; only names new since the last render pop in. */
+.lobby-player-chip{background:rgba(244,196,48,.15);border:1px solid var(--gold-dim);color:var(--gold);padding:5px 12px;border-radius:14px;font-size:15px}
+.lobby-player-chip.new{animation:popIn .3s ease}
 @keyframes popIn{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
 
 /* LIFELINE PANEL */
@@ -282,6 +305,11 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 }
 .ceremony-current-name.shown{opacity:1;transform:scale(1)}
 .ceremony-current-name.winner{color:var(--gold-bright);text-shadow:0 0 50px rgba(255,215,0,.8),0 0 12px #fff,0 4px 0 #000;font-size:clamp(56px,9vw,128px)}
+/* A shared place (joint winners, joint 3rd…) reveals its names together. */
+.ceremony-current-name.multi{font-size:clamp(30px,4vw,56px);white-space:pre-line}
+.ceremony-current-name.winner.multi{font-size:clamp(34px,4.6vw,64px)}
+.ceremony-current-name.many{font-size:clamp(20px,2.2vw,30px);line-height:1.4;max-height:40vh;overflow:auto}
+.ceremony-current-name.winner.many{font-size:clamp(22px,2.4vw,34px)}
 .ceremony-current-score{color:var(--gold);font-size:clamp(16px,1.6vw,22px);letter-spacing:.15em;text-transform:uppercase;min-height:1.2em;opacity:0;transition:opacity .55s ease .2s}
 .ceremony-current-score.shown{opacity:.85}
 .ceremony-stack{
@@ -334,6 +362,7 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
     <div class="join-details">
       <div class="join-code-label">Join Code</div>
       <div class="join-code" id="joinCode">----</div>
+      <div class="join-url-label">Or go to</div>
       <div class="join-url" id="joinUrl"></div>
     </div>
   </div>
@@ -341,6 +370,9 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
   <div class="state-wait" id="stateWait" role="status" hidden>Waiting for the game state from the server… If this does not clear, the WebSocket connection is being blocked (a proxy without WebSocket support) or your sign-in has expired — reload the page.</div>
   <div class="lobby-players" id="lobbyPlayers"></div>
   <div class="controls">
+    <!-- Dramatic mode leans on sound; a browser only starts audio after a
+         click on the page, so offer that click before the game starts. -->
+    <button class="btn" id="soundPromptBtn" hidden>🔊 Turn on sound</button>
     <button class="btn primary" id="startBtn">Start Game →</button>
   </div>
 </div>
@@ -401,9 +433,10 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
     </div>
 
     <div class="question-wrap">
-      <img id="questionImage" alt="" style="display:none;max-width:min(700px,80vw);max-height:36vh;object-fit:contain;border-radius:12px;background:rgba(0,0,0,.25);box-shadow:0 0 0 2px var(--gold-dim),0 8px 24px rgba(0,0,0,.5)">
+      <img id="questionImage" alt="" style="display:none">
       <div class="question-box"><div class="question-text" id="questionText">…</div></div>
       <div class="answers" id="answersGrid"></div>
+      <div class="lesson-box" id="lessonBox" hidden><span class="lesson-label">Why</span><span id="lessonText"></span></div>
     </div>
 
     <!-- Stage controls deliberately empty — see the right-hand "Game Control"
@@ -496,8 +529,14 @@ const REVEAL_HOLD_MS = 1400;
 let revealHoldTimer = null;
 let revealHeldFor = '';
 let lastQuestionKey = '';
-// Join code the QR image currently encodes (see the lobby render).
+// Join code + address the QR image currently encodes (see the lobby render).
 let qrShownFor = '';
+// Admin → Branding → Public server URL; first choice for the join address.
+let brandPublicBaseUrl = '';
+// Players already shown in the lobby, so only new names pop in.
+let lobbySeen = new Set();
+// The question an open Ask IT pop-up belongs to.
+let askitShownFor = '';
 let prevSurvivors = null;
 
 // Branding: fetch on load + on `branding:updated` push.
@@ -566,6 +605,8 @@ async function applyBranding(){
     sessionClosed  = !!b.sessionClosed;
     presentationDramatic = b.presentationStyle === 'dramatic';
     document.documentElement.classList.toggle('dramatic', presentationDramatic);
+    renderSoundPrompt();
+    brandPublicBaseUrl = b.publicBaseUrl || '';
     const ctaLine = document.getElementById('endCtaLine');
     if (b.endGameCtaLabel && b.endGameCtaUrl) {
       ctaLine.innerHTML = 'Next step: ' + b.endGameCtaLabel + '<span class="url">' + escapeHtml(b.endGameCtaUrl) + '</span>';
@@ -727,13 +768,19 @@ function hostAction(action, payload){
 function bindHostButtons(){
   const wire = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener('click', fn); };
   wire('reviewBtn',     () => showReview());
-  wire('resetGameBtn',  () => hostAction('reset-game'));
+  // One click here wipes every player and score, so it asks first (the admin
+  // page already did).
+  wire('resetGameBtn',  () => {
+    if (!confirm('Reset for a new game?\n\nThis clears every player and score and opens a new lobby with a new join code. Download the results from the admin page first if you need them.')) return;
+    hostAction('reset-game');
+  });
+  wire('soundPromptBtn', () => setAudio(true));
   wire('reviewBackBtn', () => hideReview());
   wire('closeBtn',      () => hostAction('close-question'));
   wire('nextBtn',       () => hostAction('next-question'));
   wire('lifelineBtn',   () => hostAction('open-lifeline-vote'));
   wire('cancelVoteBtn', () => hostAction('cancel-lifeline-vote'));
-  wire('askitCloseBtn', () => document.getElementById('askitPopup').classList.remove('active'));
+  wire('askitCloseBtn', () => closeAskItPopup());
   document.querySelectorAll('[data-lifeline]').forEach(btn => {
     btn.addEventListener('click', () => hostAction('apply-lifeline', { type: btn.dataset.lifeline }));
   });
@@ -793,12 +840,17 @@ function render(){
     document.getElementById('confettiCanvas').style.display = 'none';
   }
 
+  const questionKey = questionKeyOf(state);
+  // The Ask IT hint belongs to the question it was asked on: it closes when
+  // that question is revealed or the game moves on, so a stale "IT
+  // recommends answer B" never sits over the answer or the next question.
+  if (state.phase !== 'question' || questionKey !== askitShownFor) closeAskItPopup();
+
   // Dramatic mode: hold the reveal behind a drum-roll. Renders that arrive
   // during the hold are ignored; the timer re-renders when it ends and the
   // normal reveal path (sound, green flash, tally bars) runs then.
   if (state.phase !== 'reveal') revealHeldFor = '';
   if (revealHoldTimer) return;
-  const questionKey = (state.inBonus ? 'b' : 'q') + (state.inBonus ? state.bonusIndex : state.questionIndex);
   if (presentationDramatic && state.phase === 'reveal' && prevPhase === 'question' && revealHeldFor !== questionKey) {
     revealHeldFor = questionKey;
     document.getElementById('answersGrid').classList.add('drumroll');
@@ -830,22 +882,28 @@ function render(){
     document.getElementById('endScreen').classList.remove('active');
     document.getElementById('gameStage').style.display = 'none';
     document.getElementById('joinCode').textContent = state.joinCode;
-    document.getElementById('joinUrl').textContent = location.origin + '/?code=' + state.joinCode;
-    // The QR is an image of the join URL. Reload it whenever the code changes
-    // (Reset game), or phones scanning the screen arrive with the old code.
-    if (state.joinCode && state.joinCode !== qrShownFor) {
-      qrShownFor = state.joinCode;
-      document.getElementById('qrImg').src = '/qr?c=' + encodeURIComponent(state.joinCode);
+    // The address the QR encodes, without the code: people who type it get
+    // the join form and enter the code shown above.
+    const base = joinBaseUrl();
+    document.getElementById('joinUrl').textContent = base.replace(/^https?:\/\//, '');
+    // The QR is an image of the join URL. Reload it whenever the code or the
+    // address changes (Reset game, a new Public server URL), or phones
+    // scanning the screen arrive at the old one.
+    const qrKey = state.joinCode + ' ' + base;
+    if (state.joinCode && qrKey !== qrShownFor) {
+      qrShownFor = qrKey;
+      document.getElementById('qrImg').src = '/qr?c=' + encodeURIComponent(state.joinCode) + '&b=' + encodeURIComponent(base);
     }
     document.getElementById('lobbyCount').textContent = state.playerCount;
     const chips = document.getElementById('lobbyPlayers');
     chips.innerHTML = '';
-    state.players.forEach(p => {
+    [...state.players].reverse().forEach(p => {
       const div = document.createElement('div');
-      div.className = 'lobby-player-chip';
+      div.className = 'lobby-player-chip' + (lobbySeen.has(p.id) ? '' : ' new');
       div.textContent = p.name;
       chips.appendChild(div);
     });
+    lobbySeen = new Set(state.players.map(p => p.id));
     markLobbyOverflow();
     // Empty-bank guard — show a clear hint instead of letting the host hit a
     // dead-end Start button. The server also rejects start-game when empty.
@@ -900,7 +958,12 @@ function render(){
   }
   prevSurvivors = state.aliveCount;
   survivorEl.textContent = state.aliveCount;
-  document.getElementById('answeredMeta').textContent = `${state.answeredCount} / ${state.aliveCount} answered`;
+  // At the reveal the count has just dropped, so say by how much.
+  const tallied = state.audienceTally;
+  const knockedOut = tallied ? Math.max(0, tallied.wasAliveCount - state.aliveCount) : 0;
+  document.getElementById('answeredMeta').textContent = state.phase !== 'reveal'
+    ? `${state.answeredCount} / ${state.aliveCount} answered`
+    : (!tallied ? 'Question skipped' : knockedOut ? `${knockedOut} knocked out` : 'Nobody knocked out');
 
   // Question + answers
   if (state.currentQuestion){
@@ -936,6 +999,11 @@ function render(){
       div.innerHTML = html;
       grid.appendChild(div);
     });
+    // The lesson (sanitised HTML, like the question) goes up with the answer.
+    const lesson = state.phase === 'reveal' ? (state.currentQuestion.lesson || '') : '';
+    if (lesson) document.getElementById('lessonText').innerHTML = lesson;
+    document.getElementById('lessonBox').hidden = !lesson;
+    document.getElementById('gameStage').classList.toggle('revealing', !!lesson);
     if (newQuestion && presentationDramatic && !REDUCED_MOTION) {
       const box = document.querySelector('.question-box');
       box.classList.remove('enter'); void box.offsetWidth; box.classList.add('enter');
@@ -951,10 +1019,12 @@ function render(){
   const survList = document.getElementById('survivorsList');
   survList.innerHTML = '';
   if (state.aliveCount > 0 && state.aliveCount <= 5){
-    state.topSurvivors.forEach((p, i) => {
+    // Unnumbered: everyone still in has (normally) the same score, and a
+    // "#1, #2" would rank them by the alphabet.
+    state.topSurvivors.forEach(p => {
       const li = document.createElement('li');
       li.className = 'top';
-      li.innerHTML = `<span>#${i+1} ${escapeHtml(p.name)}</span><span class="score">${p.score} pts</span>`;
+      li.innerHTML = `<span>${escapeHtml(p.name)}</span><span class="score">${pts(p.score)}</span>`;
       survList.appendChild(li);
     });
   } else if (state.aliveCount > 5){
@@ -1077,12 +1147,27 @@ function renderVoteBars(counts){
   };
 }
 
+function questionKeyOf(s){
+  return s ? (s.inBonus ? 'b' + s.bonusIndex : 'q' + s.questionIndex) : '';
+}
 function showAskItPopup(hint, letter){
-  document.getElementById('askitHint').textContent = hint;
+  // The hint is lesson text: sanitised HTML with entities, shown as text.
+  document.getElementById('askitHint').textContent = brandText(hint);
   document.getElementById('askitVerdict').textContent = `IT recommends answer ${letter}`;
   document.getElementById('askitPopup').classList.add('active');
+  askitShownFor = questionKeyOf(state);
   sfx('lifeline');
 }
+function closeAskItPopup(){
+  document.getElementById('askitPopup').classList.remove('active');
+}
+
+// The join address the QR encodes (server.js getPublicBaseUrl): the admin
+// override, else PUBLIC_BASE_URL, else wherever this board was opened.
+function joinBaseUrl(){
+  return (brandPublicBaseUrl || (state && state.envPublicBaseUrl) || location.origin).replace(/\/+$/, '');
+}
+function pts(n){ return n + (n === 1 ? ' pt' : ' pts'); }
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -1171,16 +1256,17 @@ function sfx(name, delay = 0){
 document.addEventListener('keydown', e => {
   if (e.key !== 'Escape') return;
   const askit = document.getElementById('askitPopup');
-  if (askit && askit.classList.contains('active')) { askit.classList.remove('active'); return; }
+  if (askit && askit.classList.contains('active')) { closeAskItPopup(); return; }
   const lp = document.getElementById('lifelinePanel');
   if (lp && lp.classList.contains('active')) { hostAction('cancel-lifeline-vote'); return; }
 });
-document.getElementById('audioToggle').onclick = async () => {
-  audioOn = !audioOn;
+async function setAudio(on){
+  audioOn = on;
   const btn = document.getElementById('audioToggle');
   btn.textContent = audioOn ? '🔊' : '🔇';
   btn.setAttribute('aria-pressed', String(audioOn));
   btn.setAttribute('aria-label', audioOn ? 'Game sounds are on — click to mute' : 'Game sounds are off — click to enable');
+  renderSoundPrompt();
   if (audioOn) {
     // Wait for the context to actually be running before firing the
     // confirmation chime — without this await, the very first toggle is
@@ -1188,7 +1274,13 @@ document.getElementById('audioToggle').onclick = async () => {
     const ok = await ensureAudio();
     if (ok) sfx('chime');
   }
-};
+}
+document.getElementById('audioToggle').onclick = () => setAudio(!audioOn);
+// Lobby prompt for dramatic mode: shown until sound is on.
+function renderSoundPrompt(){
+  const b = document.getElementById('soundPromptBtn');
+  if (b) b.hidden = !presentationDramatic || audioOn;
+}
 
 /* =====================
    END-OF-GAME CEREMONY
@@ -1212,98 +1304,131 @@ function handleEndPhase() {
     showFinalPodium(true);
     return;
   }
-  // No survivors / no players → no ceremony either.
-  const ranked = [...state.players].sort((a,b)=>b.score - a.score || a.name.localeCompare(b.name));
-  if (ranked.length === 0) {
+  // No players → no ceremony either.
+  const groups = placeGroups(rankPlayers(state.players));
+  if (groups.length === 0) {
     ceremonyView.style.display = 'none';
     podiumView.style.display = 'block';
     showFinalPodium(false);
     return;
   }
-  // Top 5 (or fewer if there aren't that many).
-  enterCeremony(ranked.slice(0, 5));
+  enterCeremony(ceremonyFinalists(groups));
   ceremonyView.style.display = 'block';
   podiumView.style.display = 'none';
 }
 
+// The top five places. A shared place is in once it fits inside the top
+// five (1, 1, 3, 4, 5 but not a 20-way 4th); the top place always is,
+// however many share it.
+function ceremonyFinalists(groups) {
+  return groups.filter((g, i) => i === 0 || g.place + g.players.length - 1 <= 5);
+}
+
+// Standard competition ranking: players level on score (and on still being
+// in) share a place and the next place skips — 1, 1, 3. Names only order
+// players within a place; they never decide one.
+function rankPlayers(players) {
+  const sorted = [...players].sort((a, b) =>
+    b.score - a.score || (b.alive - a.alive) || a.name.localeCompare(b.name));
+  let place = 0;
+  return sorted.map((p, i) => {
+    const prev = sorted[i - 1];
+    if (!prev || prev.score !== p.score || prev.alive !== p.alive) place = i + 1;
+    return { ...p, place };
+  });
+}
+function placeGroups(ranked) {
+  const groups = [];
+  ranked.forEach(p => {
+    const last = groups[groups.length - 1];
+    if (last && last.place === p.place) last.players.push(p);
+    else groups.push({ place: p.place, players: [p] });
+  });
+  return groups;
+}
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+// What the board says just before a place is named.
+function placeLabel(group) {
+  const joint = group.players.length > 1;
+  if (group.place === 1) {
+    // Nobody survived: the top score still wins, but not as a survivor.
+    if (!group.players[0].alive) return joint ? 'And the top scores go to…' : 'And the top score goes to…';
+    return joint ? 'And our joint winners are…' : 'And the winner is…';
+  }
+  return (joint ? 'Joint ' : 'In ') + ordinal(group.place) + ' place…';
+}
+function revealButtonLabel(group) {
+  if (group.place === 1) return group.players.length > 1 ? 'Reveal the Winners →' : 'Reveal the Winner →';
+  return `Reveal ${ordinal(group.place)} →`;
+}
+
 function enterCeremony(finalists) {
   ceremony = { finalists, stage: 0 };
-  const N = finalists.length;
+  const count = finalists.reduce((n, g) => n + g.players.length, 0);
   document.getElementById('ceremonyPlaceLabel').textContent =
-    N === 1 ? 'Our finalist…' :
-    N === 2 ? 'Our top 2…' :
-              `Our top ${N}…`;
+    count === 1 ? 'Our finalist…' : `Our top ${count}…`;
   const nameEl  = document.getElementById('ceremonyCurrentName');
   const scoreEl = document.getElementById('ceremonyCurrentScore');
-  nameEl.textContent = '';   nameEl.classList.remove('shown','winner');
+  nameEl.textContent = '';   nameEl.classList.remove('shown','winner','multi','many');
   scoreEl.textContent = '';  scoreEl.classList.remove('shown');
   document.getElementById('ceremonyStack').innerHTML = '';
   const nextBtn = document.getElementById('ceremonyNextBtn');
   nextBtn.disabled = false;
-  nextBtn.textContent = N === 1 ? 'Reveal the Winner →' : `Reveal #${N} →`;
+  nextBtn.textContent = revealButtonLabel(finalists[finalists.length - 1]);
   nextBtn.onclick = advanceCeremony;
   document.getElementById('ceremonySkipBtn').onclick = skipToFullResults;
 }
 
+// Each click names one place, from the lowest finalist place up to the
+// winner(s); the place named before drops into the stack underneath.
 function advanceCeremony() {
   if (!ceremony) return;
   const { finalists, stage } = ceremony;
-  const N = finalists.length;
-  const newStage = stage + 1;
-  const placeIdx = N - newStage;  // 0 = winner
-
-  if (placeIdx < 0) {
+  const idx = finalists.length - 1 - stage;  // 0 = the top place
+  if (idx < 0) {
     skipToFullResults();
     return;
   }
+  // The stack stacks upwards, so push a shared place in reverse to read A→Z.
+  if (stage > 0) [...finalists[idx + 1].players].reverse().forEach(p => pushOntoStack(p.place, p));
 
-  // Move the previously revealed name into the stack so the new reveal has
-  // a clean stage.
-  if (stage > 0) {
-    const prevIdx = N - stage;
-    const prevPerson = finalists[prevIdx];
-    pushOntoStack(prevIdx + 1, prevPerson);
-  }
-
-  const placeNumber = placeIdx + 1;  // 1 = winner
-  const person = finalists[placeIdx];
-
+  const group = finalists[idx];
+  const top = group.place === 1;
+  const names = group.players.map(p => p.name);
   const label   = document.getElementById('ceremonyPlaceLabel');
   const nameEl  = document.getElementById('ceremonyCurrentName');
   const scoreEl = document.getElementById('ceremonyCurrentScore');
-  nameEl.classList.remove('shown', 'winner');
+  nameEl.classList.remove('shown', 'winner', 'multi', 'many');
   scoreEl.classList.remove('shown');
   nameEl.textContent = '';
   scoreEl.textContent = '';
-
-  if (placeNumber === 1) {
-    label.textContent = N === 1 ? 'The finalist is…' : 'And the winner is…';
-  } else {
-    const ordinals = ['', '', '2nd', '3rd', '4th', '5th'];
-    label.textContent = `In ${ordinals[placeNumber] || (placeNumber + 'th')} place…`;
-  }
+  label.textContent = placeLabel(group);
   sfx('drop');
 
-  // Small "drumroll" delay then reveal name → score → confetti (winner only).
+  // Small "drumroll" delay then reveal name(s) → score → confetti (top place only).
   setTimeout(() => {
-    nameEl.textContent = person.name;
-    if (placeNumber === 1) nameEl.classList.add('winner');
+    nameEl.textContent = names.join(names.length <= 4 ? '\n' : '  ·  ');
+    if (names.length > 4) nameEl.classList.add('many');
+    else if (names.length > 1) nameEl.classList.add('multi');
+    if (top) nameEl.classList.add('winner');
     nameEl.classList.add('shown');
     setTimeout(() => {
-      scoreEl.textContent = `${person.score} correct`;
+      scoreEl.textContent = `${group.players[0].score} correct`;
       scoreEl.classList.add('shown');
     }, 280);
-    if (placeNumber === 1) {
+    if (top) {
       fireConfetti();
       sfx('correct');
     }
   }, 550);
 
-  ceremony.stage = newStage;
-  const nextBtn = document.getElementById('ceremonyNextBtn');
-  nextBtn.textContent = placeNumber === 1
+  ceremony.stage = stage + 1;
+  document.getElementById('ceremonyNextBtn').textContent = top
     ? 'Show Full Results →'
-    : `Reveal #${placeIdx} →`;
+    : revealButtonLabel(finalists[idx - 1]);
 }
 
 function pushOntoStack(placeNumber, person) {
@@ -1324,11 +1449,12 @@ function skipToFullResults() {
 function showFinalPodium(anonymise) {
   const podium = document.getElementById('endPodium');
   podium.innerHTML = '';
-  const ranked  = [...state.players].sort((a,b)=>b.score - a.score || a.name.localeCompare(b.name));
+  const ranked  = rankPlayers(state.players);
   const winners = state.players.filter(p => p.alive);
   const title = document.getElementById('endTitle');
   if (winners.length === 0) {
-    title.textContent = 'No survivors!';
+    // Nobody lasted every question; the top of the list is still worth a cheer.
+    title.textContent = ranked.length ? 'Top Scores' : 'Results';
   } else if (anonymise) {
     title.textContent = winners.length === 1 ? 'We have a winner!' : `${winners.length}-way tie`;
   } else if (winners.length === 1) {
@@ -1342,7 +1468,7 @@ function showFinalPodium(anonymise) {
     const displayName = anonymise
       ? `Finalist ${i + 1}`
       : escapeHtml(p.name) + (p.alive ? ' ✓' : '');
-    row.innerHTML = `<span class="pos">#${i+1}</span><span class="name">${displayName}</span><span class="score">${p.score} correct</span>`;
+    row.innerHTML = `<span class="pos">#${p.place}</span><span class="name">${displayName}</span><span class="score">${p.score} correct</span>`;
     podium.appendChild(row);
   });
 }

@@ -402,6 +402,12 @@ async function fetchJsonSafe(url) {
 let questions = [];
 let bonusQuestions = [];
 const QUESTIONS_PATH = path.join(DATA_DIR, 'questions.json');
+// Read by sanitizeQuestionImage, which runs from the boot-time load below, so
+// they must be declared before it. Declared further down they were still
+// uninitialised at boot: any saved bank with an image threw, and the server
+// came back from every restart with an empty bank.
+const QUESTION_IMAGE_MAX_BYTES = 256 * 1024;
+const QUESTION_IMAGE_MIME_ALLOW = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
 function loadQuestionsFromDisk() {
   try {
     const raw = fs.readFileSync(QUESTIONS_PATH, 'utf8');
@@ -409,6 +415,10 @@ function loadQuestionsFromDisk() {
     return normalizeQuestionBank(parsed, { label: 'saved question bank' });
   } catch (e) {
     // Missing or corrupt — fall back to the empty state. Admin can re-import.
+    // A file that exists but will not load is worth saying so: the boot
+    // banner only shows an empty bank. (Plain console: logJson is not
+    // initialised yet when this runs at boot.)
+    if (e.code !== 'ENOENT') console.warn(`Saved question bank ${QUESTIONS_PATH} could not be loaded (${e.message}); starting with an empty bank.`);
     return { main: [], bonus: [] };
   }
 }
@@ -698,10 +708,9 @@ function sanitizeQuestionHtml(s) {
     .replace(/&lt;\/span&gt;/g, '</span>');
   return out;
 }
-// Per-question image cap. Inline the MIME allowlist (this function runs at
-// module-load time when LOGO_MIME_ALLOW is still in TDZ). Empty string → no image.
-const QUESTION_IMAGE_MAX_BYTES = 256 * 1024;
-const QUESTION_IMAGE_MIME_ALLOW = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+// Per-question image cap and MIME allowlist (QUESTION_IMAGE_*, declared
+// above loadQuestionsFromDisk: this runs at module-load time). Empty string →
+// no image.
 function sanitizeQuestionImage(s) {
   if (typeof s !== 'string' || s === '') return '';
   const m = s.match(/^data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/i);
@@ -2240,6 +2249,11 @@ function publicPlayers() {
   }));
 }
 function survivors() { return [...game.players.values()].filter(p => p.alive); }
+function answeredAliveCount() {
+  let n = 0;
+  game.currentAnswers.forEach((a, id) => { const p = game.players.get(id); if (p && p.alive) n++; });
+  return n;
+}
 function topSurvivorsByScore(n = 5) {
   return survivors()
     .sort((a, b) => b.answeredScore - a.answeredScore || a.name.localeCompare(b.name))
@@ -2290,13 +2304,18 @@ function pushHostState() {
     state: {
       phase: game.phase,
       joinCode: game.joinCode,
+      // The board prints the address the QR encodes (see getPublicBaseUrl):
+      // the admin override from /branding.json, else this, else its own origin.
+      envPublicBaseUrl: ENV_PUBLIC_BASE_URL,
       questionIndex: game.questionIndex,
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
       totalQuestions: questions.length,
       playerCount: game.players.size,
       aliveCount: survivors().length,
-      answeredCount: game.currentAnswers.size,
+      // Out of aliveCount, so eliminated players answering along (or those
+      // just knocked out, at the reveal) never make it read "33 / 23".
+      answeredCount: answeredAliveCount(),
       topSurvivors: topSurvivorsByScore(5),
       players: publicPlayers(),
       // Legacy boolean (true only when all three are used) — kept for back-compat
@@ -2367,7 +2386,9 @@ function playerStateMessage(p, review) {
         imageAlt: q.imageAlt || '',
         eliminatedOptions: game.eliminatedOptions,
         revealedCorrect: game.phase === 'reveal' ? q.correct : null,
-        audienceTally: game.phase === 'reveal' ? game.audienceTally : null
+        audienceTally: game.phase === 'reveal' ? game.audienceTally : null,
+        // The "why" behind the answer, shown on the phone with the reveal.
+        lesson: game.phase === 'reveal' ? (q.lesson || '') : null
       } : null,
       lifelineActive: game.lifelineActive ? {
         type: game.lifelineActive.type,
@@ -2453,7 +2474,7 @@ function pushAdminState() {
       reconnectWindowMs: PLAYER_RECONNECT_WINDOW_MS,
       playerCount: game.players.size,
       aliveCount: survivors().length,
-      answeredCount: game.currentAnswers.size,
+      answeredCount: answeredAliveCount(),
       lifelineUsed: lifelinesAllUsed(),
       lifelinesUsed: { ...game.lifelinesUsed },
       lifelineActive: game.lifelineActive ? { type: game.lifelineActive.type, voteCounts: tallyLifelineVotes() } : null,
@@ -2490,6 +2511,25 @@ function tallyLifelineVotes() {
   if (!game.lifelineActive) return counts;
   game.lifelineActive.votes.forEach(v => { if (counts[v] != null) counts[v]++; });
   return counts;
+}
+
+// The Ask IT pop-up shows the lesson's first sentence. Cutting at the first
+// full stop broke hints like "Look-alike domains (paypa1.com) swap…" into
+// "Look-alike domains (paypa1." — a sentence ends at . ! or ? followed by a
+// space or the end of the text, not after a common abbreviation, and not
+// before it has said something ("No. Banks never…" keeps going).
+const ASK_IT_ABBREVIATION = /(?:^|[\s(])(?:e\.g|i\.e|etc|vs|approx|incl|Mr|Mrs|Ms|Dr|St)\.$/i;
+function askItHint(lesson) {
+  const text = String(lesson || '').trim();
+  const end = /[.!?]+["'”’)\]]*(?=\s|$)/g;
+  let m;
+  while ((m = end.exec(text))) {
+    if (ASK_IT_ABBREVIATION.test(text.slice(0, m.index + 1))) continue;
+    const sentence = text.slice(0, m.index + m[0].length);
+    if (sentence.replace(/<[^>]*>/g, '').trim().length < 15) continue;
+    return sentence;
+  }
+  return text;
 }
 
 // --- Host actions ---
@@ -2540,7 +2580,7 @@ function hostAction(action, payload = {}) {
         // player sockets (or unauthenticated ones, before 1.1.1) put the
         // correct letter in reach of anyone with browser developer tools.
         broadcast(
-          { type: 'lifeline:askit', correctLetter: 'ABCD'[q.correct], hint: (q.lesson || '').split('.')[0] + '.' },
+          { type: 'lifeline:askit', correctLetter: 'ABCD'[q.correct], hint: askItHint(q.lesson) },
           c => c.role === 'host' || c.role === 'admin'
         );
       } else if (type === 'skip') {
@@ -4303,6 +4343,7 @@ module.exports = {
   heartbeatSweep, WS_HEARTBEAT_MS, GAME_STATE_PATH, loadPersistedJoinCode,
   takeMessageToken, WS_MSG_BURST, WS_MSG_PER_SEC, WS_FLOOD_CLOSE_AFTER,
   sendSnapshot, WS_MAX_BUFFERED_BYTES,
+  askItHint,
   parseJoinsPerAddressMax, JOINS_PER_ADDRESS_MAX, recordNewJoin, newJoinsExhausted, clearNewJoins,
   get game() { return game; },
   CONFIG_PATH, DATA_DIR, MAGIC_TTL_MS,
