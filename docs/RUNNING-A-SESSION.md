@@ -20,6 +20,13 @@ An admin session opens `/host` as well, so one device signed in as admin can dri
 (useful when the projector is mirrored from the facilitator laptop). A separate host magic link is
 only needed for a second machine.
 
+## The admin page remembers where you were
+
+The active admin tab is in the address (`/admin#players`) and remembered by the browser, so a
+reload lands on the same tab and a fresh visit opens the one you used last. A reconnect (server
+restart, Wi-Fi blip) keeps unsaved edits in the Questions tab and says so; if another admin page
+saves the bank while you have unsaved edits, yours are kept and a banner offers Save or reload.
+
 ## Presenter view
 
 `/present` (host or admin sign-in; Admin → Overview → **Open Presenter View**) is the facilitator's

@@ -4399,6 +4399,8 @@ async function presenterViewTests() {
     ok(h.body.includes("'PageDown', 'ArrowRight'") && h.body.includes("'PageUp', 'ArrowLeft'") && h.body.includes('id="clickerPill"') && h.body.includes('id="reviewBanner"'), '/present: clicker keys (Page Down/Up, arrows), armed pill and past-reveal banner');
     const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
     ok(adminPage.includes('href="/present"') && adminPage.includes('data-field="notes"'), 'admin: Open Presenter View link and a Presenter notes field per question');
+    ok(adminPage.includes("localStorage.setItem(TAB_STORAGE_KEY, name)") && adminPage.includes("history.replaceState(null, '', '#' + name)") && adminPage.includes("window.addEventListener('hashchange'"), 'admin: the active tab is kept in the URL hash and localStorage and restored on load');
+    ok(adminPage.includes('if (dirty && (questions.length || bonusQuestions.length))') && adminPage.includes('if (dirty && !awaitingBankChange)'), 'admin: a reconnect or another admin\'s save no longer discards unsaved question edits');
   }
 
   section('Presenter: present:hello needs a signed-in host or admin');
