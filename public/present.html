@@ -70,6 +70,9 @@ a{color:var(--gold)}
 .controls{display:flex;flex-direction:column;gap:8px}
 .controls .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .controls .status{font-size:12px;color:var(--gray-text);min-height:16px}
+.rewind-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:stretch}
+.rewind-row select{font-family:inherit;font-size:14px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:10px;padding:8px 10px}
+.btn.danger.armed,.btn.danger{background:rgba(196,30,58,.2)}
 .vote{border:1px solid var(--gold-dim);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;background:rgba(244,196,48,.06)}
 .vote .bar{display:flex;justify-content:space-between;font-size:13px}
 .next .label{color:var(--gold);font-size:12px;letter-spacing:.2em;text-transform:uppercase}
@@ -157,6 +160,11 @@ a{color:var(--gold)}
       <div class="controls" id="controls"></div>
     </section>
 
+    <section class="card" id="stopCard" hidden>
+      <h2>Stop or rewind <span class="right muted">Click twice</span></h2>
+      <div class="controls" id="stopControls"></div>
+    </section>
+
     <section class="card askit" id="askitCard" hidden>
       <h2>📞 Ask IT says <button class="btn ghost" id="askitClose" style="margin-left:auto;padding:4px 10px;min-height:0">Close</button></h2>
       <div class="hint" id="askitHint"></div>
@@ -199,7 +207,7 @@ let reviewIndex = null;
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function text(html){ const d = document.createElement('div'); d.innerHTML = html || ''; return d.textContent || ''; }
-function keyOf(s){ return s ? (s.phase + ':' + (s.inBonus ? 'b' + s.bonusIndex : 'q' + s.questionIndex)) : ''; }
+function keyOf(s){ return s ? (s.phase + ':' + (s.inBonus ? 'b' + s.bonusIndex : 'q' + s.questionIndex) + ':' + (s.rewinds || 0)) : ''; }
 
 async function applyBranding(){
   try {
@@ -440,9 +448,6 @@ function renderControls(s){
       v.appendChild(r2);
       c.appendChild(v);
     }
-    if (s.questionIndex === 0 && !s.inBonus && s.aliveCount === s.playerCount && !voting) {
-      c.appendChild(button('← Back to lobby (started too early)', { ghost: true, action: () => { if (confirm('Return everyone to the lobby? Players stay in; scores reset.')) hostAction('return-to-lobby'); } }));
-    }
     status.textContent = `${s.answeredCount} of ${s.aliveCount} answered`;
   } else if (s.phase === 'reveal') {
     const n = s.nextUp;
@@ -461,7 +466,39 @@ function renderControls(s){
     status.textContent = resetArmed ? 'Clears every player and score and opens a new lobby with a new join code.' : '';
   }
   c.appendChild(status);
+  renderStopControls(s);
 }
+
+// Stop or rewind a game under way. Two-step: the first click arms the
+// button (red, says what the second click does), the second within 5 s acts.
+const armed = new Map();
+function armedButton(id, label, armedLabel, action, extra){
+  const b = button(armed.has(id) ? armedLabel : label, { ghost: !armed.has(id), danger: armed.has(id), id, ...(extra || {}), action: () => {
+    if (armed.has(id)) { clearTimeout(armed.get(id)); armed.delete(id); action(); return; }
+    armed.set(id, setTimeout(() => { armed.delete(id); renderControls(state); }, 5000));
+    renderControls(state);
+  } });
+  return b;
+}
+function renderStopControls(s){
+  const box = document.getElementById('stopControls');
+  box.innerHTML = '';
+  const active = s.phase === 'question' || s.phase === 'reveal' || s.phase === 'end';
+  document.getElementById('stopCard').hidden = !active;
+  if (!active) { armed.forEach(t => clearTimeout(t)); armed.clear(); return; }
+  box.appendChild(armedButton('stopLobbyBtn', '← Back to lobby, keep players', 'Click again: back to lobby', () => hostAction('return-to-lobby'), { title: 'Everyone returns to the lobby with the same join code, alive and on zero.' }));
+  const row = document.createElement('div'); row.className = 'rewind-row';
+  const sel = document.createElement('select'); sel.id = 'rewindSelect'; sel.setAttribute('aria-label', 'Question to rewind to');
+  const highest = (s.inBonus || s.phase === 'end') ? s.totalQuestions - 1 : s.questionIndex;
+  for (let i = 0; i <= highest; i++) { const o = document.createElement('option'); o.value = String(i); o.textContent = `Question ${i + 1}` + (i === s.questionIndex && !s.inBonus && s.phase !== 'end' ? ' (current)' : ''); sel.appendChild(o); }
+  sel.value = rewindChoice !== null && rewindChoice <= highest ? String(rewindChoice) : String(highest);
+  sel.addEventListener('change', () => { rewindChoice = parseInt(sel.value, 10); if (armed.has('rewindBtn')) { clearTimeout(armed.get('rewindBtn')); armed.delete('rewindBtn'); renderControls(state); } });
+  row.appendChild(sel);
+  const target = parseInt(sel.value, 10);
+  row.appendChild(armedButton('rewindBtn', 'Rewind', `Click again: rewind to Q${target + 1}`, () => hostAction('rewind-to', { index: parseInt(document.getElementById('rewindSelect').value, 10) }), { title: 'Re-ask that question. Scores and knock-outs from it onwards are undone; used lifelines stay used.' }));
+  box.appendChild(row);
+}
+let rewindChoice = null;
 
 function renderNext(s){
   const body = document.getElementById('nextBody');

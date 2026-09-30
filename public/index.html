@@ -375,6 +375,7 @@ let reconnectAttempt = 0;
 let reconnectTimer = null;
 let myState = null;
 let pendingAnswer = null;         // confirm-mode local selection (not sent until Lock In)
+let lobbyNotice = '';             // set by game:lobby-return, shown in the lobby until a question starts
 let lastQuestionIndex = -1;       // resets pendingAnswer between questions
 let answerLockMode = 'quick';     // 'quick' = tap-to-commit, 'confirm' = tap-then-lock
 let eliminatedCanAnswer = false;  // toggle: let eliminated players keep tapping (no scoring)
@@ -557,6 +558,9 @@ function connect(){
       showReplacedBanner();
     } else if (msg.type === 'game:reset'){
       leaveGame('The facilitator started a new game. Scan the QR code on the screen to join it.');
+    } else if (msg.type === 'game:lobby-return'){
+      // Same game, same seat: the host sent everyone back to the lobby.
+      lobbyNotice = 'The host has sent everyone back to the lobby. Stay on this page — the quiz will start again from the top.';
     } else if (msg.type === 'kicked'){
       localStorage.removeItem('omegaquiz_pid');
       alert('You were removed from the game' + (msg.reason ? ': ' + msg.reason : '.'));
@@ -934,9 +938,9 @@ function render(){
   if (s.phase === 'lobby'){
     setView('lobbyView');
     document.getElementById('lobbyName').textContent = s.you.name;
-    document.getElementById('lobbyTip').textContent =
-      'Keep this page open: the questions appear here. Answer each one correctly to stay in the running.'
-      + (eliminatedCanAnswer ? ' Knocked out? You can keep playing along.' : '');
+    document.getElementById('lobbyTip').textContent = lobbyNotice ||
+      ('Keep this page open: the questions appear here. Answer each one correctly to stay in the running.'
+      + (eliminatedCanAnswer ? ' Knocked out? You can keep playing along.' : ''));
     renderLobbySound();
     return;
   }
@@ -1007,12 +1011,14 @@ function render(){
   document.getElementById('qCounter').textContent = counter;
 
   if (s.question){
-    // Reset confirm-mode pending state on every new question.
-    if (s.questionIndex !== lastQuestionIndex) {
+    lobbyNotice = '';
+    // Reset confirm-mode pending state on every new question — including a
+    // question the host rewound to, which is asked again.
+    const questionKey = (s.inBonus ? 'b' : 'q') + (s.inBonus ? s.bonusIndex : s.questionIndex) + ':' + (s.rewinds || 0);
+    if (s.questionIndex !== lastQuestionIndex || questionKey !== lastQuestionKey) {
       pendingAnswer = null;
       lastQuestionIndex = s.questionIndex;
     }
-    const questionKey = (s.inBonus ? 'b' : 'q') + (s.inBonus ? s.bonusIndex : s.questionIndex);
     if (questionKey !== lastQuestionKey) {
       lastQuestionKey = questionKey;
       // A question landing (from the lobby, or after a reveal) gets the
