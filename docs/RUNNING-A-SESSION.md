@@ -102,6 +102,12 @@ operator can always press **M** to toggle the board's sound.
 - **Finding someone.** Admin → Players has a search box (name or email). During a game anyone offline
   is listed first.
 
+## Switching question sets
+
+Admin → Questions → **Packs** is a library of saved banks on the server. Save the current bank as a
+pack, load another (the replaced bank is kept as an automatic snapshot first), or **Clear all
+questions**. See [`QUESTIONS.md`](QUESTIONS.md#pack-library).
+
 ## Question timer
 
 Admin → Branding → **Question timer** sets how many seconds each question stays open (default 45;

@@ -444,6 +444,103 @@ function saveQuestionsToDisk() {
 }
 
 // ----------------------------------------------------------------------------
+// Pack library — saved question banks under DATA_DIR/packs/<id>.json, so a
+// session can keep several sets and switch between them without losing any.
+// A pack file is { id, title, tagline, category, auto, savedAt, updatedAt,
+// main, bonus }. Before a load or a clear replaces the live bank, the bank
+// is snapshotted as an automatic pack (the last PACK_AUTO_KEEP are kept).
+// ----------------------------------------------------------------------------
+const PACKS_DIR = path.join(DATA_DIR, 'packs');
+const PACK_ID_RE = /^[a-z0-9][a-z0-9-]{0,59}$/;
+const PACK_TITLE_MAX = 80;
+const PACK_AUTO_KEEP = 5;
+function packText(v, max) {
+  return typeof v === 'string' ? v.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim().slice(0, max) : '';
+}
+function packIdFor(title) {
+  const slug = String(title || 'pack').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'pack';
+  return `${slug}-${crypto.randomBytes(3).toString('hex')}`;
+}
+function packPath(id) {
+  if (!PACK_ID_RE.test(id)) throw new Error('bad pack id');
+  return path.join(PACKS_DIR, `${id}.json`);
+}
+function readPack(id) {
+  const file = packPath(id);
+  if (!fs.existsSync(file)) return null;
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const bank = normalizeQuestionBank({ main: raw.main, bonus: raw.bonus }, { label: `pack "${id}"`, requireBonusKey: false });
+  return {
+    id, title: packText(raw.title, PACK_TITLE_MAX) || id, tagline: packText(raw.tagline, 120), category: packText(raw.category, 40),
+    auto: !!raw.auto, savedAt: raw.savedAt || null, updatedAt: raw.updatedAt || raw.savedAt || null,
+    main: bank.main, bonus: bank.bonus
+  };
+}
+function writePack(pack) {
+  const file = packPath(pack.id);
+  fs.mkdirSync(PACKS_DIR, { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(pack, null, 2) + '\n', 'utf8');
+  matchDataDirOwner(tmp);
+  fs.renameSync(tmp, file);
+}
+function packSummary(pack) {
+  const all = [...pack.main, ...pack.bonus];
+  return {
+    id: pack.id, title: pack.title, tagline: pack.tagline, category: pack.category, auto: pack.auto,
+    savedAt: pack.savedAt, updatedAt: pack.updatedAt,
+    mainCount: pack.main.length, bonusCount: pack.bonus.length,
+    hasImages: all.some(q => q.image), hasNotes: all.some(q => q.notes)
+  };
+}
+function listPacks() {
+  if (!fs.existsSync(PACKS_DIR)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(PACKS_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const id = name.slice(0, -5);
+    if (!PACK_ID_RE.test(id)) continue;
+    try { out.push(packSummary(readPack(id))); }
+    catch (e) { logJson('warn', 'packs.unreadable', { id, error: e.message }); }
+  }
+  return out.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+}
+function savePackFromBank({ id, title, tagline, category, auto = false } = {}) {
+  const now = new Date().toISOString();
+  const existing = id ? readPack(id) : null;
+  const pack = {
+    id: existing ? existing.id : packIdFor(title),
+    title: packText(title, PACK_TITLE_MAX) || (existing && existing.title) || 'Untitled pack',
+    tagline: tagline !== undefined ? packText(tagline, 120) : (existing ? existing.tagline : ''),
+    category: category !== undefined ? packText(category, 40) : (existing ? existing.category : ''),
+    auto: !!auto,
+    savedAt: existing ? existing.savedAt : now,
+    updatedAt: now,
+    main: questions, bonus: bonusQuestions
+  };
+  writePack(pack);
+  return pack;
+}
+// Keep what is about to be replaced. Nothing to keep if the bank is empty.
+function autoSnapshotBank(reason) {
+  if (!questions.length && !bonusQuestions.length) return null;
+  const title = `Auto: ${reason} (${new Date().toLocaleString('en-AU', { hour12: false })})`.slice(0, PACK_TITLE_MAX);
+  const pack = savePackFromBank({ title, tagline: branding.tagline, category: branding.quizCategory, auto: true });
+  const autos = listPacks().filter(p => p.auto);
+  autos.slice(PACK_AUTO_KEEP).forEach(p => { try { fs.unlinkSync(packPath(p.id)); } catch {} });
+  return pack;
+}
+function deletePack(id) {
+  const file = packPath(id);
+  if (!fs.existsSync(file)) return false;
+  fs.unlinkSync(file);
+  return true;
+}
+function broadcastPacks() {
+  broadcast({ type: 'packs:list', packs: listPacks() }, c => c.role === 'admin');
+}
+
+// ----------------------------------------------------------------------------
 // Startup CLI args — `-u <URL>` / `--seed-url <URL>` seeds the question bank
 // from a JSON or CSV at first run (when the bank is empty). The same value
 // can also come from the QUESTIONS_SEED_URL env var. The positional
@@ -3172,6 +3269,115 @@ function adminAction(action, payload = {}, adminWs = null) {
       break;
     }
 
+    case 'packs:list': {
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'packs:list', packs: listPacks() }));
+      break;
+    }
+    case 'packs:save': {
+      // The live bank (as saved on disk — unsaved editor drafts are not
+      // part of it) becomes a pack, new or overwriting `packId`.
+      try {
+        const packId = payload.packId ? String(payload.packId) : '';
+        if (packId && !PACK_ID_RE.test(packId)) throw new Error('bad pack id');
+        if (packId && !readPack(packId)) throw new Error('no such pack');
+        if (!questions.length && !bonusQuestions.length) throw new Error('the question bank is empty');
+        const pack = savePackFromBank({
+          id: packId || undefined,
+          title: payload.title !== undefined ? payload.title : (packId ? undefined : branding.quizTitle),
+          tagline: payload.tagline !== undefined ? payload.tagline : (packId ? undefined : branding.tagline),
+          category: payload.category !== undefined ? payload.category : (packId ? undefined : branding.quizCategory)
+        });
+        logEvent('admin', `${packId ? 'Updated' : 'Saved'} pack "${pack.title}" (${pack.main.length} main, ${pack.bonus.length} bonus)`);
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'packs:saved', pack: packSummary(pack) }));
+        broadcastPacks();
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Save pack failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'packs:load': {
+      if (game.phase !== 'lobby' && game.phase !== 'end') {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Packs can only be loaded in the lobby or after the game ends.' }));
+        return;
+      }
+      try {
+        const pack = readPack(String(payload.packId || ''));
+        if (!pack) throw new Error('no such pack');
+        const snapshot = autoSnapshotBank('before loading ' + pack.title);
+        questions = pack.main;
+        bonusQuestions = pack.bonus;
+        saveQuestionsToDisk();
+        let brandingUpdated = false;
+        if (payload.applyBranding) brandingUpdated = applyPackBranding({ title: pack.title, tagline: pack.tagline, category: pack.category });
+        logEvent('admin', `Loaded pack "${pack.title}" (${questions.length} main, ${bonusQuestions.length} bonus)${brandingUpdated ? ', quiz title updated' : ''}`);
+        broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
+        pushAll();
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'packs:loaded', pack: packSummary(pack), brandingUpdated, snapshotId: snapshot ? snapshot.id : null }));
+        broadcastPacks();
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Load pack failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'packs:rename': {
+      try {
+        const pack = readPack(String(payload.packId || ''));
+        if (!pack) throw new Error('no such pack');
+        const title = packText(payload.title, PACK_TITLE_MAX);
+        if (!title) throw new Error('a title is needed');
+        pack.title = title;
+        if (payload.tagline !== undefined) pack.tagline = packText(payload.tagline, 120);
+        if (payload.category !== undefined) pack.category = packText(payload.category, 40);
+        pack.auto = false; // a renamed snapshot is one the operator wants to keep
+        pack.updatedAt = new Date().toISOString();
+        writePack(pack);
+        broadcastPacks();
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Rename failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'packs:duplicate': {
+      try {
+        const pack = readPack(String(payload.packId || ''));
+        if (!pack) throw new Error('no such pack');
+        const now = new Date().toISOString();
+        const copy = { ...pack, id: packIdFor(pack.title), title: `${pack.title} (copy)`.slice(0, PACK_TITLE_MAX), auto: false, savedAt: now, updatedAt: now };
+        writePack(copy);
+        broadcastPacks();
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Duplicate failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'packs:delete': {
+      try {
+        const id = String(payload.packId || '');
+        if (!PACK_ID_RE.test(id) || !deletePack(id)) throw new Error('no such pack');
+        logEvent('admin', `Deleted pack ${id}`);
+        broadcastPacks();
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'packs', error: 'Delete failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'questions:clear': {
+      if (game.phase !== 'lobby' && game.phase !== 'end') {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'Questions can only be cleared in the lobby or after the game ends.' }));
+        return;
+      }
+      const snapshot = autoSnapshotBank('before clearing');
+      const had = questions.length + bonusQuestions.length;
+      questions = [];
+      bonusQuestions = [];
+      saveQuestionsToDisk();
+      logEvent('admin', `Question bank cleared (${had} question${had === 1 ? '' : 's'} removed${snapshot ? ', snapshot kept in the pack library' : ''})`);
+      broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
+      pushAll();
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'questions:cleared', removed: had, snapshotId: snapshot ? snapshot.id : null }));
+      broadcastPacks();
+      break;
+    }
     case 'questions:reset-defaults': {
       if (game.phase !== 'lobby' && game.phase !== 'end') {
         if (adminWs) adminWs.send(JSON.stringify({ type: 'error', error: 'Reset only allowed in lobby or after game end.' }));
@@ -4218,6 +4424,17 @@ app.get('/questions.csv', requireRole('admin'), (req, res) => {
   res.send(csv);
 });
 
+// A saved pack as a JSON file (admin only): the same format Import takes.
+app.get('/packs/:id.json', requireRole('admin'), (req, res) => {
+  const id = String(req.params.id || '');
+  let pack = null;
+  try { pack = PACK_ID_RE.test(id) ? readPack(id) : null; } catch { pack = null; }
+  if (!pack) { res.status(404).type('text/plain').send('No such pack'); return; }
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="omegaquiz-${id}.json"`);
+  res.send(JSON.stringify({ title: pack.title, tagline: pack.tagline, category: pack.category, main: pack.main, bonus: pack.bonus }, null, 2));
+});
+
 // Blank template (admin only — keeps the file behind auth so it's the same
 // flow as the export, but the content is non-sensitive).
 app.get('/questions-template.csv', requireRole('admin'), (req, res) => {
@@ -4595,6 +4812,7 @@ module.exports = {
   loadQuestionsFromDisk, saveQuestionsToDisk,
   QUESTIONS_PATH,
   get questions() { return questions; },
+  PACKS_DIR, PACK_ID_RE, PACK_AUTO_KEEP, listPacks, readPack,
   get bonusQuestions() { return bonusQuestions; },
   createSession, deleteSession, getSession, packCookie, unpackCookie,
   loadBranding, saveBranding, validateBranding,

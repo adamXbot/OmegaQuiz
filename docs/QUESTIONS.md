@@ -46,6 +46,23 @@ multiple players are tied at the end.
 To export what is currently loaded, use Admin → Questions → **Export CSV**, which downloads
 `omegaquiz-questions.csv` in the same format.
 
+### Pack library
+
+Admin → Questions → **Packs** keeps saved banks on the server (`DATA_DIR/packs/<id>.json`) so a
+session can hold several question sets and switch between them:
+
+- **Save bank as pack…** stores the bank as saved on the server under a name and tagline (Save
+  Changes first if the editor has unsaved edits).
+- **Load** replaces the live bank with the pack and asks each time whether to switch the quiz title
+  and tagline too. Before it does, the bank being replaced is kept as an **automatic snapshot** in
+  the same list (the last five are kept), so a load is never destructive. Loading is only allowed in
+  the lobby or after the game ends.
+- **Save current here** overwrites a pack's questions with the live bank; **Rename**, **Duplicate**,
+  **Export** (a JSON pack file, importable anywhere) and **Delete** do what they say.
+- **Clear all questions** empties the bank in one go, after taking the same automatic snapshot.
+
+Deleting a single question in the editor now asks first.
+
 ### JSON packs
 
 The same **Import CSV / JSON** button also takes a JSON pack — the format used by the bundled packs
