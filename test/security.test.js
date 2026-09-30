@@ -4293,6 +4293,7 @@ async function presenterViewTests() {
     const a = await request('GET', '/present', { headers: { Cookie: admin.cookie } });
     ok(a.status === 200, '/present as admin → 200');
     ok(h.body.includes('id="notes"') && h.body.includes('id="nextBody"') && h.body.includes('id="waitingNames"'), '/present: notes, next-up and still-to-answer panels present');
+    ok(h.body.includes("'PageDown', 'ArrowRight'") && h.body.includes("'PageUp', 'ArrowLeft'") && h.body.includes('id="clickerPill"') && h.body.includes('id="reviewBanner"'), '/present: clicker keys (Page Down/Up, arrows), armed pill and past-reveal banner');
     const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
     ok(adminPage.includes('href="/present"') && adminPage.includes('data-field="notes"'), 'admin: Open Presenter View link and a Presenter notes field per question');
   }
@@ -4393,9 +4394,14 @@ async function presenterViewTests() {
     hostAction('close-question');
     const rev = await untilPresent(s => s.phase === 'reveal');
     ok(rev && rev.stillToAnswer.length === 0 && rev.audienceTally && rev.currentQuestion.correct === 1, 'reveal: still-to-answer is empty and the tally is present');
+    ok(Array.isArray(rev.history) && rev.history.length === 0, 'reveal: the current reveal is the live card, not history');
     hostAction('next-question');
     const q2 = await untilPresent(s => s.phase === 'question' && s.questionIndex === 1);
     ok(q2 && q2.currentQuestion.notes === 'Q2 notes.' && q2.nextUp && q2.nextUp.end === true, 'question 2: its notes; next up is the end of the game (one survivor)');
+    const h1 = q2.history && q2.history[0];
+    ok(q2.history.length === 1 && h1.label === 'Question 1' && h1.correct === 1 && h1.notes === notes1 && !('image' in h1), 'question 2: history holds question 1 with its answer and notes (no image)');
+    ok(h1.tally && h1.tally.counts[1] === 1 && h1.tally.answered === 1 && h1.tally.wasAlive === 2 && h1.tally.correct === 1, 'history: the room split for question 1 (Ada right, Bob no answer)');
+    ok(hostState && !('history' in hostState), 'board: host:state carries no history');
     ok(q2.stillToAnswer.length === 1 && q2.stillToAnswer[0].name === 'Ada', 'question 2: only the survivor is still to answer');
     p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
     await untilPresent(s => s.stillToAnswer.length === 0);
@@ -4436,6 +4442,7 @@ async function presenterViewTests() {
     hostAction('next-question');
     const b1 = await untilPresent(s => s.phase === 'question' && s.inBonus);
     ok(b1 && b1.currentQuestion.label === 'Tiebreaker 1' && b1.currentQuestion.notes === 'Bonus notes.' && b1.nextUp && b1.nextUp.end, 'tiebreaker: its label and notes; the end is next');
+    ok(b1.history.length === 2 && b1.history[1].label === 'Question 2' && b1.history[1].tally.answered === 2, 'tiebreaker: history holds both main questions in order');
   }
 
   hostAction('reset-game');

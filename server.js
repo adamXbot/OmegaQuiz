@@ -2387,6 +2387,32 @@ function presenterNextUp() {
   if (i < bonusQuestions.length && survivors().length > 1) return presenterQuestionCard(bonusQuestions[i], `Tiebreaker ${i + 1}`);
   return { label: 'End of game', end: true };
 }
+// Every question already closed this game, oldest first, with how the room
+// answered it: the presenter's Back key shows these again without touching
+// the board. Images are left out to keep the snapshot small.
+function presenterHistory() {
+  if (game.phase === 'lobby') return [];
+  const closed = [];
+  const mainCount = game.inBonus ? questions.length : game.questionIndex + (game.phase === 'reveal' ? 1 : 0);
+  for (let i = 0; i < Math.min(mainCount, questions.length); i++) closed.push({ q: questions[i], label: `Question ${i + 1}`, key: `Q${i + 1}` });
+  if (game.inBonus) {
+    const bonusCount = game.bonusIndex + (game.phase === 'reveal' ? 1 : 0);
+    for (let i = 0; i < Math.min(bonusCount, bonusQuestions.length); i++) closed.push({ q: bonusQuestions[i], label: `Tiebreaker ${i + 1}`, key: `B${i + 1}` });
+  }
+  if (game.phase === 'reveal') closed.pop(); // the current reveal is the live card, not history
+  return closed.map(({ q, label, key }) => {
+    const counts = [0, 0, 0, 0];
+    let answered = 0, wasAlive = 0, correct = 0;
+    game.players.forEach(p => {
+      const h = (p.history || []).find(e => e.label === key);
+      if (!h) return;
+      if (h.wasAlive) wasAlive++;
+      if (h.answer != null && h.answer >= 0 && h.answer < 4) { counts[h.answer]++; answered++; }
+      if (h.correct && h.wasAlive) correct++;
+    });
+    return { label, q: q.q, options: q.options, correct: q.correct, lesson: q.lesson || '', notes: q.notes || '', tally: { counts, answered, wasAlive, correct } };
+  });
+}
 function presenterStillToAnswer() {
   if (game.phase !== 'question') return [];
   return survivors()
@@ -2425,7 +2451,8 @@ function pushPresentState() {
       liveAnswerTally: buildLiveAnswerTally(),
       currentQuestion: presenterQuestionCard(q, label),
       nextUp: presenterNextUp(),
-      stillToAnswer: presenterStillToAnswer()
+      stillToAnswer: presenterStillToAnswer(),
+      history: presenterHistory()
     }
   }, c => c.screen === 'present');
 }

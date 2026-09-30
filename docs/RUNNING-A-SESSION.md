@@ -40,6 +40,22 @@ screen while `/host` is on the projector as an extended display. It shows:
 The top bar shows the phase, the question number, how long the question has been open, the join
 code, players still in, and the connection state.
 
+### Presentation clicker
+
+The presenter view listens for a presentation clicker (Logitech, Verbatim and most others send
+**Page Down** / **Page Up**; the arrow keys and Space work too):
+
+- **Forward** does the next natural thing: start the game from the lobby (press twice if nobody has
+  joined), close and reveal an open question, move on from a reveal. A second press within 0.7 s is
+  ignored, so a double-click never skips a step.
+- **Back** looks back at past reveals on this screen only — the question, the room's split and the
+  lesson — without changing the board. Forward (or Escape) returns to the live view; it does not
+  advance the game.
+- The **Clicker armed** pill in the top bar goes green while the page has keyboard focus. Keys are
+  ignored while typing in a field, and a focused button keeps Space and Enter for itself.
+
+The board (`/host`) and the admin page do not react to the clicker.
+
 ## Presentation style and sounds
 
 Admin → **Branding → Presentation** picks how much theatre the game puts on:
