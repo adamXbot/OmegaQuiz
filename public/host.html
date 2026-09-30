@@ -358,6 +358,7 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 .review-card .answer-pill.correct{background:rgba(34,197,94,.2);color:#86efac;border-left:3px solid #4ade80}
 .review-card .lesson{margin-top:16px;padding-top:14px;border-top:1px solid var(--gold-dim);color:#bdc4eb;font-style:italic;font-size:14px;line-height:1.6}
 
+.audio-toggle[hidden]{display:none}
 .audio-toggle{position:fixed;top:20px;right:20px;z-index:60;background:rgba(5,11,58,.8);border:1px solid var(--gold);color:var(--gold);width:42px;height:42px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:18px}
 </style>
 </head>
@@ -542,7 +543,12 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 // The cookie is httpOnly + SameSite=Strict and rides along with the WS upgrade.
 let state = null;
 let ws = null;
+// The speaker starts as this browser last left it (off on a first visit);
+// the AudioContext still needs a click, which the first click on the page
+// provides. Admin → Branding can hide the button; M toggles it regardless.
 let audioOn = false;
+try { audioOn = localStorage.getItem('omegaquiz_host_audio') === '1'; } catch {}
+let showSoundToggle = true;
 // Dramatic presentation state (see the CSS block of the same name).
 let presentationDramatic = false;
 const REDUCED_MOTION = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -626,6 +632,8 @@ async function applyBranding(){
     sessionClosed  = !!b.sessionClosed;
     presentationDramatic = b.presentationStyle === 'dramatic';
     document.documentElement.classList.toggle('dramatic', presentationDramatic);
+    showSoundToggle = b.showSoundToggleBoard !== false;
+    document.getElementById('audioToggle').hidden = !showSoundToggle;
     renderSoundPrompt();
     brandPublicBaseUrl = b.publicBaseUrl || '';
     const ctaLine = document.getElementById('endCtaLine');
@@ -1314,6 +1322,7 @@ document.addEventListener('keydown', e => {
 });
 async function setAudio(on){
   audioOn = on;
+  try { localStorage.setItem('omegaquiz_host_audio', on ? '1' : '0'); } catch {}
   const btn = document.getElementById('audioToggle');
   btn.textContent = audioOn ? '🔊' : '🔇';
   btn.setAttribute('aria-pressed', String(audioOn));
@@ -1328,6 +1337,17 @@ async function setAudio(on){
   }
 }
 document.getElementById('audioToggle').onclick = () => setAudio(!audioOn);
+// Reflect a remembered "on" in the button, and let the first click anywhere
+// start the AudioContext (browsers only allow that after a gesture).
+if (audioOn) { setAudio(true); }
+document.addEventListener('click', () => { if (audioOn) ensureAudio(); }, { once: true });
+document.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') {
+    const t = e.target && e.target.tagName;
+    if (t === 'INPUT' || t === 'TEXTAREA' || e.altKey || e.ctrlKey || e.metaKey) return;
+    setAudio(!audioOn);
+  }
+});
 // Lobby prompt for dramatic mode: shown until sound is on.
 function renderSoundPrompt(){
   const b = document.getElementById('soundPromptBtn');

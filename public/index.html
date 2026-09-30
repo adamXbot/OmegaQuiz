@@ -433,6 +433,7 @@ function applyTheme(theme){
     }
   }
 }
+let showSoundToggle = true; // Admin → Branding → Speaker button on phones (dramatic mode)
 async function applyBranding(){
   try {
     const r = await fetch('/branding.json', { cache: 'no-store' });
@@ -486,6 +487,7 @@ async function applyBranding(){
     endCtaLabel = b.endGameCtaLabel || '';
     endCtaUrl   = b.endGameCtaUrl || '';
     brandingCategory = b.quizCategory || '';
+    showSoundToggle = b.showSoundTogglePhones !== false;
     setPresentation(b.presentationStyle === 'dramatic');
     applySessionClosedView();
     // If branding changed mid-question, re-render so the lock button shows/hides.
@@ -824,7 +826,7 @@ function setPresentation(dramatic) {
   presentationDramatic = !!dramatic;
   document.documentElement.classList.toggle('dramatic', presentationDramatic);
   const t = document.getElementById('audioToggle');
-  if (t) { t.hidden = !presentationDramatic; renderAudioToggle(); }
+  if (t) { t.hidden = !presentationDramatic || !showSoundToggle; renderAudioToggle(); }
   renderLobbySound();
 }
 // "Sound on" only counts once the browser has let audio start, which takes a

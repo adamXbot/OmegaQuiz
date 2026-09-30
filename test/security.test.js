@@ -4684,6 +4684,27 @@ async function questionTimerTests() {
     await until(s => s.phase === 'lobby');
   }
 
+  section('Sound toggles: Admin → Branding can hide the speaker buttons');
+  {
+    ok(validateBranding({}).showSoundToggleBoard === true && validateBranding({}).showSoundTogglePhones === true, 'both speaker buttons shown by default');
+    ok(validateBranding({ showSoundToggleBoard: false }).showSoundToggleBoard === false && validateBranding({ showSoundTogglePhones: 0 }).showSoundTogglePhones === false, 'either can be switched off');
+    const envBak = { b: process.env.SHOW_SOUND_TOGGLE_BOARD, p: process.env.SHOW_SOUND_TOGGLE_PHONES };
+    process.env.SHOW_SOUND_TOGGLE_BOARD = 'false'; process.env.SHOW_SOUND_TOGGLE_PHONES = 'no';
+    const fromEnv = brandingFromEnv();
+    ok(fromEnv.showSoundToggleBoard === false && fromEnv.showSoundTogglePhones === false, 'SHOW_SOUND_TOGGLE_BOARD / _PHONES env vars');
+    if (envBak.b === undefined) delete process.env.SHOW_SOUND_TOGGLE_BOARD; else process.env.SHOW_SOUND_TOGGLE_BOARD = envBak.b;
+    if (envBak.p === undefined) delete process.env.SHOW_SOUND_TOGGLE_PHONES; else process.env.SHOW_SOUND_TOGGLE_PHONES = envBak.p;
+    const b = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+    ok('showSoundToggleBoard' in b && 'showSoundTogglePhones' in b, '/branding.json carries both flags for the board and the phones');
+    const hostPage = (await request('GET', '/host', { headers: { Cookie: (await loginAs('host', process.env.HOST_TOKEN)).cookie } })).body;
+    ok(hostPage.includes('.audio-toggle[hidden]{display:none}'), 'board: the hidden attribute beats the button\'s display:flex');
+    ok(hostPage.includes("document.getElementById('audioToggle').hidden = !showSoundToggle") && hostPage.includes("localStorage.getItem('omegaquiz_host_audio')") && hostPage.includes("e.key === 'm' || e.key === 'M'"), 'board: hides the button, remembers the sound state, M toggles');
+    const phonePage = (await request('GET', '/')).body;
+    ok(phonePage.includes('t.hidden = !presentationDramatic || !showSoundToggle') && phonePage.includes('b.showSoundTogglePhones !== false'), 'phone: hides the button when the setting is off');
+    const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(adminPage.includes('id="brandingSoundToggleBoardInput"') && adminPage.includes('id="brandingSoundTogglePhonesInput"'), 'admin: two switches under Presentation');
+  }
+
   section('Timer: the pages draw it');
   {
     const hostPage = (await request('GET', '/host', { headers: { Cookie: (await loginAs('host', process.env.HOST_TOKEN)).cookie } })).body;
