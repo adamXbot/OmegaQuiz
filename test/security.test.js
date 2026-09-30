@@ -4750,6 +4750,7 @@ async function packLibraryTests() {
     await waitMessage(aws, m => m.type === 'admin:questions', 3000);
     act('packs:save', { title: '  Phishing — October  ', tagline: 'Cohort A' });
     const saved = await reply(['packs:saved', 'error']);
+    await reply(['packs:list']).catch(() => null); // the save also broadcasts the list
     ok(saved.type === 'packs:saved' && saved.pack.title === 'Phishing — October' && saved.pack.mainCount === 10 && saved.pack.bonusCount === 5, `packs:save stores the live bank as a pack (${saved.error || saved.pack.id})`);
     const id = saved.pack.id;
     ok(PACK_ID_RE.test(id) && id.startsWith('phishing-october-'), 'pack id is a slug of the title plus a suffix');
@@ -4767,6 +4768,7 @@ async function packLibraryTests() {
     lastPacks = null;
     act('packs:load', { packId: id, applyBranding: false });
     const loaded = await reply(['packs:loaded', 'error']);
+    await reply(['packs:list']).catch(() => null);
     ok(loaded.type === 'packs:loaded' && loaded.pack.id === id && loaded.brandingUpdated === false && loaded.snapshotId, `packs:load replaces the bank and reports the snapshot (${loaded.error || ''})`);
     await pause(100);
     ok(bank && bank.questions.length === 10 && bank.bonusQuestions.length === 5, 'admin:questions carries the loaded pack');
@@ -4779,6 +4781,7 @@ async function packLibraryTests() {
 
     act('packs:load', { packId: id, applyBranding: true });
     const loaded2 = await reply(['packs:loaded', 'error']);
+    await reply(['packs:list']).catch(() => null);
     ok(loaded2.type === 'packs:loaded' && loaded2.brandingUpdated === true, 'applyBranding:true switches the quiz title');
     const b2 = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
     ok(/Phishing/.test(b2.quizTitle) && /Cohort A/.test(b2.tagline), 'quiz title and tagline now come from the pack');
@@ -4792,6 +4795,7 @@ async function packLibraryTests() {
     ok(copy && copy.id !== id && copy.mainCount === 10, 'duplicate makes a copy under a new id');
     act('packs:save', { packId: copy.id });
     const over = await reply(['packs:saved', 'error']);
+    await reply(['packs:list']).catch(() => null); // drain the save's own list broadcast
     ok(over.type === 'packs:saved' && over.pack.id === copy.id && over.pack.title === 'Phishing — November (copy)', 'save with packId overwrites the questions and keeps the name');
     act('packs:delete', { packId: copy.id });
     const l5 = await reply(['packs:list', 'error']);
@@ -4815,6 +4819,7 @@ async function packLibraryTests() {
   {
     act('questions:clear');
     const cleared = await reply(['questions:cleared', 'error']);
+    await reply(['packs:list']).catch(() => null);
     ok(cleared.type === 'questions:cleared' && cleared.removed === 15 && cleared.snapshotId, 'questions:clear empties the bank and snapshots it');
     await until(s => s.totalQuestions === 0);
     ok(adminState.totalQuestions === 0 && JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf8')).main.length === 0, 'the bank is empty on the state and on disk');
@@ -4827,6 +4832,7 @@ async function packLibraryTests() {
     for (let i = 0; i < PACK_AUTO_KEEP + 3; i++) {
       act('packs:load', { packId: keep.id, applyBranding: false });
       await reply(['packs:loaded', 'error']);
+      await reply(['packs:list']).catch(() => null);
     }
     const autos = listPacks().filter(p => p.auto);
     ok(autos.length <= PACK_AUTO_KEEP, `at most ${PACK_AUTO_KEEP} automatic snapshots are kept (${autos.length})`);
@@ -4841,6 +4847,7 @@ async function packLibraryTests() {
     ok(refused2.type === 'error', 'clear is refused during a question');
     act('packs:save', { title: 'Mid-game save' });
     const midSave = await reply(['packs:saved', 'error']);
+    await reply(['packs:list']).catch(() => null);
     ok(midSave.type === 'packs:saved', 'saving the bank as a pack is allowed mid-game');
     hostAction('return-to-lobby');
     await until(s => s.phase === 'lobby');
@@ -4859,6 +4866,45 @@ async function packLibraryTests() {
   act('questions:reset-defaults');
   await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
   try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
+// Question preview (framed board / presenter in ?preview=1 mode) + fit
+// ----------------------------------------------------------------------------
+async function questionPreviewTests() {
+  section('Preview: only /host?preview=1 and /present?preview=1 may be framed, same origin only');
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const host = await loginAs('host', process.env.HOST_TOKEN);
+  {
+    for (const [p, headers] of [['/host', { Cookie: host.cookie }], ['/present', { Cookie: host.cookie }], ['/admin', { Cookie: admin.cookie }], ['/', {}]]) {
+      const r = await request('GET', p, { headers });
+      ok(r.headers['x-frame-options'] === 'DENY' && /frame-ancestors 'none'/.test(r.headers['content-security-policy'] || ''), `${p}: still refuses framing`);
+    }
+    for (const p of ['/host?preview=1', '/present?preview=1']) {
+      const r = await request('GET', p, { headers: { Cookie: host.cookie } });
+      ok(r.status === 200 && r.headers['x-frame-options'] === 'SAMEORIGIN' && /frame-ancestors 'self'/.test(r.headers['content-security-policy'] || '') && !/frame-ancestors 'none'/.test(r.headers['content-security-policy']), `${p}: framable by the same origin only`);
+    }
+    const other = await request('GET', '/admin?preview=1', { headers: { Cookie: admin.cookie } });
+    ok(other.headers['x-frame-options'] === 'DENY', '/admin?preview=1: the flag only applies to the board and presenter pages');
+    const anon = await request('GET', '/host?preview=1');
+    ok(anon.status === 302, 'the preview mode still needs a host or admin sign-in');
+  }
+
+  section('Preview: pages and markup');
+  {
+    const hostPage = (await request('GET', '/host', { headers: { Cookie: host.cookie } })).body;
+    ok(hostPage.includes("get('preview') === '1'") && hostPage.includes("if (!PREVIEW) connect();") && hostPage.includes("e.data.type !== 'preview:state'") && hostPage.includes("if (e.origin !== location.origin"), 'board: preview mode opens no WebSocket and only takes same-origin messages');
+    ok(hostPage.includes('function fitQuestion()') && hostPage.includes('function boardOverflows()') && hostPage.includes('.main.measuring .question-wrap{flex:0 0 auto') && hostPage.includes("wrap.style.setProperty('--fit'") && hostPage.includes('calc(clamp(16px,1.8vw,24px) * var(--fit))'), 'board: shrinks the question block to fit (down to 60%)');
+    ok(!hostPage.includes('-webkit-line-clamp:4'), 'board: the lesson is no longer cut to four lines');
+    ok(hostPage.includes("type: 'preview:fit'") && hostPage.includes("if (!audioOn || PREVIEW) return;"), 'board: reports the fit to the admin and stays silent in preview');
+    const presentPage = (await request('GET', '/present', { headers: { Cookie: host.cookie } })).body;
+    ok(presentPage.includes("if (!PREVIEW) connect();") && presentPage.includes("e.data.type !== 'preview:state'"), 'presenter: preview mode');
+    const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(adminPage.includes('id="previewModal"') && adminPage.includes("board.src = '/host?preview=1'") && adminPage.includes("pres.src = '/present?preview=1'"), 'admin: preview modal frames the real board and presenter pages');
+    ok(adminPage.includes('data-action="preview"') && adminPage.includes('id="previewAllBtn"') && adminPage.includes('name="previewPhase"'), 'admin: Preview per question, Preview all, question/reveal toggle');
+    ok(adminPage.includes('function fitWarnings(q)') && adminPage.includes('data-field="warn"'), 'admin: fit warnings in the editor');
+    ok(adminPage.includes("if (e.origin !== location.origin || !e.data) return;"), 'admin: only same-origin frames can report');
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -4904,6 +4950,7 @@ async function packLibraryTests() {
     await presenterViewTests();
     await questionTimerTests();
     await packLibraryTests();
+    await questionPreviewTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

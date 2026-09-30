@@ -43,7 +43,8 @@ body::after{right:-10%;transform:rotate(-15deg)}
 
 .stage{position:relative;z-index:1;height:100vh;display:grid;grid-template-columns:1fr 320px;gap:24px;padding:24px}
 .main{display:flex;flex-direction:column;justify-content:space-between}
-.side{display:flex;flex-direction:column;gap:16px}
+.side{display:flex;flex-direction:column;gap:16px;min-height:0}
+.side .ladder{flex:1 1 auto;min-height:0;overflow:hidden}
 
 /* HEADER */
 .header{text-align:center;padding:12px 0 8px}
@@ -82,7 +83,10 @@ body::after{right:-10%;transform:rotate(-15deg)}
   box-shadow:0 0 0 4px var(--navy-deep), 0 0 0 5px var(--gold-dim), var(--shadow-gold);
   min-height:120px;display:flex;align-items:center;justify-content:center;
 }
-.question-text{font-size:clamp(16px,1.8vw,24px);line-height:1.45;text-shadow:0 2px 4px rgba(0,0,0,.6)}
+/* --fit (1 → 0.6) is set by fitQuestion() so long questions, options and
+   lessons shrink to stay on a 720p board instead of running off the bottom. */
+.question-wrap{--fit:1}
+.question-text{font-size:calc(clamp(16px,1.8vw,24px) * var(--fit));line-height:1.45;text-shadow:0 2px 4px rgba(0,0,0,.6)}
 .question-text .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:2px 8px;border-radius:4px;color:var(--gold-bright)}
 
 .answers{display:grid;grid-template-columns:1fr 1fr;gap:14px 40px;width:100%;max-width:1000px}
@@ -91,18 +95,17 @@ body::after{right:-10%;transform:rotate(-15deg)}
   border:2px solid var(--gold);border-radius:40px / 50%;
   padding:14px 24px;display:flex;align-items:center;gap:14px;
   box-shadow:0 0 0 3px var(--navy-deep), 0 0 0 4px var(--gold-dim);
-  font-size:clamp(13px,1.3vw,18px);color:var(--white);text-align:left;
+  font-size:calc(clamp(13px,1.3vw,18px) * var(--fit));color:var(--white);text-align:left;
   transition:all .25s ease;
 }
 .answer .letter{color:var(--gold);font-weight:bold;letter-spacing:.1em;min-width:24px}
-#questionImage{max-width:min(700px,80vw);max-height:36vh;object-fit:contain;border-radius:12px;background:rgba(0,0,0,.25);box-shadow:0 0 0 2px var(--gold-dim),0 8px 24px rgba(0,0,0,.5);transition:max-height .4s ease}
+#questionImage{max-width:min(700px,80vw);max-height:calc(36vh * var(--fit));object-fit:contain;border-radius:12px;background:rgba(0,0,0,.25);box-shadow:0 0 0 2px var(--gold-dim),0 8px 24px rgba(0,0,0,.5);transition:max-height .4s ease}
 /* The lesson joins the board at the reveal, so the question block tightens
    up to keep the answers, tally bars and lesson on a 1280x720 projector. */
 .lesson-box{
   width:100%;max-width:1000px;text-align:left;
   background:rgba(2,6,37,.8);border:1px solid var(--gold-dim);border-left:4px solid var(--gold);border-radius:12px;
-  padding:12px 20px;font-size:clamp(14px,1.35vw,19px);line-height:1.45;color:var(--white);
-  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;
+  padding:12px 20px;font-size:calc(clamp(14px,1.35vw,19px) * var(--fit));line-height:1.45;color:var(--white);
   animation:lessonIn .5s ease .9s both;
 }
 .lesson-box[hidden]{display:none}
@@ -110,7 +113,13 @@ body::after{right:-10%;transform:rotate(-15deg)}
 .lesson-box .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;color:var(--gold-bright)}
 @keyframes lessonIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 .stage.revealing .question-wrap{gap:14px}
-.stage.revealing #questionImage{max-height:18vh}
+.stage.revealing #questionImage{max-height:calc(18vh * var(--fit))}
+html.preview .audio-toggle{display:none}
+/* While measuring, the column and the question block hug their content so
+   the content height can be read (the column itself is stretched to the
+   taller side column). */
+.main.measuring{justify-content:flex-start}
+.main.measuring .question-wrap{flex:0 0 auto;justify-content:flex-start}
 .stage.revealing .question-box{padding:16px 48px;min-height:0}
 /* Dramatic presentation (admin → Branding → Presentation): the question box
    and options sweep in, and the grid pulses during the drum-roll that runs
@@ -154,18 +163,18 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 }
 .panel-title{text-align:center;color:var(--gold);font-size:10px;letter-spacing:.3em;margin-bottom:10px;text-transform:uppercase}
 /* Question timer: a ring that empties while answers are open. */
-.timer-panel{display:flex;flex-direction:column;align-items:center;padding:10px 14px}
+.timer-panel{display:flex;flex-direction:row;align-items:center;justify-content:center;gap:14px;padding:8px 14px}
 .timer-panel[hidden]{display:none}
-.timer-ring{position:relative;width:118px;height:118px}
+.timer-ring{position:relative;width:76px;height:76px;flex:none}
 .timer-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
 .timer-ring .track{fill:none;stroke:rgba(255,255,255,.12);stroke-width:8}
 .timer-ring .progress{fill:none;stroke:var(--gold);stroke-width:8;stroke-linecap:round;stroke-dasharray:276.5;stroke-dashoffset:0;transition:stroke-dashoffset .2s linear,stroke .3s}
-.timer-ring .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:bold;color:var(--gold);font-variant-numeric:tabular-nums;text-shadow:0 2px 0 #000}
-.timer-panel .timer-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:#9aa3d4;margin-top:6px}
+.timer-ring .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:bold;color:var(--gold);font-variant-numeric:tabular-nums;text-shadow:0 2px 0 #000}
+.timer-panel .timer-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:#9aa3d4;max-width:110px;line-height:1.5}
 .timer-panel.urgent .progress{stroke:var(--red)}
 .timer-panel.urgent .num{color:#fca5a5;animation:timerPulse 1s infinite}
 .timer-panel.locked .progress{stroke:var(--red);stroke-dashoffset:0}
-.timer-panel.locked .num{color:#fca5a5;font-size:22px;animation:none}
+.timer-panel.locked .num{color:#fca5a5;font-size:13px;animation:none}
 @keyframes timerPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
 .survivors-list{font-size:13px;color:#a8b0d8}
 .survivors-list li{padding:5px 8px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;margin:3px 0;list-style:none}
@@ -435,7 +444,7 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 
 <!-- MAIN GAME STAGE -->
 <div class="stage" id="gameStage" style="display:none">
-  <div class="main">
+  <div class="main" id="stageMain">
     <div class="header">
       <div class="title" id="stageTitle">Omega Quiz</div>
       <div class="subtitle" id="questionLabel">Question 1 of 10</div>
@@ -543,6 +552,11 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
 // The cookie is httpOnly + SameSite=Strict and rides along with the WS upgrade.
 let state = null;
 let ws = null;
+// ?preview=1: framed by the admin's question preview. No WebSocket, no
+// sound; the parent posts the state to draw and gets told how much the
+// question had to shrink to fit.
+const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
+if (PREVIEW) document.documentElement.classList.add('preview');
 // The speaker starts as this browser last left it (off on a first visit);
 // the AudioContext still needs a click, which the first click on the page
 // provides. Admin → Branding can hide the button; M toggles it regardless.
@@ -788,10 +802,60 @@ function showShutdownBanner(text){
   b.textContent = text;
 }
 function clearShutdownBanner(){ const b = document.getElementById('shutdownBanner'); if (b) b.remove(); }
-connect();
+if (!PREVIEW) connect();
+else {
+  window.addEventListener('message', e => {
+    if (e.origin !== location.origin || !e.data || e.data.type !== 'preview:state') return;
+    state = e.data.state;
+    render();
+    reportFit();
+  });
+  window.addEventListener('resize', () => { if (state) { fitQuestion(); reportFit(); } });
+  try { window.parent.postMessage({ type: 'preview:ready', page: 'host' }, location.origin); } catch {}
+}
 
 function hostAction(action, payload){
+  if (PREVIEW || !ws) return;
   ws.send(JSON.stringify({ type: 'host:action', action, payload: payload || {} }));
+}
+
+/* =====================
+   FIT TO THE BOARD
+   ===================== */
+// Shrink the question block (question, options, image, lesson) in 5% steps,
+// down to 60%, until it fits the column. Runs after every in-game render.
+let lastFit = 1;
+// The column is a grid item that grows with its content, so compare its
+// content height with the room the stage actually has (its height minus
+// padding), not with the column's own height.
+function boardOverflows(){
+  const main = document.getElementById('stageMain');
+  const stage = document.getElementById('gameStage');
+  if (!main || !stage || main.offsetParent === null) return false;
+  const cs = getComputedStyle(stage);
+  const room = stage.clientHeight - parseFloat(cs.paddingTop || 0) - parseFloat(cs.paddingBottom || 0);
+  main.classList.add('measuring');
+  const top = main.getBoundingClientRect().top;
+  let bottom = top;
+  [...main.children].forEach(k => { if (k.offsetParent !== null) bottom = Math.max(bottom, k.getBoundingClientRect().bottom); });
+  main.classList.remove('measuring');
+  return (bottom - top) > room + 2;
+}
+function fitQuestion(){
+  const wrap = document.querySelector('.question-wrap');
+  if (!wrap || wrap.offsetParent === null) return;
+  let fit = 1;
+  wrap.style.setProperty('--fit', '1');
+  while (boardOverflows() && fit > 0.6) {
+    fit = Math.round((fit - 0.05) * 100) / 100;
+    wrap.style.setProperty('--fit', String(fit));
+  }
+  lastFit = fit;
+}
+function reportFit(){
+  if (!PREVIEW) return;
+  const overflow = boardOverflows();
+  try { window.parent.postMessage({ type: 'preview:fit', page: 'host', fit: lastFit, overflow }, location.origin); } catch {}
 }
 
 // S3: button bindings replace inline onclick= attributes (CSP nonce policy
@@ -1119,7 +1183,10 @@ function render(){
   } else {
     lp.classList.remove('active');
   }
+
+  fitQuestion();
 }
+window.addEventListener('resize', () => { if (state && (state.phase === 'question' || state.phase === 'reveal')) fitQuestion(); });
 
 function renderLadder(){
   const ladder = document.getElementById('ladder');
@@ -1290,7 +1357,7 @@ function playTone(freq, dur, type='sine', vol=0.1, delay=0){
   o.start(t0); o.stop(t0 + dur + 0.05);
 }
 function sfx(name, delay = 0){
-  if (!audioOn) return;
+  if (!audioOn || PREVIEW) return;
   // Lazy resume — handles the case where the tab was backgrounded and the
   // context auto-suspended. Fire-and-forget here is fine; if it lands late,
   // the next sfx call will play.

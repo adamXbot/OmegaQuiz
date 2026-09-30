@@ -144,6 +144,17 @@ body{
   font-size:13px;resize:vertical;box-sizing:border-box;
 }
 .q-card textarea{min-height:50px}
+.preview-modal .modal{max-width:960px;width:96vw}
+.preview-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.preview-head .spacer{flex:1}
+.preview-head label{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--gray-text);cursor:pointer}
+.preview-frame{position:relative;width:100%;aspect-ratio:16/9;background:#020625;border:1px solid var(--gold-dim);border-radius:8px;overflow:hidden}
+.preview-frame iframe{position:absolute;top:0;left:0;width:1280px;height:720px;border:0;transform-origin:0 0;pointer-events:none}
+.preview-frame[hidden]{display:none}
+.preview-fit{font-size:12px;margin:6px 0 12px;color:var(--gray-text)}
+.preview-fit.ok{color:#86efac} .preview-fit.warn{color:#fbbf24} .preview-fit.bad{color:#fca5a5}
+.q-warn{margin-top:8px;font-size:12px;color:#fbbf24;line-height:1.5}
+.q-warn[hidden]{display:none}
 .pack-save[hidden]{display:none}
 .pack-save{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px;border:1px dashed var(--gold-dim);border-radius:8px}
 .pack-save input[type=text]{flex:1;min-width:180px;font-family:inherit;font-size:13px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:7px 10px}
@@ -488,6 +499,7 @@ body{
             <a class="btn small" href="/questions.csv" download>Export CSV</a>
             <a class="btn small ghost" href="/questions-template.csv" download>Template CSV</a>
             <button class="btn small" id="browsePacksBtn" title="Browse sample question packs published on GitHub">🌐 Browse sample packs</button>
+            <button class="btn small" id="previewAllBtn" title="Walk through every question as the board and the presenter view will show it">👁 Preview all</button>
             <button class="btn small primary" id="saveQuestionsBtn">Save Changes</button>
           </span>
         </h2>
@@ -939,6 +951,30 @@ body{
 </div>
 
 <!-- CONFIRM MODAL -->
+<!-- Question preview: the real board and presenter pages, framed in
+     ?preview=1 mode (no WebSocket) and fed the question by postMessage. -->
+<div class="modal-bg preview-modal" id="previewModal" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+  <div class="modal">
+    <div class="preview-head">
+      <h3 id="previewTitle" style="margin:0">Preview</h3>
+      <span class="spacer"></span>
+      <label><input type="radio" name="previewPhase" value="question" checked style="accent-color:var(--gold)"> Question open</label>
+      <label><input type="radio" name="previewPhase" value="reveal" style="accent-color:var(--gold)"> Revealed</label>
+      <label><input type="checkbox" id="previewShowPresenter" checked style="accent-color:var(--gold)"> Presenter view</label>
+      <button type="button" class="btn small ghost" id="previewPrevBtn">← Prev</button>
+      <button type="button" class="btn small ghost" id="previewNextBtn">Next →</button>
+      <button type="button" class="btn small" id="previewCloseBtn">Close</button>
+    </div>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Board (1280×720)</div>
+    <div class="preview-frame" id="previewBoardFrame"><iframe id="previewBoard" title="Board preview" src="about:blank"></iframe></div>
+    <div class="preview-fit" id="previewFit">Loading the board…</div>
+    <div id="previewPresenterWrap">
+      <div class="muted" style="font-size:11px;margin-bottom:6px">Presenter view (1280×720)</div>
+      <div class="preview-frame" id="previewPresenterFrame"><iframe id="previewPresenter" title="Presenter preview" src="about:blank"></iframe></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-bg" id="confirmModal">
   <div class="modal">
     <h3 id="confirmTitle">Confirm</h3>
@@ -1639,6 +1675,124 @@ function logEntryHtml(e) {
    QUESTION EDITOR
    ===================== */
 /* =====================
+   QUESTION PREVIEW + FIT WARNINGS
+   ===================== */
+// Rough limits for a 1280×720 board (the board also shrinks to fit, down to
+// 60%; the preview reports the real result).
+const FIT_LIMITS = { question: 240, option: 70, lesson: 360, imageBytes: 200 * 1024 };
+function plainLen(html) { return brandText(html || '').length; }
+function fitWarnings(q) {
+  const out = [];
+  if (plainLen(q.q) > FIT_LIMITS.question) out.push(`Question is ${plainLen(q.q)} characters; over ${FIT_LIMITS.question} it shrinks on the board.`);
+  const longest = Math.max(0, ...(q.options || []).map(o => plainLen(o)));
+  if (longest > FIT_LIMITS.option) out.push(`An option is ${longest} characters; over ${FIT_LIMITS.option} the option boxes get tall.`);
+  if (plainLen(q.lesson) > FIT_LIMITS.lesson) out.push(`Lesson is ${plainLen(q.lesson)} characters; over ${FIT_LIMITS.lesson} the reveal shrinks to fit it under the answers.`);
+  if (q.image) {
+    const bytes = Math.round((q.image.length - (q.image.indexOf(',') + 1)) * 0.75);
+    if (bytes > FIT_LIMITS.imageBytes) out.push(`Image is about ${Math.round(bytes / 1024)} KB; large images slow the phones on venue Wi-Fi.`);
+    if (plainLen(q.q) > 140) out.push('An image plus a long question leaves little room for the options. Preview it.');
+    if (!q.imageAlt) out.push('Image has no alt text.');
+  }
+  return out;
+}
+function renderFitWarnings(card, q) {
+  const el = card.querySelector('[data-field="warn"]');
+  const w = fitWarnings(q);
+  el.hidden = w.length === 0;
+  el.textContent = w.length ? '⚠️ ' + w.join(' ') : '';
+}
+
+let preview = { kind: 'main', idx: 0, ready: { host: false, present: false } };
+let _previewDetach = null;
+function previewList() { return preview.kind === 'main' ? questions : bonusQuestions; }
+function previewState() {
+  const list = previewList();
+  const q = list[preview.idx];
+  if (!q) return null;
+  const reveal = document.querySelector('input[name="previewPhase"]:checked').value === 'reveal';
+  const inBonus = preview.kind === 'bonus';
+  const correct = Number.isInteger(q.correct) ? q.correct : 0;
+  const tally = [8, 8, 8, 8]; tally[correct] = 30;
+  const players = ['Ada Lovelace', 'Grace Hopper', 'Alan Turing', 'Linus'].map((name, i) => ({ id: 'p' + i, name, alive: true, score: 2 }));
+  const card = { q: q.q, options: q.options, image: q.image || '', imageAlt: q.imageAlt || '' };
+  const host = {
+    phase: reveal ? 'reveal' : 'question', joinCode: '123456', envPublicBaseUrl: '', questionIndex: inBonus ? 0 : preview.idx, bonusIndex: inBonus ? preview.idx : 0, inBonus,
+    rewinds: 0, timer: null, totalQuestions: questions.length, playerCount: 42, aliveCount: reveal ? 30 : 42, answeredCount: reveal ? 42 : 37,
+    topSurvivors: [], players, lifelineUsed: false, lifelinesUsed: { '5050': false, askit: false, skip: false }, lifelineActive: null,
+    eliminatedOptions: [], revealedCorrect: reveal ? correct : null,
+    audienceTally: reveal ? { aliveBars: tally, elimBars: [0, 0, 0, 0], aliveTotal: 54, elimTotal: 0, wasAliveCount: 42 } : null,
+    currentQuestion: { ...card, correct: reveal ? correct : null, lesson: reveal ? (q.lesson || '') : null }
+  };
+  const label = inBonus ? `Tiebreaker ${preview.idx + 1}` : `Question ${preview.idx + 1}`;
+  const next = list[preview.idx + 1];
+  const present = {
+    ...host, totalBonus: bonusQuestions.length,
+    liveAnswerTally: reveal ? null : { counts: [12, 20, 3, 2], answeredAlive: 37, aliveTotal: 42, eliminatedCounts: [0, 0, 0, 0], answeredEliminated: 0, eliminatedTotal: 0, eliminatedOptions: [], changeEvents: 2, playersWhoChanged: 2 },
+    currentQuestion: { ...card, label, correct, lesson: q.lesson || '', notes: q.notes || '', seconds: q.seconds || 0 },
+    nextUp: next ? { label: inBonus ? `Tiebreaker ${preview.idx + 2}` : `Question ${preview.idx + 2}`, q: next.q, options: next.options, correct: next.correct, lesson: next.lesson || '', notes: next.notes || '' } : { label: 'End of game', end: true },
+    stillToAnswer: reveal ? [] : [{ name: 'Grace Hopper', online: true }, { name: 'Linus', online: false }],
+    history: []
+  };
+  return { host, present, label };
+}
+function sendPreview() {
+  const st = previewState();
+  if (!st) return;
+  const list = previewList();
+  document.getElementById('previewTitle').textContent = `${st.label} of ${list.length}${preview.kind === 'bonus' ? ' (tiebreakers)' : ''}`;
+  document.getElementById('previewPrevBtn').disabled = preview.idx === 0;
+  document.getElementById('previewNextBtn').disabled = preview.idx >= list.length - 1;
+  const board = document.getElementById('previewBoard');
+  const pres = document.getElementById('previewPresenter');
+  if (preview.ready.host && board.contentWindow) board.contentWindow.postMessage({ type: 'preview:state', state: st.host }, location.origin);
+  if (preview.ready.present && pres.contentWindow) pres.contentWindow.postMessage({ type: 'preview:state', state: st.present }, location.origin);
+  document.getElementById('previewFit').textContent = preview.ready.host ? 'Measuring…' : 'Loading the board…';
+  document.getElementById('previewFit').className = 'preview-fit';
+}
+function scalePreviewFrames() {
+  document.querySelectorAll('.preview-frame').forEach(f => {
+    const iframe = f.querySelector('iframe');
+    if (iframe) iframe.style.transform = `scale(${f.clientWidth / 1280})`;
+  });
+}
+function openPreview(kind, idx) {
+  preview.kind = kind; preview.idx = idx;
+  const modal = document.getElementById('previewModal');
+  modal.classList.add('active');
+  const board = document.getElementById('previewBoard');
+  const pres = document.getElementById('previewPresenter');
+  // Load the real pages once; later previews just post a new state.
+  if (board.getAttribute('src') === 'about:blank') { preview.ready.host = false; board.src = '/host?preview=1'; }
+  if (pres.getAttribute('src') === 'about:blank') { preview.ready.present = false; pres.src = '/present?preview=1'; }
+  scalePreviewFrames();
+  sendPreview();
+  if (_previewDetach) _previewDetach();
+  _previewDetach = trapModal(modal, { initialFocus: document.getElementById('previewCloseBtn'), onEscape: closePreview });
+}
+function closePreview() {
+  document.getElementById('previewModal').classList.remove('active');
+  if (_previewDetach) { _previewDetach(); _previewDetach = null; }
+}
+window.addEventListener('message', e => {
+  if (e.origin !== location.origin || !e.data) return;
+  if (e.data.type === 'preview:ready') { preview.ready[e.data.page] = true; sendPreview(); }
+  else if (e.data.type === 'preview:fit' && e.data.page === 'host') {
+    const el = document.getElementById('previewFit');
+    const pct = Math.round((e.data.fit || 1) * 100);
+    if (e.data.overflow) { el.className = 'preview-fit bad'; el.textContent = `Does not fit a 1280×720 board even at ${pct}% — shorten the question, the options or the lesson, or use a smaller image.`; }
+    else if (pct < 100) { el.className = 'preview-fit warn'; el.textContent = `Fits, shrunk to ${pct}% of the normal size.`; }
+    else { el.className = 'preview-fit ok'; el.textContent = 'Fits at full size.'; }
+  }
+});
+document.getElementById('previewPrevBtn').onclick = () => { if (preview.idx > 0) { preview.idx--; sendPreview(); } };
+document.getElementById('previewNextBtn').onclick = () => { if (preview.idx < previewList().length - 1) { preview.idx++; sendPreview(); } };
+document.getElementById('previewCloseBtn').onclick = closePreview;
+document.getElementsByName('previewPhase').forEach(r => r.addEventListener('change', sendPreview));
+document.getElementById('previewShowPresenter').addEventListener('change', e => { document.getElementById('previewPresenterWrap').hidden = !e.target.checked; });
+document.getElementById('previewAllBtn').onclick = () => { if (questions.length) openPreview('main', 0); else if (bonusQuestions.length) openPreview('bonus', 0); else showBanner('warn', 'No questions to preview yet.'); };
+window.addEventListener('resize', scalePreviewFrames);
+
+/* =====================
    PACK LIBRARY
    ===================== */
 let packs = [];
@@ -1812,10 +1966,12 @@ function renderQuestionList(targetId, arr, kind) {
       <div class="q-head">
         <span class="q-label">${kind === 'main' ? `Question ${idx+1}` : `Bonus ${idx+1}`}</span>
         <span style="flex:1"></span>
+        <button class="btn small ghost" data-action="preview" title="See this question as the board and the presenter view will show it">👁 Preview</button>
         <button class="btn small ghost" data-action="up">↑</button>
         <button class="btn small ghost" data-action="down">↓</button>
         <button class="btn small danger" data-action="delete">Delete</button>
       </div>
+      <div class="q-warn" data-field="warn" hidden></div>
       <label class="lesson-label">Question (HTML allowed)</label>
       <textarea data-field="q">${escapeHtmlAttr(q.q)}</textarea>
       <label class="lesson-label">Answer Options (radio = correct answer)</label>
@@ -1846,12 +2002,15 @@ function renderQuestionList(targetId, arr, kind) {
     `;
 
     // Field bindings
-    card.querySelector('[data-field="q"]').oninput = e => { q.q = e.target.value; markDirty(); };
-    card.querySelector('[data-field="lesson"]').oninput = e => { q.lesson = e.target.value; markDirty(); };
+    const warn = () => renderFitWarnings(card, q);
+    warn();
+    card.querySelector('[data-field="q"]').oninput = e => { q.q = e.target.value; markDirty(); warn(); };
+    card.querySelector('[data-field="lesson"]').oninput = e => { q.lesson = e.target.value; markDirty(); warn(); };
+    card.querySelector('[data-action="preview"]').onclick = () => openPreview(kind, idx);
     card.querySelector('[data-field="notes"]').oninput = e => { q.notes = e.target.value; markDirty(); };
     card.querySelector('[data-field="seconds"]').oninput = e => { const n = parseInt(e.target.value, 10); q.seconds = Number.isInteger(n) && n > 0 ? n : 0; markDirty(); };
     card.querySelectorAll('[data-field="option"]').forEach(inp => {
-      inp.oninput = e => { q.options[parseInt(e.target.dataset.idx)] = e.target.value; markDirty(); };
+      inp.oninput = e => { q.options[parseInt(e.target.dataset.idx)] = e.target.value; markDirty(); warn(); };
     });
     card.querySelectorAll('[data-correct]').forEach(r => {
       r.onchange = e => { if (e.target.checked) { q.correct = parseInt(e.target.dataset.correct); markDirty(); } };
