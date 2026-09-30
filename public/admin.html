@@ -827,19 +827,39 @@ body{
           <form method="POST" action="/auth/logout" style="margin:0"><button type="submit" class="btn small ghost" id="signOutBtn">Sign out</button></form>
         </div>
         <p class="muted" style="font-size:13px;line-height:1.55">
-          <strong>Magic links</strong> sign a device in with one click — single-use, valid for
-          10 minutes. <strong>Recovery tokens</strong> are the long-lived fallback for the
+          <strong>Magic links</strong> open a page with a <em>Sign in</em> button; only that button signs
+          the device in, so mail scanners and chat previews that fetch the link cannot use it up. A link is
+          single-use and valid for an hour unless you choose otherwise below — a reusable link with a
+          longer life is the one to send a co-presenter. <strong>Recovery tokens</strong> are the long-lived fallback for the
           <code>/auth/login</code> form; keep them in a password manager. Rotating a token
           invalidates the old one immediately but does not sign anyone out.
         </p>
+        <div class="keys-row" style="align-items:center">
+          <div class="keys-desc"><strong>New links</strong><div class="keys-meta">How long the next link lasts, and whether it can be used more than once.</div></div>
+          <div class="keys-actions" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <label class="muted" style="display:inline-flex;gap:6px;align-items:center;font-size:12px">Valid for
+              <select id="linkTtlSelect" style="font-family:inherit;font-size:12px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:5px 8px">
+                <option value="600000">10 minutes</option>
+                <option value="3600000" selected>1 hour</option>
+                <option value="86400000">24 hours</option>
+                <option value="604800000">7 days</option>
+              </select>
+            </label>
+            <label class="muted" style="display:inline-flex;gap:6px;align-items:center;font-size:12px;cursor:pointer"><input type="checkbox" id="linkReusableInput" style="accent-color:var(--gold)"> Reusable until it expires</label>
+          </div>
+        </div>
         <div style="margin-top:6px">
           <div class="keys-row">
-            <div class="keys-desc"><strong>Host sign-in link</strong><div class="keys-meta">For the projector laptop, or a replacement host device mid-event.</div></div>
+            <div class="keys-desc"><strong>Host sign-in link</strong><div class="keys-meta">For the projector laptop, a co-presenter, or a replacement host device mid-event.</div></div>
             <div class="keys-actions"><button class="btn small" id="mintHostLinkBtn" type="button">New host link</button></div>
           </div>
           <div class="keys-row">
             <div class="keys-desc"><strong>Admin sign-in link</strong><div class="keys-meta">For a second facilitator device. Anyone holding this link gets full admin control.</div></div>
             <div class="keys-actions"><button class="btn small" id="mintAdminLinkBtn" type="button">New admin link</button></div>
+          </div>
+          <div class="keys-row">
+            <div class="keys-desc"><strong>Outstanding links</strong><div class="keys-meta" id="linksMeta">Checking…</div></div>
+            <div class="keys-actions"><button class="btn small danger" id="revokeLinksBtn" type="button">Revoke all links</button></div>
           </div>
           <div class="keys-row">
             <div class="keys-desc"><strong>Host recovery token</strong><div class="keys-meta" id="hostKeyMeta">Checking…</div></div>
@@ -1132,6 +1152,9 @@ function connect() {
       adminAction('sessions:list');
     } else if (msg.type === 'auth:keys-status') {
       renderKeys(msg.keys);
+    } else if (msg.type === 'auth:links-revoked') {
+      if (msg.keys) renderKeys(msg.keys);
+      showBanner('success', `Revoked ${msg.count} link${msg.count === 1 ? '' : 's'}.`);
     } else if (msg.type === 'auth:magic-link') {
       showMintedLink(msg);
     } else if (msg.type === 'auth:recovery-token') {
@@ -2904,7 +2927,14 @@ function renderSessionInfo(sess) {
   const length = days >= 1 ? `${days} day${days === 1 ? '' : 's'}` : `${Math.round((sess.ttlMs || 0) / 36e5)} hours`;
   el.innerHTML = `Signed in as <strong style="color:var(--white)">${escapeHtml(sess.role || 'admin')}</strong>. This sign-in lasts ${escapeHtml(length)} and extends every time you use it; left untouched it ends ${escapeHtml(packDate(new Date(sess.expiresAt).toISOString()))}. It survives server restarts.`;
 }
+function renderLinksMeta(keys) {
+  const el = document.getElementById('linksMeta');
+  if (!el || !keys) return;
+  const n = keys.outstandingLinks || 0;
+  el.textContent = n ? `${n} link${n === 1 ? '' : 's'} not yet used (or reusable and still valid).` : 'No unused links.';
+}
 function renderKeys(keys) {
+  renderLinksMeta(keys);
   for (const role of ['host', 'admin']) {
     const k = keys && keys[role];
     const meta = document.getElementById(role + 'KeyMeta');
@@ -2917,12 +2947,15 @@ function renderKeys(keys) {
     }
   }
 }
-function showKeysOutput({ title, value, note, warn }) {
+function showKeysOutput({ title, value, note, warn, image }) {
   const box = document.getElementById('keysOutput');
   const copyBtn = document.getElementById('keysCopyBtn');
   document.getElementById('keysOutputTitle').textContent = title;
   document.getElementById('keysOutputValue').textContent = value || '';
   document.getElementById('keysOutputNote').textContent = note || '';
+  let img = document.getElementById('keysOutputQr');
+  if (!img) { img = document.createElement('img'); img.id = 'keysOutputQr'; img.alt = 'QR code of the sign-in link'; img.style.cssText = 'display:block;width:180px;height:180px;margin:10px 0 4px;border-radius:8px;border:1px solid var(--gold-dim)'; document.getElementById('keysOutputNote').before(img); }
+  if (image) { img.src = image; img.hidden = false; } else { img.removeAttribute('src'); img.hidden = true; }
   keysCopyValue = value || '';
   copyBtn.hidden = !value;
   copyBtn.textContent = 'Copy';
@@ -2930,11 +2963,14 @@ function showKeysOutput({ title, value, note, warn }) {
   box.hidden = false;
 }
 function showMintedLink(msg) {
-  const mins = Math.round((msg.ttlMs || 600000) / 60000);
+  const mins = Math.round((msg.ttlMs || 3600000) / 60000);
+  const life = mins >= 1440 ? `${Math.round(mins / 1440)} day${Math.round(mins / 1440) === 1 ? '' : 's'}` : mins >= 60 ? `${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? '' : 's'}` : `${mins} min`;
+  if (msg.keys) renderKeys(msg.keys);
   showKeysOutput({
     title: (msg.role === 'admin' ? 'Admin' : 'Host') + ' sign-in link',
     value: msg.url,
-    note: `Single use · expires in ${mins} min · open it on the device you want signed in.`
+    image: msg.qrPath || '',
+    note: `${msg.reusable ? 'Reusable until it expires' : 'Single use'} · valid ${life} · opening it shows a Sign in button, so it survives mail scanners. Send it, or let the other device scan the QR.`
   });
 }
 function showRotatedToken(msg) {
@@ -2962,8 +2998,10 @@ function showRotatedToken(msg) {
   const rotAdmin = document.getElementById('rotateAdminTokenBtn');
   const copyBtn = document.getElementById('keysCopyBtn');
   if (!mintHost || !mintAdmin || !rotHost || !rotAdmin || !copyBtn) return;
-  mintHost.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'host' }));
-  mintAdmin.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'admin' }));
+  const linkOpts = () => ({ ttlMs: Number(document.getElementById('linkTtlSelect').value), reusable: document.getElementById('linkReusableInput').checked });
+  mintHost.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'host', ...linkOpts() }));
+  mintAdmin.addEventListener('click', () => adminAction('auth:mint-magic-link', { role: 'admin', ...linkOpts() }));
+  document.getElementById('revokeLinksBtn').addEventListener('click', () => confirmAction('Revoke every outstanding link?', 'Links already used to sign in keep their sessions; links not yet used stop working. Mint new ones afterwards.', () => adminAction('auth:revoke-magic-links'), { okLabel: 'Revoke' }));
   const rotate = role => confirmAction(
     'Rotate the ' + role + ' recovery token?',
     'The current ' + (role === 'admin' ? 'ADMIN_TOKEN' : 'HOST_TOKEN') + ' stops working immediately. The new one is shown once — have your password manager ready.',

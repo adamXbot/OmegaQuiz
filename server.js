@@ -570,7 +570,9 @@ function parseStartupArgs(argv) {
     } else if (!out.command && (a === 'remint' || a === 'links')) {
       // Operator subcommand; the bare words that follow are its arguments.
       out.command = a;
-    } else if (out.command && !a.startsWith('-')) {
+    } else if (out.command) {
+      // Everything after the subcommand belongs to it, flags included
+      // (`links host --hours 48 --reusable`).
       out.commandArgs.push(a);
     }
   }
@@ -2052,22 +2054,51 @@ function clearSessionCookie(res) {
 // form login. Because each magic token is consumed on first use AND expires
 // after MAGIC_TTL_MS, its appearance in browser history / server logs has no
 // lasting security value — the cost of leaking it falls off a cliff at first click.
-const MAGIC_TTL_MS = 10 * 60 * 1000;
-const magicLinks = new Map(); // token -> { role, expiresAt }
-
-function mintMagicToken(role) {
+// Magic links last MAGIC_TTL_MS by default (an hour; they were ten
+// minutes) and can be minted with any lifetime between MAGIC_TTL_MIN_MS and
+// MAGIC_TTL_MAX_MS, single-use or reusable until they expire (to share with
+// a co-presenter). Opening a link shows a page with a Sign in button; only
+// that button's POST consumes the token, so mail scanners (Safelinks,
+// Sophos) and chat previews that fetch the URL no longer burn it.
+const MAGIC_TTL_MS = 60 * 60 * 1000;
+const MAGIC_TTL_MIN_MS = 5 * 60 * 1000;
+const MAGIC_TTL_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+const magicLinks = new Map(); // token -> { role, expiresAt, reusable, uses, createdAt }
+function clampMagicTtl(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return MAGIC_TTL_MS;
+  return Math.min(MAGIC_TTL_MAX_MS, Math.max(MAGIC_TTL_MIN_MS, Math.round(n)));
+}
+function mintMagicToken(role, { ttlMs, reusable = false } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
-  magicLinks.set(token, { role, expiresAt: Date.now() + MAGIC_TTL_MS });
+  const now = Date.now();
+  magicLinks.set(token, { role, expiresAt: now + clampMagicTtl(ttlMs === undefined ? MAGIC_TTL_MS : ttlMs), reusable: !!reusable, uses: 0, createdAt: now });
   return token;
+}
+// Look without consuming: the interstitial page uses this, so a fetch by a
+// link scanner changes nothing.
+function peekMagicToken(token) {
+  if (typeof token !== 'string' || !token) return null;
+  const entry = magicLinks.get(token);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) { magicLinks.delete(token); return null; }
+  return entry;
 }
 function consumeMagicToken(token) {
   if (typeof token !== 'string' || !token) return null;
   const entry = magicLinks.get(token);
   if (!entry) return null;
-  // Always delete on first read (single-use) — even if expired.
-  magicLinks.delete(token);
-  if (entry.expiresAt < Date.now()) return null;
+  // Single-use links go on first read — even if expired. Reusable links
+  // stay until they expire.
+  if (!entry.reusable) magicLinks.delete(token);
+  if (entry.expiresAt < Date.now()) { magicLinks.delete(token); return null; }
+  entry.uses = (entry.uses || 0) + 1;
   return entry;
+}
+function revokeMagicTokens() {
+  const n = magicLinks.size;
+  magicLinks.clear();
+  return n;
 }
 function pruneExpiredMagic(now = Date.now()) {
   for (const [t, e] of magicLinks.entries()) if (e.expiresAt < now) magicLinks.delete(t);
@@ -2105,7 +2136,7 @@ function importPendingSignInLinks() {
     const expiresAt = Number(e.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= now) continue;
     if (importedSignInTokens.has(e.token)) continue;
-    magicLinks.set(e.token, { role: e.role, expiresAt });
+    magicLinks.set(e.token, { role: e.role, expiresAt, reusable: !!e.reusable, uses: 0, createdAt: now });
     importedSignInTokens.set(e.token, expiresAt);
     imported++;
   }
@@ -2144,7 +2175,10 @@ function keysStatus() {
     admin: one('admin'),
     autoProvision: AUTO_PROVISION_SECRETS,
     secretsPath: AUTO_PROVISION_SECRETS ? SECRETS_PATH : null,
-    magicTtlMs: MAGIC_TTL_MS
+    magicTtlMs: MAGIC_TTL_MS,
+    magicTtlMinMs: MAGIC_TTL_MIN_MS,
+    magicTtlMaxMs: MAGIC_TTL_MAX_MS,
+    outstandingLinks: [...magicLinks.values()].filter(e => e.expiresAt > Date.now()).length
   };
 }
 
@@ -3699,14 +3733,22 @@ function adminAction(action, payload = {}, adminWs = null) {
     }
 
     case 'auth:mint-magic-link': {
-      // Re-issue a single-use magic-link URL for the requested role. Useful when
-      // the original boot-time URL has expired or been consumed.
+      // Issue a magic-link URL for the requested role, with a lifetime
+      // (clamped) and single-use or reusable, as the admin chose.
       const wantRole = payload && payload.role === 'admin' ? 'admin' : 'host';
-      const token = mintMagicToken(wantRole);
+      const ttlMs = clampMagicTtl(payload && payload.ttlMs !== undefined ? payload.ttlMs : MAGIC_TTL_MS);
+      const reusable = !!(payload && payload.reusable);
+      const token = mintMagicToken(wantRole, { ttlMs, reusable });
       if (wantRole === 'admin') ADMIN_MAGIC = token; else HOST_MAGIC = token;
       const url = getPublicBaseUrl(null) + '/auth/magic?t=' + token;
-      logEvent('admin', `Magic link re-issued for role=${wantRole}`);
-      if (adminWs) adminWs.send(JSON.stringify({ type: 'auth:magic-link', role: wantRole, token, url, ttlMs: MAGIC_TTL_MS }));
+      logEvent('admin', `Magic link issued for role=${wantRole} (${Math.round(ttlMs / 60000)} min, ${reusable ? 'reusable' : 'single use'})`);
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'auth:magic-link', role: wantRole, token, url, ttlMs, reusable, expiresAt: Date.now() + ttlMs, qrPath: '/keys/link-qr?t=' + encodeURIComponent(token), keys: keysStatus() }));
+      break;
+    }
+    case 'auth:revoke-magic-links': {
+      const n = revokeMagicTokens();
+      logEvent('admin', `Revoked ${n} outstanding magic link${n === 1 ? '' : 's'}`);
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'auth:links-revoked', count: n, keys: keysStatus() }));
       break;
     }
 
@@ -4309,26 +4351,88 @@ app.post('/auth/login', (req, res) => {
 
 // Magic-link login: GET /auth/magic?t=XYZ
 // Consumes the token (single-use), sets a session cookie, redirects to the role's page.
+// The sign-in page for a magic link. GET only looks at the token: it shows a
+// Sign in button (or says the link is dead) and changes nothing, so a link
+// scanner or chat preview fetching the URL cannot use it up. Only the POST
+// consumes the token.
+function magicPage(res, { brandHtml, brandText, role, token, entry, error }) {
+  const roleLabel = role === 'admin' ? 'admin' : 'host';
+  const expires = entry ? new Date(entry.expiresAt) : null;
+  const expiresText = expires ? expires.toLocaleString('en-AU', { hour12: false }) : '';
+  const body = entry
+    ? `<form method="POST" action="/auth/magic" autocomplete="off">
+  <input type="hidden" name="t" value="${token.replace(/"/g, '&quot;')}">
+  <input type="hidden" name="role" value="${roleLabel}">
+  <p class="lead">This link signs this device in as <strong>${roleLabel}</strong>.</p>
+  <button class="submit-btn" type="submit">Sign in as ${roleLabel}</button>
+  <p class="hint">${entry.reusable ? 'Can be used again until' : 'Single use · valid until'} ${expiresText}. Only press the button on a device that should be signed in.</p>
+</form>`
+    : `<p class="err">${error || 'This sign-in link has expired or has already been used.'}</p>
+  <p class="hint">Ask the admin for a new link (Settings → Sign-in &amp; keys), or use the recovery form.</p>
+  <a class="submit-btn link" href="/auth/login?role=${roleLabel}">Recovery sign-in</a>`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
+<title>Sign in — ${brandText}</title>
+<style>
+  body{margin:0;font-family:Georgia,serif;background:#020625;color:#f5f3e8;min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .card{background:rgba(13,26,110,.6);border:2px solid #f4c430;border-radius:16px;padding:28px 30px;width:min(460px,92vw);box-shadow:0 0 24px rgba(244,196,48,.25);text-align:center}
+  h1{color:#f4c430;font-size:18px;letter-spacing:.2em;text-transform:uppercase;margin:0 0 6px}
+  .sub{color:#bdc4eb;font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:18px}
+  .lead{font-size:15px;line-height:1.5;margin:0 0 6px}
+  :focus-visible{outline:2px solid #ffd700;outline-offset:2px}
+  .submit-btn{display:block;width:100%;box-sizing:border-box;padding:13px;margin-top:18px;background:linear-gradient(180deg,#ffd700,#8a6d10);color:#020625;font-weight:bold;font-size:14px;letter-spacing:.2em;text-transform:uppercase;border:none;border-radius:10px;cursor:pointer;font-family:Georgia,serif;text-decoration:none}
+  .hint{color:#9aa3d4;font-size:11px;margin-top:12px;letter-spacing:.05em;line-height:1.5}
+  .err{color:#fca5a5;font-size:14px;line-height:1.5;margin:0}
+</style></head><body>
+<div class="card">
+  <h1>${brandHtml}</h1><div class="sub">${roleLabel} sign-in</div>
+  ${body}
+</div>
+</body></html>`);
+}
 app.get('/auth/magic', (req, res) => {
+  const t = typeof req.query.t === 'string' ? req.query.t.slice(0, 200) : '';
+  let entry = peekMagicToken(t);
+  // Unknown token? `node server.js links` may have minted it since the last
+  // import — pull the file in and look once more.
+  if (!entry && t && importPendingSignInLinks() > 0) entry = peekMagicToken(t);
+  const brandHtml = [branding.companyName, branding.quizTitle].filter(Boolean).join(' — ') || DEFAULT_BRANDING.quizTitle;
+  const roleHint = req.query.role === 'admin' ? 'admin' : 'host';
+  magicPage(res, { brandHtml, brandText: brandHtml.replace(/<[^>]*>/g, ''), role: entry ? entry.role : roleHint, token: t, entry });
+});
+app.post('/auth/magic', (req, res) => {
   const ip = getClientIp(req);
   if (isBlocked(ip)) {
     return res.status(429).type('text/plain').send('Too many failed sign-in attempts. Try again later.');
   }
-  const t = typeof req.query.t === 'string' ? req.query.t : '';
+  const t = req.body && typeof req.body.t === 'string' ? req.body.t.slice(0, 200) : '';
+  const roleHint = req.body && req.body.role === 'admin' ? 'admin' : 'host';
   let entry = consumeMagicToken(t);
-  // Unknown token? `node server.js links` may have minted it since the last
-  // import — pull the file in and try once more before counting a failure.
   if (!entry && t && importPendingSignInLinks() > 0) entry = consumeMagicToken(t);
   if (!entry) {
     recordLoginFailure(ip);
     logEvent('auth-fail', `Magic-link login failed (expired/invalid/used) from ${ip}`);
-    return res.redirect(302, '/auth/login?role=host&error=1');
+    return res.redirect(302, '/auth/login?role=' + roleHint + '&error=1');
   }
   clearLoginFailures(ip);
   const sid = createSession(entry.role, ip);
   setSessionCookie(req, res, sid);
-  logEvent('auth-ok', `Signed in via magic-link as ${entry.role} from ${ip}`);
+  logEvent('auth-ok', `Signed in via magic-link as ${entry.role} from ${ip}${entry.reusable ? ` (reusable link, use ${entry.uses})` : ''}`);
   res.redirect(302, '/' + entry.role);
+});
+// QR of a live magic link, for a co-presenter to scan off the admin's screen.
+app.get('/keys/link-qr', requireRole('admin'), async (req, res) => {
+  const t = typeof req.query.t === 'string' ? req.query.t.slice(0, 200) : '';
+  if (!peekMagicToken(t)) { res.status(404).type('text/plain').send('No such link'); return; }
+  try {
+    const svg = await QRCode.toString(getPublicBaseUrl(req) + '/auth/magic?t=' + t, { type: 'svg', margin: 1, color: { dark: '#f4c430', light: '#020625' } });
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'image/svg+xml');
+    res.send(svg);
+  } catch (e) {
+    res.status(500).send('QR error');
+  }
 });
 
 app.post('/auth/logout', (req, res) => {
@@ -4776,11 +4880,20 @@ function runRemintCommand(args) {
   return refused ? 1 : 0;
 }
 function runLinksCommand(args) {
-  const roles = parseRoleArg(args[0], 'all');
-  if (!roles) {
-    console.error('Usage: node server.js links [admin|host|all]');
+  const opts = { hours: null, reusable: false };
+  const rest = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--reusable') opts.reusable = true;
+    else if (args[i] === '--hours') opts.hours = Number(args[++i]);
+    else if (/^--hours=/.test(args[i])) opts.hours = Number(args[i].slice(8));
+    else rest.push(args[i]);
+  }
+  const roles = parseRoleArg(rest[0], 'all');
+  if (!roles || (opts.hours !== null && !(opts.hours > 0))) {
+    console.error('Usage: node server.js links [admin|host|all] [--hours N] [--reusable]');
     return 2;
   }
+  const ttlMs = clampMagicTtl(opts.hours !== null ? opts.hours * 3600 * 1000 : MAGIC_TTL_MS);
   // Append to anything still pending so two invocations in a row both work.
   let pending = [];
   try {
@@ -4789,16 +4902,16 @@ function runLinksCommand(args) {
   } catch {}
   const now = Date.now();
   pending = pending.filter(e => e && Number(e.expiresAt) > now);
-  const minted = roles.map(role => ({ role, token: crypto.randomBytes(32).toString('base64url'), expiresAt: now + MAGIC_TTL_MS }));
+  const minted = roles.map(role => ({ role, token: crypto.randomBytes(32).toString('base64url'), expiresAt: now + ttlMs, reusable: opts.reusable }));
   try { writePrivateJson(SIGNIN_LINKS_PATH, pending.concat(minted)); }
   catch (e) {
     console.error(`Could not write ${SIGNIN_LINKS_PATH}: ${e.message}`);
     return 1;
   }
   const base = getPublicBaseUrl(null);
-  const ttlMin = Math.round(MAGIC_TTL_MS / 60_000);
+  const ttlMin = Math.round(ttlMs / 60_000);
   console.log('');
-  console.log(` Fresh sign-in links — single-use, valid ${ttlMin} min, honoured by the running server on first click:`);
+  console.log(` Fresh sign-in links — ${opts.reusable ? 'reusable until they expire' : 'single-use'}, valid ${ttlMin} min, honoured by the running server when the Sign in button is pressed:`);
   for (const m of minted) console.log(`    ${m.role === 'admin' ? 'Admin' : 'Host '} →  ${base}/auth/magic?t=${m.token}`);
   if (!branding.publicBaseUrl && !ENV_PUBLIC_BASE_URL) {
     console.log('');
@@ -4830,7 +4943,7 @@ function printBanner(reason) {
   }
   console.log('');
   console.log(` ──  Sign in  ─────────────────────────`);
-  console.log(` Click one of these magic links from your terminal (single-use, ${ttlMin} min):`);
+  console.log(` Open one of these magic links and press Sign in (single-use, ${ttlMin} min):`);
   console.log(`    Host  →  ${base}/auth/magic?t=${HOST_MAGIC}`);
   console.log(`    Admin →  ${base}/auth/magic?t=${ADMIN_MAGIC}`);
   console.log('');
@@ -5041,7 +5154,7 @@ module.exports = {
   gracefulShutdown,
   validateTheme, DEFAULT_THEME,
   DEFAULT_CONSENT_TEXT,
-  mintMagicToken, consumeMagicToken,
+  mintMagicToken, consumeMagicToken, peekMagicToken, revokeMagicTokens, clampMagicTtl, MAGIC_TTL_MIN_MS, MAGIC_TTL_MAX_MS,
   rotateRecoveryToken, reloadSecretsFromDisk, recoveryTokenSource, keysStatus,
   importPendingSignInLinks, SIGNIN_LINKS_PATH, SECRETS_PATH,
   recordJoinFailure, isJoinBlocked, clearJoinFailures,
