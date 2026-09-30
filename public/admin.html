@@ -155,6 +155,22 @@ body{
 .preview-fit.ok{color:#86efac} .preview-fit.warn{color:#fbbf24} .preview-fit.bad{color:#fca5a5}
 .q-warn{margin-top:8px;font-size:12px;color:#fbbf24;line-height:1.5}
 .q-warn[hidden]{display:none}
+.sessions-list{display:flex;flex-direction:column;gap:10px}
+.session-row{background:rgba(2,6,37,.6);border:1px solid var(--gray-line);border-radius:8px;padding:12px 14px}
+.session-row .session-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.session-row .session-main{flex:1;min-width:240px}
+.session-row .session-title{color:var(--white);font-size:14px;font-weight:600}
+.session-row .session-meta{font-size:11px;color:var(--gray-text);margin-top:3px;line-height:1.5}
+.session-row .session-actions{display:flex;gap:6px;flex-wrap:wrap}
+.session-row .session-detail{margin-top:12px;border-top:1px solid var(--gray-line);padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.session-row .session-detail[hidden]{display:none}
+.session-row .session-detail h3{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin:0 0 6px}
+.session-row .tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
+.outcome{display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;letter-spacing:.1em;text-transform:uppercase;margin-left:6px;vertical-align:middle;border:1px solid}
+.outcome.ended{color:#86efac;border-color:#4ade8055;background:rgba(34,197,94,.12)}
+.outcome.abandoned{color:#fbbf24;border-color:#fbbf2455;background:rgba(251,191,36,.12)}
+.session-row .session-rename{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.session-row .session-rename input{font-family:inherit;font-size:12px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:5px 8px;min-width:240px}
 .pack-save[hidden]{display:none}
 .pack-save{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px;border:1px dashed var(--gold-dim);border-radius:8px}
 .pack-save input[type=text]{flex:1;min-width:180px;font-family:inherit;font-size:13px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:7px 10px}
@@ -337,6 +353,7 @@ body{
   <div class="tabs" role="tablist" aria-label="Admin sections" id="adminTabs">
     <button type="button" class="tab active" role="tab" id="tab-overview" aria-selected="true" aria-controls="panel-overview" data-tab="overview">Overview</button>
     <button type="button" class="tab" role="tab" id="tab-players" aria-selected="false" aria-controls="panel-players" tabindex="-1" data-tab="players">Players<span class="badge" id="playersBadge" style="display:none">0</span></button>
+    <button type="button" class="tab" role="tab" id="tab-sessions" aria-selected="false" aria-controls="panel-sessions" tabindex="-1" data-tab="sessions">Sessions</button>
     <button type="button" class="tab" role="tab" id="tab-questions" aria-selected="false" aria-controls="panel-questions" tabindex="-1" data-tab="questions">Questions</button>
     <button type="button" class="tab" role="tab" id="tab-branding" aria-selected="false" aria-controls="panel-branding" tabindex="-1" data-tab="branding">Branding</button>
     <button type="button" class="tab" role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings" tabindex="-1" data-tab="settings">Settings</button>
@@ -445,6 +462,15 @@ body{
         <div class="muted" id="playerRosterLegend" style="margin-top:10px;font-size:11px">
           Online · Disconnected · Offline · History cells: correct, wrong, timeout
         </div>
+      </div>
+    </div>
+
+    <!-- SESSIONS: every game played, kept on the server until deleted -->
+    <div data-tab-content="sessions" role="tabpanel" id="panel-sessions" aria-labelledby="tab-sessions">
+      <div class="panel">
+        <h2>Past games <span class="panel-actions"><span class="muted" id="sessionsMeta" style="font-weight:normal;text-transform:none;letter-spacing:0;font-size:12px"></span></span></h2>
+        <p class="muted" style="font-size:12px;margin-bottom:12px">A record is written when a game ends, and when one is stopped part-way (marked <em>abandoned</em>): the standings, every answer, the questions asked (text only) and the names as entered. Records stay until you delete them. Switch recording off under Branding → <em>Record sessions</em>.</p>
+        <div id="sessionsList" class="sessions-list"><div class="muted" style="font-style:italic">No games recorded yet.</div></div>
       </div>
     </div>
 
@@ -630,6 +656,16 @@ body{
             </label>
             <input type="number" id="brandingQuestionSecondsInput" min="0" max="600" step="1" inputmode="numeric" style="width:90px;align-self:flex-start" aria-describedby="brandingQuestionSecondsHint">
             <span id="brandingQuestionSecondsHint" class="muted" style="font-size:11px;align-self:center">5–600, or 0 = off</span>
+          </div>
+          <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:8px">
+            <input type="checkbox" id="brandingRecordSessionsInput" style="transform:scale(1.2);accent-color:var(--gold);margin-top:2px">
+            <label for="brandingRecordSessionsInput" style="color:var(--white);font-size:13px;line-height:1.4">
+              Record sessions
+              <div class="muted" style="font-size:11px;margin-top:2px;font-weight:normal;letter-spacing:0;text-transform:none">
+                Keep a record of every game (standings, every answer, the questions asked as text, names as entered)
+                in the Sessions tab, on this server, until you delete it. Off: nothing is kept after Reset.
+              </div>
+            </label>
           </div>
           <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:8px">
             <input type="checkbox" id="brandingElimCanAnswerInput" style="transform:scale(1.2);accent-color:var(--gold);margin-top:2px">
@@ -1088,6 +1124,7 @@ function connect() {
       renderLog();
       if (msg.keys) renderKeys(msg.keys);
       adminAction('packs:list');
+      adminAction('sessions:list');
     } else if (msg.type === 'auth:keys-status') {
       renderKeys(msg.keys);
     } else if (msg.type === 'auth:magic-link') {
@@ -1125,6 +1162,15 @@ function connect() {
       const fmt = msg.format === 'json' ? 'JSON' : 'CSV';
       const extra = msg.brandingUpdated ? ' Quiz title and category updated from the pack.' : '';
       showBanner('success', `${fmt} imported: ${msg.mainCount} main + ${msg.bonusCount} bonus question${msg.bonusCount === 1 ? '' : 's'} loaded.${extra}`);
+    } else if (msg.type === 'sessions:list') {
+      sessions = msg.sessions || [];
+      renderSessions();
+    } else if (msg.type === 'sessions:record') {
+      sessionRecords[msg.session.id] = msg.session;
+      renderSessionDetail(msg.session.id);
+    } else if (msg.type === 'sessions:questions-loaded') {
+      awaitingBankChange = false;
+      showBanner('success', `Loaded the questions from "${msg.session.title}" (${msg.mainCount} main + ${msg.bonusCount} bonus). Images are not kept in session records, so add any back in the Questions tab.`);
     } else if (msg.type === 'packs:list') {
       packs = msg.packs || [];
       renderPacks();
@@ -1636,7 +1682,7 @@ function renderQuestionLockState() {
   // Load is only allowed in the lobby or at the end: re-render the pack list
   // when that changes, not on every state push (it would eat an open rename).
   const canLoad = state.phase === 'lobby' || state.phase === 'end';
-  if (canLoad !== packsRenderedFor) { packsRenderedFor = canLoad; renderPacks(); }
+  if (canLoad !== packsRenderedFor) { packsRenderedFor = canLoad; renderPacks(); renderSessions(); }
   const locked = !(state.phase === 'lobby' || state.phase === 'end');
   document.getElementById('qLockBanner').style.display = locked ? 'flex' : 'none';
   document.getElementById('saveQuestionsBtn').disabled = locked || !dirty;
@@ -1791,6 +1837,95 @@ document.getElementsByName('previewPhase').forEach(r => r.addEventListener('chan
 document.getElementById('previewShowPresenter').addEventListener('change', e => { document.getElementById('previewPresenterWrap').hidden = !e.target.checked; });
 document.getElementById('previewAllBtn').onclick = () => { if (questions.length) openPreview('main', 0); else if (bonusQuestions.length) openPreview('bonus', 0); else showBanner('warn', 'No questions to preview yet.'); };
 window.addEventListener('resize', scalePreviewFrames);
+
+/* =====================
+   SESSIONS (past games)
+   ===================== */
+let sessions = [];
+const sessionRecords = {};
+const sessionOpen = new Set();
+function renderSessions() {
+  const box = document.getElementById('sessionsList');
+  document.getElementById('sessionsMeta').textContent = sessions.length ? `${sessions.length} game${sessions.length === 1 ? '' : 's'}` : '';
+  box.innerHTML = '';
+  if (!sessions.length) { box.innerHTML = '<div class="muted" style="font-style:italic">No games recorded yet. Play one through, or stop one part-way, and it appears here.</div>'; return; }
+  const canLoad = !state || state.phase === 'lobby' || state.phase === 'end';
+  sessions.forEach(sn => {
+    const row = document.createElement('div');
+    row.className = 'session-row';
+    row.dataset.session = sn.id;
+    const when = packDate(sn.startedAt || sn.endedAt);
+    const winners = sn.top.filter(t => t.alive).map(t => t.name);
+    const lead = sn.outcome === 'ended'
+      ? (winners.length ? `Winner${winners.length > 1 ? 's' : ''}: ${winners.join(', ')}` : (sn.top[0] ? `Top score: ${sn.top[0].name} (${sn.top[0].score})` : 'No players'))
+      : (sn.top[0] ? `Leading when stopped: ${sn.top[0].name} (${sn.top[0].score})` : '');
+    row.innerHTML = `
+      <div class="session-head">
+        <div class="session-main">
+          <div class="session-title">${escapeHtml(sn.title)}<span class="outcome ${sn.outcome === 'ended' ? 'ended' : 'abandoned'}">${sn.outcome === 'ended' ? 'played to the end' : 'abandoned'}</span></div>
+          <div class="session-meta">${escapeHtml(when)} · ${sn.playerCount} player${sn.playerCount === 1 ? '' : 's'} · ${sn.questionsAsked} of ${sn.totalQuestions} question${sn.totalQuestions === 1 ? '' : 's'} asked${sn.outcome === 'ended' ? ` · ${sn.aliveAtEnd} still in at the end` : ''}<br>${escapeHtml(lead)}</div>
+        </div>
+        <div class="session-actions">
+          <button class="btn small" data-act="view">${sessionOpen.has(sn.id) ? 'Hide details' : 'View'}</button>
+          <a class="btn small" href="/sessions/${escapeHtmlAttr(sn.id)}/results.xlsx" download style="text-decoration:none">📊 Excel</a>
+          <a class="btn small ghost" href="/sessions/${escapeHtmlAttr(sn.id)}/results.csv" download style="text-decoration:none">CSV</a>
+          <a class="btn small ghost" href="/sessions/${escapeHtmlAttr(sn.id)}.json" download style="text-decoration:none">Record</a>
+          <button class="btn small ghost" data-act="load" ${canLoad ? '' : 'disabled title="Only in the lobby or after the game ends"'}>Load its questions</button>
+          <button class="btn small ghost" data-act="rename">Rename</button>
+          <button class="btn small danger" data-act="delete">Delete</button>
+        </div>
+      </div>
+      <div class="session-detail" data-detail hidden></div>`;
+    row.querySelector('[data-act="view"]').onclick = () => {
+      if (sessionOpen.has(sn.id)) { sessionOpen.delete(sn.id); renderSessions(); return; }
+      sessionOpen.add(sn.id);
+      renderSessions();
+      if (sessionRecords[sn.id]) renderSessionDetail(sn.id); else adminAction('sessions:get', { sessionId: sn.id });
+    };
+    row.querySelector('[data-act="load"]').onclick = () => confirmAction(
+      `Load the questions from "${sn.title}"?`,
+      `Replaces the current bank with the ${sn.totalQuestions} question${sn.totalQuestions === 1 ? '' : 's'} this game used (text only: images are not kept in records). The current bank is kept as an automatic snapshot in Packs first.`,
+      () => { awaitingBankChange = true; adminAction('sessions:load-questions', { sessionId: sn.id }); }, { okLabel: 'Load questions' }
+    );
+    row.querySelector('[data-act="rename"]').onclick = () => {
+      if (row.querySelector('.session-rename')) return;
+      const f = document.createElement('form');
+      f.className = 'session-rename';
+      f.innerHTML = `<input type="text" maxlength="120" value="${escapeHtmlAttr(sn.title)}" aria-label="Session name"><button type="submit" class="btn small primary">Save name</button><button type="button" class="btn small ghost" data-act="cancel">Cancel</button>`;
+      f.onsubmit = e => { e.preventDefault(); const v = f.querySelector('input').value.trim(); if (v) adminAction('sessions:rename', { sessionId: sn.id, title: v }); };
+      f.querySelector('[data-act="cancel"]').onclick = () => f.remove();
+      row.querySelector('.session-head').after(f);
+      f.querySelector('input').focus();
+    };
+    row.querySelector('[data-act="delete"]').onclick = () => confirmAction(`Delete "${sn.title}"?`, 'The record and its downloads are removed from the server for good. Download the Excel file first if you need it.', () => adminAction('sessions:delete', { sessionId: sn.id }), { okLabel: 'Delete record' });
+    box.appendChild(row);
+    if (sessionOpen.has(sn.id) && sessionRecords[sn.id]) renderSessionDetail(sn.id);
+  });
+}
+function renderSessionDetail(id) {
+  const row = document.querySelector(`.session-row[data-session="${CSS.escape(id)}"]`);
+  const rec = sessionRecords[id];
+  if (!row || !rec || !sessionOpen.has(id)) return;
+  const box = row.querySelector('[data-detail]');
+  box.hidden = false;
+  const letters = ['A', 'B', 'C', 'D'];
+  let standings = '<h3>Standings</h3><table class="tbl"><thead><tr><th>#</th><th>Name</th><th>Score</th><th>Status</th><th>Answers</th></tr></thead><tbody>';
+  let place = 0, last = null;
+  rec.players.forEach((p, i) => {
+    if (p.answeredScore !== last) { place = i + 1; last = p.answeredScore; }
+    const cells = (p.history || []).map(h => `<span title="${escapeHtmlAttr(h.label)}" style="display:inline-block;width:14px;height:14px;border-radius:3px;margin-right:2px;background:${h.answer == null ? '#78350f' : h.correct ? '#166534' : '#7f1d1d'}"></span>`).join('');
+    standings += `<tr><td class="num">${place}</td><td>${escapeHtml(p.name)}</td><td class="num">${p.answeredScore}</td><td>${p.alive ? (rec.outcome === 'ended' ? 'finalist' : 'still in') : 'out'}</td><td>${cells}</td></tr>`;
+  });
+  standings += '</tbody></table>';
+  let perQ = '<h3>Per question</h3><table class="tbl"><thead><tr><th>Q</th><th>Question</th><th>Answer</th><th>Answered</th><th>Got it right</th></tr></thead><tbody>';
+  (rec.stats.perQuestion || []).forEach(q => {
+    const pct = q.asked ? Math.round(q.correctCount / q.asked * 100) : 0;
+    perQ += `<tr><td>${escapeHtml(q.label)}</td><td>${truncateHtml(q.q, 80)}</td><td>${letters[q.correct]}</td><td class="num">${q.answered} / ${q.asked}</td><td class="num">${q.correctCount} (${pct}%)</td></tr>`;
+  });
+  perQ += '</tbody></table>';
+  box.innerHTML = `<div>${standings}</div><div>${perQ}</div>`;
+}
+function truncateHtml(html, n) { const t = brandText(html); return escapeHtml(t.length > n ? t.slice(0, n - 1) + '…' : t); }
 
 /* =====================
    PACK LIBRARY
@@ -2438,6 +2573,7 @@ function populateBrandingForm(){
   document.getElementById('brandingShowNamesInput').checked = brandingDraft.showNamesAtEnd !== false; // default true
   document.getElementById('brandingElimCanAnswerInput').checked = !!brandingDraft.eliminatedCanAnswer;
   document.getElementById('brandingQuestionSecondsInput').value = Number.isInteger(brandingDraft.questionSeconds) ? brandingDraft.questionSeconds : 45;
+  document.getElementById('brandingRecordSessionsInput').checked = brandingDraft.recordSessions !== false;
   const levelRadios = document.getElementsByName('brandingLevelStyle');
   levelRadios.forEach(r => { r.checked = (r.value === brandingDraft.levelStyle); });
   const lockRadios = document.getElementsByName('brandingAnswerLockMode');
@@ -2568,6 +2704,7 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
     showNamesAtEnd: document.getElementById('brandingShowNamesInput').checked,
     eliminatedCanAnswer: document.getElementById('brandingElimCanAnswerInput').checked,
     questionSeconds: Number(document.getElementById('brandingQuestionSecondsInput').value || 0),
+    recordSessions: document.getElementById('brandingRecordSessionsInput').checked,
     logoDataUri: brandingDraft.logoDataUri || '',
     levelStyle: levelStyleEl ? levelStyleEl.value : 'money',
     answerLockMode: lockModeEl ? lockModeEl.value : 'quick',
