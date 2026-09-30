@@ -153,6 +153,20 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
   padding:14px;box-shadow:inset 0 0 20px rgba(0,0,0,.5);
 }
 .panel-title{text-align:center;color:var(--gold);font-size:10px;letter-spacing:.3em;margin-bottom:10px;text-transform:uppercase}
+/* Question timer: a ring that empties while answers are open. */
+.timer-panel{display:flex;flex-direction:column;align-items:center;padding:10px 14px}
+.timer-panel[hidden]{display:none}
+.timer-ring{position:relative;width:118px;height:118px}
+.timer-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.timer-ring .track{fill:none;stroke:rgba(255,255,255,.12);stroke-width:8}
+.timer-ring .progress{fill:none;stroke:var(--gold);stroke-width:8;stroke-linecap:round;stroke-dasharray:276.5;stroke-dashoffset:0;transition:stroke-dashoffset .2s linear,stroke .3s}
+.timer-ring .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:40px;font-weight:bold;color:var(--gold);font-variant-numeric:tabular-nums;text-shadow:0 2px 0 #000}
+.timer-panel .timer-label{font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:#9aa3d4;margin-top:6px}
+.timer-panel.urgent .progress{stroke:var(--red)}
+.timer-panel.urgent .num{color:#fca5a5;animation:timerPulse 1s infinite}
+.timer-panel.locked .progress{stroke:var(--red);stroke-dashoffset:0}
+.timer-panel.locked .num{color:#fca5a5;font-size:22px;animation:none}
+@keyframes timerPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
 .survivors-list{font-size:13px;color:#a8b0d8}
 .survivors-list li{padding:5px 8px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;margin:3px 0;list-style:none}
 .survivors-list li.top{background:linear-gradient(90deg, transparent, rgba(244,196,48,.15), transparent);color:var(--gold)}
@@ -449,6 +463,13 @@ html.dramatic .answer.enter{animation:aEnter .5s cubic-bezier(.2,.8,.2,1) both;a
     <!-- GAME CONTROL — operator buttons live here so they're clear of the
          projected visual area. Per-lifeline buttons let the host apply each
          lifeline directly; the Vote button still opens a player-vote panel. -->
+    <div class="panel timer-panel" id="timerPanel" hidden aria-live="off">
+      <div class="timer-ring" role="timer" aria-label="Time left to answer">
+        <svg viewBox="0 0 100 100" aria-hidden="true"><circle class="track" cx="50" cy="50" r="44"></circle><circle class="progress" id="timerRing" cx="50" cy="50" r="44"></circle></svg>
+        <div class="num" id="timerNum">—</div>
+      </div>
+      <div class="timer-label" id="timerLabel">seconds left</div>
+    </div>
     <div class="panel" id="controlPanel" style="display:none">
       <div class="panel-title">Game Control</div>
       <div class="ctl-row" id="ctlPhaseRow">
@@ -714,6 +735,8 @@ function connect(){
     const msg = JSON.parse(e.data);
     if (msg.type === 'host:state') {
       state = msg.state;
+      if (state.timer) timerOffset = state.timer.serverNow - Date.now();
+      renderTimer();
       clearStateWait();
       clearShutdownBanner();
       render();
@@ -1146,6 +1169,34 @@ function renderVoteBars(counts){
     hostAction('apply-lifeline', { type: best });
   };
 }
+
+/* =====================
+   QUESTION TIMER
+   ===================== */
+// The server owns the deadline; the board only draws it. serverNow on each
+// state lets a laptop with a wrong clock still count down correctly.
+let timerOffset = 0;
+let timerLastTick = null;
+function renderTimer(){
+  const panel = document.getElementById('timerPanel');
+  const t = state && state.phase === 'question' ? state.timer : null;
+  if (!t) { panel.hidden = true; timerLastTick = null; return; }
+  panel.hidden = false;
+  const total = t.seconds * 1000;
+  const remaining = t.locked ? 0 : Math.max(0, t.deadlineAt - (Date.now() + timerOffset));
+  const secs = Math.ceil(remaining / 1000);
+  const ring = document.getElementById('timerRing');
+  ring.style.strokeDashoffset = String(276.5 * (1 - (total ? remaining / total : 0)));
+  const locked = t.locked || remaining === 0;
+  panel.classList.toggle('locked', locked);
+  panel.classList.toggle('urgent', !locked && secs <= 5);
+  document.getElementById('timerNum').textContent = locked ? "Time's up" : String(secs);
+  document.getElementById('timerLabel').textContent = locked ? 'answers locked' : (secs === 1 ? 'second left' : 'seconds left');
+  // Dramatic mode ticks through the last five seconds.
+  if (!locked && secs <= 5 && secs !== timerLastTick && presentationDramatic) sfx('tick');
+  timerLastTick = secs;
+}
+setInterval(renderTimer, 200);
 
 function questionKeyOf(s){
   // A rewound question is asked again, so it counts as new (entrance, sound).

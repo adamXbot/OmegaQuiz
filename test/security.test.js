@@ -4557,6 +4557,152 @@ async function presenterViewTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Question timer
+// ----------------------------------------------------------------------------
+async function questionTimerTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { sanitizeQuestionSeconds, questionSecondsFor, QUESTION_SECONDS_MIN, QUESTION_SECONDS_MAX } = srv;
+
+  section('Timer: settings and per-question limits validate');
+  {
+    ok(validateBranding({}).questionSeconds === 45, 'default question timer is 45 s');
+    ok(validateBranding({ questionSeconds: 0 }).questionSeconds === 0, '0 turns the timer off');
+    ok(validateBranding({ questionSeconds: '90' }).questionSeconds === 90, 'a numeric string is accepted');
+    let threw = 0;
+    for (const bad of [3, 601, -1, 4.5, 'soon']) { try { validateBranding({ questionSeconds: bad }); } catch { threw++; } }
+    ok(threw === 5, `out-of-range values are rejected (${QUESTION_SECONDS_MIN}-${QUESTION_SECONDS_MAX} or 0)`);
+    ok(validateBranding({ questionSeconds: 'soon' }, { tolerant: true }).questionSeconds === 45, 'tolerant mode keeps the default');
+    ok(sanitizeQuestionSeconds(30) === 30 && sanitizeQuestionSeconds('30') === 30 && sanitizeQuestionSeconds(0) === 0 && sanitizeQuestionSeconds(2) === 0 && sanitizeQuestionSeconds(undefined) === 0, 'per-question seconds: in range kept, otherwise 0 (default)');
+    ok(questionSecondsFor({ seconds: 20 }) === 20, 'a question with its own limit wins');
+    let bad = false;
+    try { srv.sanitizeAndValidateQuestionList([{ q: 'Q', options: ['a','b','c','d'], correct: 0, lesson: '', seconds: 2 }], 'main'); } catch { bad = true; }
+    ok(bad, 'validation rejects a 2-second question');
+    const csv = questionsToCsv([{ q: 'Q1', options: ['a','b','c','d'], correct: 1, lesson: 'L1', seconds: 20 }], []);
+    ok(csv.split('\n')[0].includes('"seconds"') && questionsFromCsv(csv).main[0].seconds === 20, 'CSV round-trips the seconds column');
+    ok(questionsFromCsv('section,question,optionA,optionB,optionC,optionD,correct,lesson\nmain,Q,a,b,c,d,A,L\n').main[0].seconds === 0, 'CSV without the column: default');
+  }
+
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  const init = await waitMessage(aws, m => m.type === 'admin:init');
+  const hostAction = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: action, hostPayload: payload || {} } }));
+  async function until(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); }
+    return null;
+  }
+  const brandingNow = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+  async function setSeconds(n) {
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'branding:update', payload: { branding: { ...brandingNow, questionSeconds: n } } }));
+    await waitMessage(aws, m => m.type === 'branding:saved' || m.type === 'branding:updated' || m.type === 'error', 3000).catch(() => null);
+  }
+  const sockets = [];
+
+  section('Timer: the deadline is on every state; answers lock when it fires; the host still reveals');
+  {
+    const before = adminState && adminState.joinCode;
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby' && s.joinCode !== before);
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:update', payload: { main: [
+      { q: 'Timed?', options: ['a', 'b', 'c', 'd'], correct: 1, lesson: 'L1' },
+      { q: 'Own limit?', options: ['a', 'b', 'c', 'd'], correct: 2, lesson: 'L2', seconds: 20 }
+    ], bonus: [] } }));
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    await setSeconds(5);
+    const joinCode = adminState.joinCode;
+    const p1 = await openWs(); sockets.push(p1);
+    let phone = null;
+    p1.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'player:state') phone = m.state; } catch {} });
+    p1.send(JSON.stringify({ type: 'player:join', name: 'Tim', email: 'tim@test.example', joinCode }));
+    await waitMessage(p1, m => m.type === 'player:joined');
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const hws = await openWs({ cookie: host.cookie }); sockets.push(hws);
+    let hostState = null;
+    hws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'host:state') hostState = m.state; } catch {} });
+    hws.send(JSON.stringify({ type: 'host:hello' }));
+    await until(s => s.playerCount === 1);
+
+    const t0 = Date.now();
+    hostAction('start-game');
+    const q1 = await until(s => s.phase === 'question' && s.questionIndex === 0);
+    ok(q1.timer && q1.timer.seconds === 5 && !q1.timer.locked && q1.timer.deadlineAt >= t0 + 4900 && q1.timer.deadlineAt <= Date.now() + 5100, 'admin:state.timer: 5 s deadline, not locked');
+    ok(Math.abs(q1.timer.serverNow - Date.now()) < 1500, 'timer carries serverNow for clock correction');
+    await pause(80);
+    ok(hostState && hostState.timer && hostState.timer.seconds === 5, 'host:state carries the timer');
+    ok(phone && phone.timer && phone.timer.seconds === 5, 'player:state carries the timer');
+
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 0 }));
+    await until(s => s.answeredCount === 1);
+    const locked = await until(s => s.timer && s.timer.locked, 7000);
+    ok(locked && locked.phase === 'question', 'when time is up answers lock and the question stays open (the host reveals)');
+    ok(Date.now() - t0 >= 4900, 'the lock fired no earlier than the deadline');
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await pause(150);
+    hostAction('cancel-lifeline-vote');
+    await pause(100);
+    ok(adminState.players[0].currentAnswer === 0 && adminState.liveAnswerTally.changeEvents === 0, 'an answer after the lock is refused (the earlier pick stands)');
+    ok(phone && phone.timer && phone.timer.locked, 'phone: timer.locked');
+    ok(adminState.timer.locked && hostState.timer.locked, 'admin and board see locked');
+
+    hostAction('close-question');
+    const rev = await until(s => s.phase === 'reveal');
+    ok(rev.timer === null, 'reveal: no timer');
+    ok(rev.players[0].alive === false, 'Tim answered A (wrong) → out, as scored at close');
+
+    hostAction('next-question');
+    const q2 = await until(s => s.phase === 'question' && s.questionIndex === 1);
+    ok(q2.timer && q2.timer.seconds === 20 && !q2.timer.locked, "question 2 uses its own 20 s limit over the 5 s default");
+    hostAction('rewind-to', { index: 0 });
+    const rw = await until(s => s.phase === 'question' && s.questionIndex === 0 && s.rewinds === 1);
+    ok(rw.timer && rw.timer.seconds === 5 && !rw.timer.locked && rw.timer.deadlineAt > Date.now() + 4000, 'rewind restarts the timer');
+    hostAction('return-to-lobby');
+    const lobby = await until(s => s.phase === 'lobby');
+    ok(lobby.timer === null, 'back to lobby: timer cleared');
+    await pause(5200);
+    hostAction('cancel-lifeline-vote');
+    await pause(100);
+    ok(adminState.phase === 'lobby' && !adminState.answersLocked, 'a cleared timer never fires later');
+  }
+
+  section('Timer: 0 turns it off');
+  {
+    await setSeconds(0);
+    hostAction('start-game');
+    const q1 = await until(s => s.phase === 'question' && s.questionIndex === 0);
+    ok(q1.timer === null, 'questionSeconds 0: no timer on the state');
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal');
+    hostAction('next-question');
+    const q2 = await until(s => s.phase === 'question' && s.questionIndex === 1);
+    ok(q2.timer && q2.timer.seconds === 20, 'a per-question limit still applies with the default off');
+    hostAction('return-to-lobby');
+    await until(s => s.phase === 'lobby');
+  }
+
+  section('Timer: the pages draw it');
+  {
+    const hostPage = (await request('GET', '/host', { headers: { Cookie: (await loginAs('host', process.env.HOST_TOKEN)).cookie } })).body;
+    ok(hostPage.includes('id="timerRing"') && hostPage.includes('serverNow - Date.now()'), 'board: timer ring, corrected by serverNow');
+    const phonePage = (await request('GET', '/')).body;
+    ok(phonePage.includes('id="timerBar"') && phonePage.includes('timerLocked(s)'), 'phone: timer bar and answers disabled once locked');
+    const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(adminPage.includes('id="brandingQuestionSecondsInput"') && adminPage.includes('data-field="seconds"') && adminPage.includes('id="snapTimer"'), 'admin: timer setting, per-question limit and time-left tile');
+    const presentPage = (await request('GET', '/present', { headers: { Cookie: admin.cookie } })).body;
+    ok(presentPage.includes('id="timerPill"'), 'presenter: timer pill');
+  }
+
+  await setSeconds(brandingNow.questionSeconds === undefined ? 45 : brandingNow.questionSeconds);
+  aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); } catch {}
+  void init;
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4597,6 +4743,7 @@ async function presenterViewTests() {
     await savedBankRestartTests();
     await presentationPolishTests();
     await presenterViewTests();
+    await questionTimerTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

@@ -401,6 +401,12 @@ async function fetchJsonSafe(url) {
 // DATA_DIR.
 let questions = [];
 let bonusQuestions = [];
+// Question timer bounds (declared before the bank loads at boot: the
+// sanitiser reads them) 
+// (branding.questionSeconds and a question's own
+// `seconds`). 0 means no timer.
+const QUESTION_SECONDS_MIN = 5;
+const QUESTION_SECONDS_MAX = 600;
 const QUESTIONS_PATH = path.join(DATA_DIR, 'questions.json');
 // Read by sanitizeQuestionImage, which runs from the boot-time load below, so
 // they must be declared before it. Declared further down they were still
@@ -593,8 +599,50 @@ function newGame({ joinCode } = {}) {
     revealedCorrect: null,
     audienceTally: null,
     // Bumped by rewind-to so every screen treats a re-asked question as new.
-    rewinds: 0
+    rewinds: 0,
+    // Question timer: when answers lock (ms epoch) and whether they have.
+    deadlineAt: null,
+    timerSeconds: 0,
+    answersLocked: false
   };
+}
+// The one server-side timer for the open question. Every path that opens a
+// question calls openQuestionTimer(); every path that leaves the question
+// phase calls clearQuestionTimer(). When it fires, answers lock and the
+// screens are told — the host still closes and reveals by hand.
+let questionTimer = null;
+function questionSecondsFor(q) {
+  if (q && q.seconds > 0) return q.seconds;
+  const n = branding && Number.isInteger(branding.questionSeconds) ? branding.questionSeconds : 0;
+  return n > 0 ? n : 0;
+}
+function clearQuestionTimer() {
+  if (questionTimer) { clearTimeout(questionTimer); questionTimer = null; }
+  game.deadlineAt = null;
+  game.timerSeconds = 0;
+  game.answersLocked = false;
+}
+function openQuestionTimer() {
+  clearQuestionTimer();
+  const q = currentQuestion();
+  const seconds = questionSecondsFor(q);
+  if (!seconds || game.phase !== 'question') return;
+  game.timerSeconds = seconds;
+  game.deadlineAt = Date.now() + seconds * 1000;
+  const forGame = game;
+  questionTimer = setTimeout(() => {
+    questionTimer = null;
+    if (game !== forGame || game.phase !== 'question' || game.answersLocked) return;
+    game.answersLocked = true;
+    const label = game.inBonus ? `B${game.bonusIndex + 1}` : `Q${game.questionIndex + 1}`;
+    logEvent('timer', `Time is up on ${label} — answers locked (${answeredAliveCount()} of ${survivors().length} answered)`);
+    pushAll();
+  }, seconds * 1000);
+  if (questionTimer.unref) questionTimer.unref();
+}
+function timerState() {
+  if (game.phase !== 'question' || !game.deadlineAt) return null;
+  return { deadlineAt: game.deadlineAt, seconds: game.timerSeconds, locked: game.answersLocked, serverNow: Date.now() };
 }
 let game = newGame({ joinCode: CLI.command ? null : loadPersistedJoinCode() });
 if (!CLI.command) persistJoinCode(game.joinCode);
@@ -735,8 +783,14 @@ function sanitizeQuestionList(arr) {
     // question. Plain text, rendered with textContent on /present, and
     // never sent to the board or the phones (see pushHostState /
     // playerStateMessage / buildReview / lessons.json).
-    notes: sanitizePresenterNotes(q.notes)
+    notes: sanitizePresenterNotes(q.notes),
+    // Per-question time limit in seconds; 0 / missing = the Settings default.
+    seconds: sanitizeQuestionSeconds(q.seconds)
   }));
+}
+function sanitizeQuestionSeconds(v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return Number.isInteger(n) && n >= QUESTION_SECONDS_MIN && n <= QUESTION_SECONDS_MAX ? n : 0;
 }
 const PRESENTER_NOTES_MAX_CHARS = 4000;
 function sanitizePresenterNotes(s) {
@@ -778,6 +832,9 @@ function sanitizeAndValidateQuestionList(arr, sectionName) {
     }
     if (q.notes !== undefined && q.notes !== null && typeof q.notes !== 'string') {
       throw new Error(`${label} notes must be text`);
+    }
+    if (q.seconds !== undefined && q.seconds !== null && q.seconds !== '' && q.seconds !== 0 && sanitizeQuestionSeconds(q.seconds) === 0) {
+      throw new Error(`${label} seconds must be 0 (use the default) or ${QUESTION_SECONDS_MIN}-${QUESTION_SECONDS_MAX}`);
     }
   });
   return sanitizeQuestionList(arr);
@@ -1111,7 +1168,7 @@ function stringifyCsv(rows) {
 // `notes` (presenter notes) is exported but optional on import, so a file
 // written before it existed still loads.
 const CSV_REQUIRED_HEADERS = ['section', 'question', 'optionA', 'optionB', 'optionC', 'optionD', 'correct', 'lesson'];
-const CSV_HEADERS = [...CSV_REQUIRED_HEADERS, 'notes'];
+const CSV_HEADERS = [...CSV_REQUIRED_HEADERS, 'notes', 'seconds'];
 
 function questionsToCsv(main, bonus) {
   const rows = [CSV_HEADERS];
@@ -1125,7 +1182,8 @@ function questionsToCsv(main, bonus) {
       (q.options && q.options[3]) || '',
       'ABCD'[q.correct] || '',
       q.lesson || '',
-      q.notes || ''
+      q.notes || '',
+      q.seconds ? String(q.seconds) : ''
     ]);
   };
   (main  || []).forEach(q => push('main',  q));
@@ -1169,8 +1227,12 @@ function questionsFromCsv(text) {
       correct,
       lesson: String(r[idx.lesson] || '').trim(),
       image: '',
-      notes: idx.notes >= 0 ? String(r[idx.notes] || '').trim() : ''
+      notes: idx.notes >= 0 ? String(r[idx.notes] || '').trim() : '',
+      seconds: idx.seconds >= 0 && String(r[idx.seconds] || '').trim() !== '' ? Number(String(r[idx.seconds]).trim()) : 0
     };
+    if (idx.seconds >= 0 && String(r[idx.seconds] || '').trim() !== '' && sanitizeQuestionSeconds(q.seconds) === 0) {
+      throw new Error(`Row ${i + 1}: seconds must be blank or ${QUESTION_SECONDS_MIN}-${QUESTION_SECONDS_MAX}`);
+    }
     if (!q.q) throw new Error(`Row ${i + 1}: question text is required`);
     if (q.options.some(o => !o)) throw new Error(`Row ${i + 1}: all four options are required`);
     (section === 'main' ? main : bonus).push(q);
@@ -1243,6 +1305,9 @@ const DEFAULT_BRANDING = {
   //   'each-question' — fresh set every question (party / training mode)
   //   'at-bonus'      — fresh set when the bonus / tiebreaker round starts
   lifelineRefill: 'never',
+  // Seconds each question stays open before answers lock (0 = no timer).
+  // A question's own `seconds` overrides it. The host still reveals by hand.
+  questionSeconds: 45,
   // Session closed flag — when true the player and host pages show a
   // "session ended" view, new joins are rejected, but the admin can still
   // sign in and reopen. Use case: shut down the storefront between
@@ -1359,6 +1424,10 @@ function brandingFromEnv() {
   if (e.ELIMINATED_CAN_ANSWER !== undefined) out.eliminatedCanAnswer = truthy(e.ELIMINATED_CAN_ANSWER);
   if (e.LIFELINE_REFILL === 'never' || e.LIFELINE_REFILL === 'each-question' || e.LIFELINE_REFILL === 'at-bonus') {
     out.lifelineRefill = e.LIFELINE_REFILL;
+  }
+  if (e.QUESTION_SECONDS !== undefined && /^\d{1,3}$/.test(String(e.QUESTION_SECONDS).trim())) {
+    const n = parseInt(e.QUESTION_SECONDS, 10);
+    if (n === 0 || (n >= QUESTION_SECONDS_MIN && n <= QUESTION_SECONDS_MAX)) out.questionSeconds = n;
   }
   // Session-closed CTA defaults — first-run only; admin saves win once
   // data/config.json exists, same precedence as the other branding fields.
@@ -1504,6 +1573,16 @@ function validateBranding(raw, { tolerant = false } = {}) {
       out.lifelineRefill = raw.lifelineRefill;
     } else if (!tolerant) {
       throw new Error('lifelineRefill must be "never", "each-question", or "at-bonus"');
+    }
+  }
+
+  // questionSeconds: 0 (no timer) or QUESTION_SECONDS_MIN..MAX whole seconds.
+  if (raw.questionSeconds !== undefined) {
+    const n = typeof raw.questionSeconds === 'string' && raw.questionSeconds.trim() !== '' ? Number(raw.questionSeconds) : raw.questionSeconds;
+    if (n === 0 || (Number.isInteger(n) && n >= QUESTION_SECONDS_MIN && n <= QUESTION_SECONDS_MAX)) {
+      out.questionSeconds = n;
+    } else if (!tolerant) {
+      throw new Error(`questionSeconds must be 0 (off) or a whole number of seconds from ${QUESTION_SECONDS_MIN} to ${QUESTION_SECONDS_MAX}`);
     }
   }
 
@@ -2331,6 +2410,7 @@ function pushHostState() {
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
       rewinds: game.rewinds,
+      timer: timerState(),
       totalQuestions: questions.length,
       playerCount: game.players.size,
       aliveCount: survivors().length,
@@ -2370,7 +2450,7 @@ function pushHostState() {
 // presenter notes, what comes next and who is still to answer.
 function presenterQuestionCard(q, label) {
   if (!q) return null;
-  return { label, q: q.q, options: q.options, correct: q.correct, lesson: q.lesson || '', notes: q.notes || '', image: q.image || '', imageAlt: q.imageAlt || '' };
+  return { label, q: q.q, options: q.options, correct: q.correct, lesson: q.lesson || '', notes: q.notes || '', image: q.image || '', imageAlt: q.imageAlt || '', seconds: questionSecondsFor(q) };
 }
 // What Next will bring up, as best we can tell before the reveal: the next
 // main question, the tiebreaker round (only if more than one player is
@@ -2440,6 +2520,7 @@ function pushPresentState() {
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
       rewinds: game.rewinds,
+      timer: timerState(),
       totalQuestions: questions.length,
       totalBonus: bonusQuestions.length,
       playerCount: game.players.size,
@@ -2497,6 +2578,7 @@ function playerStateMessage(p, review) {
       questionIndex: game.questionIndex,
       inBonus: game.inBonus,
       rewinds: game.rewinds,
+      timer: timerState(),
       totalQuestions: questions.length,
       question: q ? {
         q: q.q,
@@ -2589,6 +2671,7 @@ function pushAdminState() {
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
       rewinds: game.rewinds,
+      timer: timerState(),
       totalQuestions: questions.length,
       totalBonus: bonusQuestions.length,
       reconnectWindowMs: PLAYER_RECONNECT_WINDOW_MS,
@@ -2667,6 +2750,7 @@ function hostAction(action, payload = {}) {
       resetCurrentAnswerState();
       game.eliminatedOptions = []; game.audienceTally = null;
       game.revealedCorrect = null;
+      openQuestionTimer();
       pushAll();
       break;
     }
@@ -2706,6 +2790,7 @@ function hostAction(action, payload = {}) {
       } else if (type === 'skip') {
         game.phase = 'reveal';
         game.revealedCorrect = q.correct;
+        clearQuestionTimer();
         broadcast({ type: 'lifeline:skip' });
       }
       pushAll();
@@ -2755,6 +2840,7 @@ function hostAction(action, payload = {}) {
 
       game.phase = 'reveal';
       game.revealedCorrect = q.correct;
+      clearQuestionTimer();
       logEvent('reveal', `${qLabel} closed — ${survivors().length} survivors`);
       pushAll();
       break;
@@ -2806,11 +2892,13 @@ function hostAction(action, payload = {}) {
           refillLifelinesIfDue({ eachQuestion: true });
         }
       }
+      openQuestionTimer(); // no-op unless a question just opened
       pushAll();
       break;
     }
     case 'reset-game': {
       // A01-6: rotate the join code on reset so old links don't carry over.
+      clearQuestionTimer();
       startNewGame();
       pushAll();
       break;
@@ -2832,6 +2920,7 @@ function hostAction(action, payload = {}) {
       game.revealedCorrect = null;
       game.lifelineActive = null;
       game.lifelinesUsed = { '5050': false, 'askit': false, 'skip': false };
+      clearQuestionTimer();
       game.players.forEach(p => { p.history = []; p.answeredScore = 0; p.alive = true; });
       broadcast({ type: 'game:lobby-return' }, c => c.role === 'player');
       logEvent('admin', `Back to the lobby from ${from} (players kept, scores cleared)`);
@@ -2873,6 +2962,7 @@ function hostAction(action, payload = {}) {
       game.audienceTally = null;
       game.revealedCorrect = null;
       game.lifelineActive = null;
+      openQuestionTimer();
       logEvent('admin', `Rewound to question ${index + 1} — ${survivors().length} back in the running`);
       pushAll();
       break;
@@ -3395,6 +3485,7 @@ function handleWsMessage(ws, raw) {
     // appear in the audience tally.
     if (!p || (!p.alive && !branding.eliminatedCanAnswer)) return;
     if (game.phase !== 'question') return;
+    if (game.answersLocked) return; // time is up; the host reveals when ready
     const idx = msg.answerIndex;
     if (![0,1,2,3].includes(idx)) return;
     if (game.eliminatedOptions.includes(idx)) return;
@@ -4127,7 +4218,8 @@ app.get('/questions-template.csv', requireRole('admin'), (req, res) => {
       'First option', 'Second option', 'Third option', 'Fourth option',
       'B',
       'Lesson / explanation shown to players after the reveal.',
-      'Presenter notes — only the presenter view shows these.'
+      'Presenter notes — only the presenter view shows these.',
+      ''
     ],
     [
       'bonus',
@@ -4135,7 +4227,8 @@ app.get('/questions-template.csv', requireRole('admin'), (req, res) => {
       'Option A', 'Option B', 'Option C', 'Option D',
       'A',
       'Tiebreaker lesson.',
-      ''
+      '',
+      '30'
     ]
   ]);
   res.set('Content-Type', 'text/csv; charset=utf-8');
@@ -4487,6 +4580,7 @@ module.exports = {
   csvField, tokensEqual,
   parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv,
   CSV_HEADERS, CSV_REQUIRED_HEADERS, sanitizePresenterNotes, PRESENTER_NOTES_MAX_CHARS,
+  sanitizeQuestionSeconds, questionSecondsFor, QUESTION_SECONDS_MIN, QUESTION_SECONDS_MAX,
   loadQuestionsFromDisk, saveQuestionsToDisk,
   QUESTIONS_PATH,
   get questions() { return questions; },

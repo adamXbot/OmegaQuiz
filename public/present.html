@@ -98,6 +98,8 @@ a{color:var(--gold)}
 .banner a{color:#fff}
 .muted{color:var(--gray-text);font-size:13px}
 .pill.clicker{cursor:default}
+.pill.timer-urgent b{color:#fbbf24}
+.pill.timer-locked{border-color:var(--red)} .pill.timer-locked b{color:#fca5a5}
 .pill.clicker.armed{border-color:#4ade80;color:#86efac}
 .pill.clicker.armed .dot{background:#4ade80;box-shadow:0 0 6px #4ade80}
 .review-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--gold);background:rgba(244,196,48,.1);border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:12px}
@@ -115,6 +117,7 @@ a{color:var(--gold)}
   <span class="pill phase"><b id="phasePill">…</b></span>
   <span class="pill" id="qPill" hidden><b id="qPillText"></b></span>
   <span class="pill" title="Time since this question appeared" id="elapsedPill" hidden>⏱ <b id="elapsed">0:00</b></span>
+  <span class="pill" id="timerPill" hidden title="Question timer (Settings → Question timer)">⏳ <b id="timerText">—</b></span>
   <span class="pill">Join code <b id="joinCodePill">----</b></span>
   <span class="pill">In <b id="alivePill">0</b> / <b id="playersPill">0</b></span>
   <span class="pill" id="answeredPill" hidden>Answered <b id="answeredText">0 / 0</b></span>
@@ -232,7 +235,7 @@ function connect(){
   ws.onopen = () => { reconnectAttempt = 0; ws.send(JSON.stringify({ type: 'present:hello' })); };
   ws.onmessage = e => {
     let msg; try { msg = JSON.parse(e.data); } catch { return; }
-    if (msg.type === 'present:state') { state = msg.state; setConn('live', 'Live'); clearBanner(); render(); }
+    if (msg.type === 'present:state') { state = msg.state; if (state.timer) timerOffset = state.timer.serverNow - Date.now(); renderTimer(); setConn('live', 'Live'); clearBanner(); render(); }
     else if (msg.type === 'lifeline:askit') showAskIt(msg.hint, msg.correctLetter);
     else if (msg.type === 'branding:updated') applyBranding();
     else if (msg.type === 'error') showBanner(msg.error, true);
@@ -448,7 +451,7 @@ function renderControls(s){
       v.appendChild(r2);
       c.appendChild(v);
     }
-    status.textContent = `${s.answeredCount} of ${s.aliveCount} answered`;
+    status.textContent = `${s.answeredCount} of ${s.aliveCount} answered` + (s.timer && s.timer.locked ? " · time's up, answers locked" : '');
   } else if (s.phase === 'reveal') {
     const n = s.nextUp;
     c.appendChild(button(n && n.end ? 'Finish → results' : `Next → ${n ? n.label : ''}`, { primary: true, id: 'nextBtn', kbd: 'PgDn', action: () => hostAction('next-question') }));
@@ -611,6 +614,22 @@ window.addEventListener('focus', renderClickerPill);
 window.addEventListener('blur', renderClickerPill);
 document.addEventListener('visibilitychange', renderClickerPill);
 renderClickerPill();
+
+// Question timer (server-owned deadline; serverNow corrects this clock).
+let timerOffset = 0;
+function renderTimer(){
+  const pill = document.getElementById('timerPill');
+  const t = state && state.phase === 'question' ? state.timer : null;
+  if (!t) { pill.hidden = true; return; }
+  pill.hidden = false;
+  const remaining = t.locked ? 0 : Math.max(0, t.deadlineAt - (Date.now() + timerOffset));
+  const secs = Math.ceil(remaining / 1000);
+  const locked = t.locked || remaining === 0;
+  document.getElementById('timerText').textContent = locked ? "Time's up · answers locked" : `${secs}s of ${t.seconds}`;
+  pill.classList.toggle('timer-locked', locked);
+  pill.classList.toggle('timer-urgent', !locked && secs <= 5);
+}
+setInterval(renderTimer, 250);
 
 setInterval(() => {
   if (!questionShownAt) return;

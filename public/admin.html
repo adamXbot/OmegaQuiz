@@ -358,6 +358,7 @@ body{
           <div><div class="muted">Disconnected (in window)</div><div style="font-size:24px;color:#fbbf24;font-weight:bold" id="snapDisc">0</div></div>
           <div><div class="muted">Still in running</div><div style="font-size:24px;color:var(--gold);font-weight:bold" id="snapAlive">0</div></div>
           <div><div class="muted">Answered current Q</div><div style="font-size:24px;color:var(--white);font-weight:bold" id="snapAnswered">— / —</div></div>
+          <div><div class="muted">Time left</div><div style="font-size:24px;color:var(--white);font-weight:bold;font-variant-numeric:tabular-nums" id="snapTimer">—</div></div>
         </div>
       </div>
 
@@ -570,6 +571,18 @@ body{
                 Switch off if your audience would prefer the final results anonymised ("Finalist 1", "Finalist 2"…).
               </div>
             </label>
+          </div>
+          <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+            <label for="brandingQuestionSecondsInput" style="color:var(--white);font-size:13px;line-height:1.4;flex:1;min-width:240px">
+              Question timer
+              <div class="muted" style="font-size:11px;margin-top:2px;font-weight:normal;letter-spacing:0;text-transform:none">
+                Seconds each question stays open. The board shows a ring, phones a bar, the presenter view the count. When
+                time is up answers lock; you still click Close &amp; Reveal. 0 turns the timer off. A question's own
+                time limit (Questions tab) overrides this.
+              </div>
+            </label>
+            <input type="number" id="brandingQuestionSecondsInput" min="0" max="600" step="1" inputmode="numeric" style="width:90px;align-self:flex-start" aria-describedby="brandingQuestionSecondsHint">
+            <span id="brandingQuestionSecondsHint" class="muted" style="font-size:11px;align-self:center">5–600, or 0 = off</span>
           </div>
           <div style="grid-column:1 / -1;display:flex;align-items:flex-start;gap:8px">
             <input type="checkbox" id="brandingElimCanAnswerInput" style="transform:scale(1.2);accent-color:var(--gold);margin-top:2px">
@@ -991,6 +1004,8 @@ function connect() {
       showRotatedToken(msg);
     } else if (msg.type === 'admin:state') {
       state = msg.state;
+      if (state.timer) timerOffset = state.timer.serverNow - Date.now();
+      renderTimer();
       renderAll();
     } else if (msg.type === 'admin:event') {
       eventLog.unshift(msg.event);
@@ -1629,6 +1644,8 @@ function renderQuestionList(targetId, arr, kind) {
       `).join('')}
       <label class="lesson-label">Lesson / Explanation (shown on host screen after reveal)</label>
       <textarea data-field="lesson">${escapeHtmlAttr(q.lesson)}</textarea>
+      <label class="lesson-label">Time limit <span class="muted" style="font-weight:normal;letter-spacing:0;text-transform:none;font-size:11px">(seconds; blank = the Branding default)</span></label>
+      <input type="number" data-field="seconds" min="0" max="600" step="1" inputmode="numeric" value="${q.seconds ? q.seconds : ''}" placeholder="default" style="width:110px">
       <label class="lesson-label">Presenter notes <span class="muted" style="font-weight:normal;letter-spacing:0;text-transform:none;font-size:11px">(only the presenter view shows these — never the board or the phones)</span></label>
       <textarea data-field="notes" maxlength="4000" placeholder="What to say around this question: the story behind it, who to ask, the segue to the next one…">${escapeHtmlAttr(q.notes || '')}</textarea>
       <label class="lesson-label">Image (optional — PNG / JPG / WEBP / SVG, max 256 KB)</label>
@@ -1648,6 +1665,7 @@ function renderQuestionList(targetId, arr, kind) {
     card.querySelector('[data-field="q"]').oninput = e => { q.q = e.target.value; markDirty(); };
     card.querySelector('[data-field="lesson"]').oninput = e => { q.lesson = e.target.value; markDirty(); };
     card.querySelector('[data-field="notes"]').oninput = e => { q.notes = e.target.value; markDirty(); };
+    card.querySelector('[data-field="seconds"]').oninput = e => { const n = parseInt(e.target.value, 10); q.seconds = Number.isInteger(n) && n > 0 ? n : 0; markDirty(); };
     card.querySelectorAll('[data-field="option"]').forEach(inp => {
       inp.oninput = e => { q.options[parseInt(e.target.dataset.idx)] = e.target.value; markDirty(); };
     });
@@ -1967,6 +1985,19 @@ function escapeHtmlAttr(s){ if (s == null) return ''; return String(s).replace(_
 
 // Periodic refresh for disconnect countdown
 setInterval(() => { if (state && state.players && state.players.length) renderSnapshot(); }, 1000);
+// Question timer (server-owned deadline; serverNow corrects this clock).
+let timerOffset = 0;
+function renderTimer() {
+  const el = document.getElementById('snapTimer');
+  const t = state && state.phase === 'question' ? state.timer : null;
+  if (!t) { el.textContent = state && state.phase === 'question' ? 'off' : '—'; el.style.color = 'var(--white)'; return; }
+  const remaining = t.locked ? 0 : Math.max(0, t.deadlineAt - (Date.now() + timerOffset));
+  const secs = Math.ceil(remaining / 1000);
+  const locked = t.locked || remaining === 0;
+  el.textContent = locked ? "Time's up" : `${secs}s`;
+  el.style.color = locked ? '#fca5a5' : secs <= 5 ? '#fbbf24' : 'var(--white)';
+}
+setInterval(renderTimer, 250);
 
 /* =====================
    BRANDING TAB
@@ -2052,6 +2083,7 @@ function populateBrandingForm(){
   document.getElementById('brandingRestrictInput').checked = !!brandingDraft.restrictDomain;
   document.getElementById('brandingShowNamesInput').checked = brandingDraft.showNamesAtEnd !== false; // default true
   document.getElementById('brandingElimCanAnswerInput').checked = !!brandingDraft.eliminatedCanAnswer;
+  document.getElementById('brandingQuestionSecondsInput').value = Number.isInteger(brandingDraft.questionSeconds) ? brandingDraft.questionSeconds : 45;
   const levelRadios = document.getElementsByName('brandingLevelStyle');
   levelRadios.forEach(r => { r.checked = (r.value === brandingDraft.levelStyle); });
   const lockRadios = document.getElementsByName('brandingAnswerLockMode');
@@ -2179,6 +2211,7 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
     restrictDomain: document.getElementById('brandingRestrictInput').checked,
     showNamesAtEnd: document.getElementById('brandingShowNamesInput').checked,
     eliminatedCanAnswer: document.getElementById('brandingElimCanAnswerInput').checked,
+    questionSeconds: Number(document.getElementById('brandingQuestionSecondsInput').value || 0),
     logoDataUri: brandingDraft.logoDataUri || '',
     levelStyle: levelStyleEl ? levelStyleEl.value : 'money',
     answerLockMode: lockModeEl ? lockModeEl.value : 'quick',
