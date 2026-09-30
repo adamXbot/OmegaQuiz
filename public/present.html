@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Presenter — Omega Quiz</title>
+<style>
+/* The facilitator's screen while /host is on the projector: what the board
+   shows now, the answer and the notes the board must not show, what comes
+   next, and the controls. Same palette as the admin page. */
+:root{
+  --navy-deep:#020625; --navy-mid:#050d3d; --navy-light:#0a1660;
+  --gold:#f4c430; --gold-bright:#ffd700; --gold-dim:#8a6d10;
+  --red:#c41e3a; --green:#1ea14a; --white:#f5f3e8;
+  --gray-text:#9aa3d4; --gray-line:#2a3a7a; --panel:rgba(5,13,61,.75);
+}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}}
+:focus-visible{outline:2px solid var(--gold-bright);outline-offset:2px}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:linear-gradient(180deg,var(--navy-deep) 0%,#0a1230 100%);color:var(--white);min-height:100%;display:flex;flex-direction:column}
+a{color:var(--gold)}
+.topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid var(--gold-dim);background:rgba(2,6,37,.9);position:sticky;top:0;z-index:5}
+.brand{color:var(--gold);font-family:Georgia,serif;font-size:15px;letter-spacing:.15em;text-transform:uppercase;font-weight:bold}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--gray-line);border-radius:14px;padding:4px 10px;font-size:12px;color:var(--gray-text);background:rgba(0,0,0,.25);font-variant-numeric:tabular-nums}
+.pill b{color:var(--white);font-weight:600}
+.pill.phase b{color:var(--gold)}
+.pill .dot{width:8px;height:8px;border-radius:50%;background:#64748b}
+.pill.live .dot{background:#4ade80;box-shadow:0 0 6px #4ade80}
+.pill.down .dot{background:#f87171}
+.topbar .spacer{flex:1}
+.topbar a.link{font-size:12px;color:var(--gray-text);text-decoration:none;border:1px solid var(--gray-line);border-radius:14px;padding:4px 10px}
+.topbar a.link:hover{color:var(--white);border-color:var(--white)}
+.layout{flex:1;display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,2fr);gap:16px;padding:16px 18px 28px;align-content:start}
+@media (max-width:900px){.layout{grid-template-columns:minmax(0,1fr)}}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--gray-line);border-radius:12px;padding:14px 16px;min-width:0}
+.card h2{font-size:11px;letter-spacing:.25em;text-transform:uppercase;color:var(--gray-text);margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card h2 .right{margin-left:auto;letter-spacing:0;text-transform:none;font-weight:normal;font-size:12px}
+.now .qlabel{color:var(--gold);font-size:12px;letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px}
+.now .qtext{font-family:Georgia,serif;font-size:clamp(18px,2.2vw,26px);line-height:1.4;margin-bottom:12px}
+.now .qtext .mono,.lesson .mono,.next .mono{font-family:'Courier New',monospace;background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;color:var(--gold-bright)}
+.now img{max-height:180px;max-width:100%;border-radius:8px;display:block;margin:0 0 12px;background:rgba(0,0,0,.3)}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@media (max-width:640px){.opts{grid-template-columns:1fr}}
+.opt{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--gray-line);border-radius:10px;padding:9px 12px;font-size:15px;line-height:1.35;background:rgba(0,0,0,.2);min-width:0}
+.opt .letter{color:var(--gold);font-weight:bold;min-width:22px}
+.opt.correct{border-color:#4ade80;background:rgba(34,197,94,.14)}
+.opt.correct .letter{color:#86efac}
+.opt.correct .tick{margin-left:auto;color:#86efac;font-weight:bold}
+.opt.eliminated{opacity:.4;text-decoration:line-through}
+.opt .pct{margin-left:auto;color:var(--gray-text);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.opt .live{margin-left:auto;color:var(--gray-text);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.lesson{margin-top:12px;border-left:3px solid var(--gold);padding:8px 12px;background:rgba(0,0,0,.2);border-radius:0 8px 8px 0;font-size:15px;line-height:1.5}
+.lesson .tag{display:block;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gold);margin-bottom:4px}
+.notes{white-space:pre-wrap;font-size:clamp(16px,1.6vw,20px);line-height:1.55;font-family:Georgia,serif;color:#fdf6d8;min-height:80px}
+.notes.empty{color:var(--gray-text);font-style:italic;font-family:inherit;font-size:14px}
+.big-code{font-family:Georgia,serif;font-size:clamp(40px,7vw,84px);letter-spacing:.2em;color:var(--gold);line-height:1;text-shadow:0 0 24px rgba(244,196,48,.5)}
+.join-url{font-size:15px;color:var(--gray-text);margin-top:6px;word-break:break-all}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip{border:1px solid var(--gray-line);border-radius:12px;padding:3px 10px;font-size:13px}
+.chip.off{opacity:.5}
+.btn{font-family:inherit;font-size:14px;padding:11px 16px;border-radius:10px;border:1px solid var(--gold-dim);background:linear-gradient(180deg,#0d1a6e,#050b3a);color:var(--white);cursor:pointer;min-height:40px;text-align:left}
+.btn:hover:not(:disabled){background:linear-gradient(180deg,#2540c4,#0a116e)}
+.btn:disabled{cursor:not-allowed;opacity:.5;filter:saturate(.4)}
+.btn.primary{background:linear-gradient(180deg,var(--gold-bright),var(--gold-dim));color:var(--navy-deep);font-weight:bold;font-size:16px;padding:14px 18px}
+.btn.danger{border-color:var(--red);color:#fca5a5}
+.btn.ghost{background:transparent;border-color:var(--gray-line);color:var(--gray-text)}
+.btn .kbd{float:right;font-size:11px;color:inherit;opacity:.6;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-left:8px}
+.controls{display:flex;flex-direction:column;gap:8px}
+.controls .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.controls .status{font-size:12px;color:var(--gray-text);min-height:16px}
+.vote{border:1px solid var(--gold-dim);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;background:rgba(244,196,48,.06)}
+.vote .bar{display:flex;justify-content:space-between;font-size:13px}
+.next .label{color:var(--gold);font-size:12px;letter-spacing:.2em;text-transform:uppercase}
+.next .q{font-size:15px;line-height:1.4;margin:6px 0}
+.next .ans{font-size:13px;color:#86efac}
+.next .n{font-size:13px;color:var(--gray-text);white-space:pre-wrap;margin-top:6px;max-height:4.5em;overflow:hidden}
+.names{display:flex;flex-wrap:wrap;gap:6px}
+.names .chip::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;margin-right:6px}
+.names .chip.off::before{background:#64748b}
+.bars{display:grid;gap:6px}
+.bar-row{display:grid;grid-template-columns:22px 1fr 44px;align-items:center;gap:8px;font-size:12px}
+.bar-row .track{height:10px;background:rgba(0,0,0,.35);border-radius:5px;overflow:hidden}
+.bar-row .fill{height:100%;background:var(--gold);width:0;transition:width .3s}
+.bar-row.correct .fill{background:#4ade80}
+.askit{border:2px solid var(--gold);background:rgba(244,196,48,.08)}
+.askit .hint{font-size:16px;line-height:1.5;margin-bottom:6px}
+.askit .verdict{color:var(--gold);font-weight:bold}
+.podium{display:grid;gap:6px}
+.podium .row{display:flex;justify-content:space-between;border:1px solid var(--gray-line);border-radius:8px;padding:8px 12px;font-size:15px}
+.podium .row:first-child{border-color:var(--gold);color:var(--gold)}
+.banner{position:fixed;top:12px;left:50%;transform:translateX(-50%);background:rgba(196,30,58,.95);color:#fff;padding:10px 20px;border-radius:20px;z-index:50;font-size:13px;display:flex;gap:10px;align-items:center}
+.banner button{background:#fff;color:#991b1b;border:none;padding:5px 12px;border-radius:12px;font-weight:bold;cursor:pointer;font-family:inherit}
+.banner a{color:#fff}
+.muted{color:var(--gray-text);font-size:13px}
+[hidden]{display:none !important}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand" id="brandTitle">Omega Quiz</span>
+  <span class="pill phase"><b id="phasePill">…</b></span>
+  <span class="pill" id="qPill" hidden><b id="qPillText"></b></span>
+  <span class="pill" title="Time since this question appeared" id="elapsedPill" hidden>⏱ <b id="elapsed">0:00</b></span>
+  <span class="pill">Join code <b id="joinCodePill">----</b></span>
+  <span class="pill">In <b id="alivePill">0</b> / <b id="playersPill">0</b></span>
+  <span class="pill" id="answeredPill" hidden>Answered <b id="answeredText">0 / 0</b></span>
+  <span class="spacer"></span>
+  <span class="pill" id="connPill"><span class="dot"></span><span id="connText">Connecting…</span></span>
+  <a class="link" href="/host" target="_blank" rel="noopener">Board ↗</a>
+</header>
+
+<main class="layout">
+  <div class="col">
+    <section class="card now" id="nowCard">
+      <h2>On the board now <span class="right muted" id="nowMeta"></span></h2>
+      <div id="lobbyView" hidden>
+        <div class="big-code" id="joinCodeBig">----</div>
+        <div class="join-url" id="joinUrl"></div>
+        <div class="muted" style="margin-top:10px"><b id="lobbyCount" style="color:var(--white)">0</b> joined so far</div>
+        <div class="chips" id="lobbyChips"></div>
+      </div>
+      <div id="questionView" hidden>
+        <div class="qlabel" id="qLabel"></div>
+        <div class="qtext" id="qText"></div>
+        <img id="qImage" alt="" hidden>
+        <div class="opts" id="opts"></div>
+        <div class="lesson" id="lesson" hidden><span class="tag" id="lessonTag">Why · shown at the reveal</span><span id="lessonText"></span></div>
+      </div>
+      <div id="endView" hidden>
+        <div class="qlabel">Game over</div>
+        <div class="podium" id="podium"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Presenter notes <span class="right muted">Only this screen shows them</span></h2>
+      <div class="notes empty" id="notes">Waiting for the game…</div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>Controls</h2>
+      <div class="controls" id="controls"></div>
+    </section>
+
+    <section class="card askit" id="askitCard" hidden>
+      <h2>📞 Ask IT says <button class="btn ghost" id="askitClose" style="margin-left:auto;padding:4px 10px;min-height:0">Close</button></h2>
+      <div class="hint" id="askitHint"></div>
+      <div class="verdict" id="askitVerdict"></div>
+    </section>
+
+    <section class="card next" id="nextCard">
+      <h2>Next up</h2>
+      <div id="nextBody" class="muted">—</div>
+    </section>
+
+    <section class="card" id="waitingCard" hidden>
+      <h2>Still to answer <span class="right muted" id="waitingMeta"></span></h2>
+      <div class="names" id="waitingNames"></div>
+    </section>
+
+    <section class="card" id="liveCard" hidden>
+      <h2>Live answers <span class="right muted" id="liveMeta"></span></h2>
+      <div class="bars" id="liveBars"></div>
+    </section>
+
+    <section class="card" id="survivorsCard" hidden>
+      <h2>Still in</h2>
+      <div class="names" id="survivorNames"></div>
+    </section>
+  </div>
+</main>
+
+<script nonce="__CSP_NONCE__">
+let state = null;
+let ws = null;
+let brandTitle = 'Omega Quiz';
+let brandPublicBaseUrl = '';
+let askitFor = '';
+let questionShownAt = null;
+let questionKey = '';
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function text(html){ const d = document.createElement('div'); d.innerHTML = html || ''; return d.textContent || ''; }
+function keyOf(s){ return s ? (s.phase + ':' + (s.inBonus ? 'b' + s.bonusIndex : 'q' + s.questionIndex)) : ''; }
+
+async function applyBranding(){
+  try {
+    const r = await fetch('/branding.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const b = await r.json();
+    brandTitle = text(b.quizTitle || b.companyName || '') || 'Omega Quiz';
+    brandPublicBaseUrl = b.publicBaseUrl || '';
+    document.getElementById('brandTitle').textContent = brandTitle;
+    if (state) render();
+  } catch {}
+}
+applyBranding();
+
+/* ---------- connection ---------- */
+const RECONNECT_BASE_MS = 1500, RECONNECT_MAX_MS = 30000, RECONNECT_MAX_TRIES = 10;
+let reconnectAttempt = 0, reconnectTimer = null, finalShutdown = false;
+function setConn(cls, label){ const p = document.getElementById('connPill'); p.className = 'pill ' + cls; document.getElementById('connText').textContent = label; }
+function connect(){
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}`);
+  ws.onopen = () => { reconnectAttempt = 0; ws.send(JSON.stringify({ type: 'present:hello' })); };
+  ws.onmessage = e => {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'present:state') { state = msg.state; setConn('live', 'Live'); clearBanner(); render(); }
+    else if (msg.type === 'lifeline:askit') showAskIt(msg.hint, msg.correctLetter);
+    else if (msg.type === 'branding:updated') applyBranding();
+    else if (msg.type === 'error') showBanner(msg.error, true);
+    else if (msg.type === 'server:shutdown') {
+      if (msg.final) { finalShutdown = true; if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } }
+      showBanner(msg.message || (msg.final ? 'Session ended.' : 'Server is restarting — reconnecting…'));
+    }
+  };
+  ws.onclose = () => { setConn('down', 'Disconnected'); scheduleReconnect(); };
+  ws.onerror = () => { try { ws.close(); } catch {} };
+}
+function scheduleReconnect(){
+  if (finalShutdown || reconnectTimer) return;
+  if (reconnectAttempt >= RECONNECT_MAX_TRIES) { showBanner('Lost connection.', true); return; }
+  reconnectAttempt++;
+  const delay = Math.min(RECONNECT_BASE_MS * Math.pow(1.6, reconnectAttempt - 1), RECONNECT_MAX_MS);
+  setConn('down', `Reconnecting in ${Math.round(delay / 1000)}s…`);
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, delay);
+}
+function showBanner(message, withActions){
+  let b = document.getElementById('banner');
+  if (!b) { b = document.createElement('div'); b.id = 'banner'; b.className = 'banner'; b.setAttribute('role', 'status'); document.body.appendChild(b); }
+  b.textContent = message;
+  if (withActions) {
+    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = 'Reconnect';
+    btn.addEventListener('click', () => { reconnectAttempt = 0; if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } connect(); });
+    const a = document.createElement('a'); a.href = '/auth/login?role=host'; a.textContent = 'Sign in again';
+    b.append(' ', btn, ' ', a);
+  }
+}
+function clearBanner(){ const b = document.getElementById('banner'); if (b) b.remove(); }
+connect();
+
+function hostAction(action, payload){
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'host:action', action, payload: payload || {} }));
+}
+
+/* ---------- render ---------- */
+function joinBaseUrl(){ return (brandPublicBaseUrl || (state && state.envPublicBaseUrl) || location.origin).replace(/\/+$/, ''); }
+function pts(n){ return n + (n === 1 ? ' pt' : ' pts'); }
+
+function render(){
+  const s = state;
+  if (!s) return;
+  const key = keyOf(s);
+  if (s.phase === 'question' && key !== questionKey) questionShownAt = Date.now();
+  if (s.phase !== 'question' && s.phase !== 'reveal') questionShownAt = null;
+  if (key !== questionKey) { questionKey = key; if (s.phase !== 'question' || askitFor !== key) hideAskIt(); }
+
+  const phaseLabel = { lobby: 'Lobby', question: 'Question open', reveal: 'Revealed', end: 'Game over' }[s.phase] || s.phase;
+  document.getElementById('phasePill').textContent = phaseLabel;
+  document.title = `${phaseLabel} — ${brandTitle} (Presenter)`;
+  const qLabel = s.inBonus ? `Tiebreaker ${s.bonusIndex + 1}` : `Question ${s.questionIndex + 1} of ${s.totalQuestions}`;
+  const inPlay = s.phase === 'question' || s.phase === 'reveal';
+  document.getElementById('qPill').hidden = !inPlay;
+  document.getElementById('qPillText').textContent = qLabel;
+  document.getElementById('elapsedPill').hidden = !inPlay;
+  document.getElementById('joinCodePill').textContent = s.joinCode || '----';
+  document.getElementById('alivePill').textContent = s.aliveCount;
+  document.getElementById('playersPill').textContent = s.playerCount;
+  document.getElementById('answeredPill').hidden = s.phase !== 'question';
+  document.getElementById('answeredText').textContent = `${s.answeredCount} / ${s.aliveCount}`;
+
+  document.getElementById('lobbyView').hidden = s.phase !== 'lobby';
+  document.getElementById('questionView').hidden = !inPlay;
+  document.getElementById('endView').hidden = s.phase !== 'end';
+  document.getElementById('nowMeta').textContent = s.phase === 'lobby' ? 'Lobby' : s.phase === 'end' ? 'Results' : (s.phase === 'reveal' ? 'Answer revealed' : `${s.answeredCount} of ${s.aliveCount} answered`);
+
+  if (s.phase === 'lobby') renderLobby(s);
+  if (inPlay) renderQuestion(s);
+  if (s.phase === 'end') renderEnd(s);
+
+  const notesEl = document.getElementById('notes');
+  const notes = s.currentQuestion && inPlay ? s.currentQuestion.notes : (s.phase === 'lobby' && s.nextUp && !s.nextUp.end ? s.nextUp.notes : '');
+  if (notes) { notesEl.textContent = notes; notesEl.classList.remove('empty'); }
+  else {
+    notesEl.classList.add('empty');
+    notesEl.textContent = s.phase === 'end' ? 'The game is over.' : inPlay ? 'No notes for this question. Add them in Admin → Questions → Presenter notes.' : (s.nextUp && !s.nextUp.end ? 'No notes on question 1 yet. Add them in Admin → Questions → Presenter notes.' : 'No questions loaded yet.');
+  }
+
+  renderControls(s);
+  renderNext(s);
+  renderWaiting(s);
+  renderLive(s);
+  renderSurvivors(s);
+}
+
+function renderLobby(s){
+  document.getElementById('joinCodeBig').textContent = s.joinCode || '----';
+  document.getElementById('joinUrl').textContent = joinBaseUrl().replace(/^https?:\/\//, '');
+  document.getElementById('lobbyCount').textContent = s.playerCount;
+  const chips = document.getElementById('lobbyChips');
+  chips.innerHTML = '';
+  [...s.players].reverse().forEach(p => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = p.name; chips.appendChild(c); });
+}
+
+function renderQuestion(s){
+  const q = s.currentQuestion;
+  if (!q) return;
+  document.getElementById('qLabel').textContent = q.label;
+  document.getElementById('qText').innerHTML = q.q;
+  const img = document.getElementById('qImage');
+  if (q.image) { img.src = q.image; img.alt = q.imageAlt || 'Question image'; img.hidden = false; }
+  else { img.removeAttribute('src'); img.hidden = true; }
+  const opts = document.getElementById('opts');
+  opts.innerHTML = '';
+  const tally = s.phase === 'reveal' ? s.audienceTally : null;
+  const live = s.phase === 'question' ? s.liveAnswerTally : null;
+  q.options.forEach((o, i) => {
+    const d = document.createElement('div');
+    d.className = 'opt' + (i === q.correct ? ' correct' : '') + (s.eliminatedOptions.includes(i) ? ' eliminated' : '');
+    let extra = '';
+    if (i === q.correct) extra = '<span class="tick" aria-label="correct answer">✓</span>';
+    if (tally && tally.aliveTotal) extra = `<span class="pct">${Math.round(tally.aliveBars[i] / tally.aliveTotal * 100)}%${i === q.correct ? ' ✓' : ''}</span>`;
+    else if (live) extra = `<span class="live">${live.counts[i]}${i === q.correct ? ' ✓' : ''}</span>`;
+    d.innerHTML = `<span class="letter">${'ABCD'[i]}</span><span style="min-width:0">${o}</span>${extra}`;
+    opts.appendChild(d);
+  });
+  const lesson = document.getElementById('lesson');
+  if (q.lesson) {
+    lesson.hidden = false;
+    document.getElementById('lessonText').innerHTML = q.lesson;
+    document.getElementById('lessonTag').textContent = s.phase === 'reveal' ? 'Why · on the board and phones now' : 'Why · shown at the reveal';
+  } else lesson.hidden = true;
+}
+
+function renderEnd(s){
+  const p = document.getElementById('podium');
+  p.innerHTML = '';
+  const top = [...s.players].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).slice(0, 5);
+  if (!top.length) { p.innerHTML = '<div class="muted">No players.</div>'; return; }
+  top.forEach((pl, i) => { const r = document.createElement('div'); r.className = 'row'; r.innerHTML = `<span>${i + 1}. ${esc(pl.name)}${pl.alive ? '' : ' <span class="muted">(out)</span>'}</span><span>${pts(pl.score)}</span>`; p.appendChild(r); });
+}
+
+function button(label, opts){
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'btn' + (opts.primary ? ' primary' : '') + (opts.danger ? ' danger' : '') + (opts.ghost ? ' ghost' : '');
+  b.textContent = label;
+  if (opts.disabled) b.disabled = true;
+  if (opts.title) b.title = opts.title;
+  if (opts.id) b.id = opts.id;
+  b.addEventListener('click', opts.action);
+  return b;
+}
+let resetArmed = null;
+function renderControls(s){
+  const c = document.getElementById('controls');
+  c.innerHTML = '';
+  const status = document.createElement('div'); status.className = 'status';
+  if (s.phase === 'lobby') {
+    const empty = s.totalQuestions === 0;
+    c.appendChild(button(empty ? 'No questions loaded' : 'Start Game →', { primary: !empty, disabled: empty, id: 'startBtn',
+      title: empty ? 'Import a question file or load a sample pack in Admin → Questions first.' : '',
+      action: () => { if (s.playerCount === 0 && !confirm('No players have joined. Start anyway?')) return; hostAction('start-game'); } }));
+    status.textContent = `${s.playerCount} joined · ${s.totalQuestions} question${s.totalQuestions === 1 ? '' : 's'}${s.totalBonus ? ` + ${s.totalBonus} tiebreaker${s.totalBonus === 1 ? '' : 's'}` : ''}`;
+  } else if (s.phase === 'question') {
+    c.appendChild(button('Close & Reveal', { primary: true, id: 'closeBtn', action: () => hostAction('close-question') }));
+    const used = s.lifelinesUsed || {};
+    const voting = !!s.lifelineActive;
+    const row = document.createElement('div'); row.className = 'row';
+    const names = { '5050': '50/50 · drop two wrong', askit: 'Ask IT · show hint', skip: 'Skip · reveal, no scoring' };
+    ['5050', 'askit', 'skip'].forEach(t => row.appendChild(button(used[t] ? names[t].split(' · ')[0] + ' · used' : names[t], { disabled: !!used[t] || voting, action: () => hostAction('apply-lifeline', { type: t }) })));
+    const allUsed = ['5050', 'askit', 'skip'].every(t => used[t]);
+    row.appendChild(button(voting ? 'Vote open…' : 'Player vote', { ghost: true, disabled: allUsed || voting, action: () => hostAction('open-lifeline-vote') }));
+    c.appendChild(row);
+    if (voting) {
+      const v = document.createElement('div'); v.className = 'vote';
+      const votes = s.lifelineActive.voteCounts || {};
+      const open = ['5050', 'askit', 'skip'].filter(t => !used[t]);
+      const most = Math.max(0, ...open.map(t => votes[t] || 0));
+      open.forEach(t => { const bar = document.createElement('div'); bar.className = 'bar'; bar.innerHTML = `<span>${esc(names[t].split(' · ')[0])}${most > 0 && (votes[t] || 0) === most ? ' · leading' : ''}</span><b>${votes[t] || 0}</b>`; v.appendChild(bar); });
+      const leader = open.reduce((best, t) => ((votes[t] || 0) > (votes[best] || 0) ? t : best), open[0]);
+      const r2 = document.createElement('div'); r2.className = 'row';
+      r2.appendChild(button('Apply leader', { primary: true, disabled: !leader, action: () => hostAction('apply-lifeline', { type: leader }) }));
+      r2.appendChild(button('Cancel vote', { ghost: true, action: () => hostAction('cancel-lifeline-vote') }));
+      v.appendChild(r2);
+      c.appendChild(v);
+    }
+    if (s.questionIndex === 0 && !s.inBonus && s.aliveCount === s.playerCount && !voting) {
+      c.appendChild(button('← Back to lobby (started too early)', { ghost: true, action: () => { if (confirm('Return everyone to the lobby? Players stay in; scores reset.')) hostAction('return-to-lobby'); } }));
+    }
+    status.textContent = `${s.answeredCount} of ${s.aliveCount} answered`;
+  } else if (s.phase === 'reveal') {
+    const n = s.nextUp;
+    c.appendChild(button(n && n.end ? 'Finish → results' : `Next → ${n ? n.label : ''}`, { primary: true, id: 'nextBtn', action: () => hostAction('next-question') }));
+    const t = s.audienceTally;
+    const out = t ? Math.max(0, t.wasAliveCount - s.aliveCount) : 0;
+    status.textContent = t ? (out ? `${out} knocked out · ${s.aliveCount} still in` : `Nobody knocked out · ${s.aliveCount} still in`) : 'Question skipped';
+  } else if (s.phase === 'end') {
+    const a = document.createElement('a'); a.className = 'btn'; a.href = '/results.xlsx'; a.textContent = '📊 Download results (admin)'; a.style.textDecoration = 'none'; a.style.display = 'block';
+    c.appendChild(a);
+    c.appendChild(button(resetArmed ? 'Click again to reset' : 'Reset (New Game)', { danger: true, id: 'resetBtn', action: () => {
+      if (resetArmed) { clearTimeout(resetArmed); resetArmed = null; hostAction('reset-game'); return; }
+      resetArmed = setTimeout(() => { resetArmed = null; renderControls(state); }, 5000);
+      renderControls(state);
+    } }));
+    status.textContent = resetArmed ? 'Clears every player and score and opens a new lobby with a new join code.' : '';
+  }
+  c.appendChild(status);
+}
+
+function renderNext(s){
+  const body = document.getElementById('nextBody');
+  const n = s.nextUp;
+  if (s.phase === 'end' || !n) { body.className = 'muted'; body.textContent = s.phase === 'end' ? 'Nothing — the game is over.' : 'No questions loaded.'; return; }
+  body.className = '';
+  if (n.end) { body.innerHTML = `<div class="label">${esc(n.label)}</div><div class="q muted">Next shows the results${s.totalBonus && s.phase !== 'lobby' ? ', or the tiebreaker if more than one player is still in' : ''}.</div>`; return; }
+  body.innerHTML = `<div class="label">${esc(n.label)}${n.conditional ? ` <span class="muted" style="letter-spacing:0;text-transform:none">· ${esc(n.conditional)}</span>` : ''}</div>`
+    + `<div class="q">${n.q}</div>`
+    + `<div class="ans">Answer: ${'ABCD'[n.correct]} — ${n.options[n.correct]}</div>`
+    + (n.notes ? `<div class="n">${esc(n.notes)}</div>` : '');
+}
+
+function renderWaiting(s){
+  const card = document.getElementById('waitingCard');
+  if (s.phase !== 'question') { card.hidden = true; return; }
+  card.hidden = false;
+  const list = s.stillToAnswer || [];
+  document.getElementById('waitingMeta').textContent = list.length ? `${list.length} left` : 'Everyone has answered';
+  const box = document.getElementById('waitingNames');
+  box.innerHTML = '';
+  list.forEach(p => { const c = document.createElement('span'); c.className = 'chip' + (p.online ? '' : ' off'); c.textContent = p.name + (p.online ? '' : ' (offline)'); box.appendChild(c); });
+}
+
+function renderLive(s){
+  const card = document.getElementById('liveCard');
+  const t = s.liveAnswerTally;
+  if (s.phase !== 'question' || !t) { card.hidden = true; return; }
+  card.hidden = false;
+  document.getElementById('liveMeta').textContent = `${t.answeredAlive} of ${t.aliveTotal} in · ${t.playersWhoChanged} changed their mind`;
+  const bars = document.getElementById('liveBars');
+  bars.innerHTML = '';
+  const max = Math.max(1, ...t.counts);
+  t.counts.forEach((n, i) => {
+    const r = document.createElement('div');
+    r.className = 'bar-row' + (s.currentQuestion && i === s.currentQuestion.correct ? ' correct' : '');
+    r.innerHTML = `<span>${'ABCD'[i]}</span><div class="track"><div class="fill" style="width:${Math.round(n / max * 100)}%"></div></div><span>${n}</span>`;
+    bars.appendChild(r);
+  });
+}
+
+function renderSurvivors(s){
+  const card = document.getElementById('survivorsCard');
+  if (s.phase === 'lobby' || s.aliveCount === 0 || s.aliveCount > 8) { card.hidden = true; return; }
+  card.hidden = false;
+  const box = document.getElementById('survivorNames');
+  box.innerHTML = '';
+  s.players.filter(p => p.alive).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name)).forEach(p => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = `${p.name} · ${pts(p.score)}`; box.appendChild(c); });
+}
+
+function showAskIt(hint, letter){
+  document.getElementById('askitHint').textContent = text(hint);
+  document.getElementById('askitVerdict').textContent = `IT recommends answer ${letter}`;
+  document.getElementById('askitCard').hidden = false;
+  askitFor = keyOf(state);
+}
+function hideAskIt(){ document.getElementById('askitCard').hidden = true; }
+document.getElementById('askitClose').addEventListener('click', hideAskIt);
+
+setInterval(() => {
+  if (!questionShownAt) return;
+  const sec = Math.floor((Date.now() - questionShownAt) / 1000);
+  document.getElementById('elapsed').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}, 500);
+</script>
+</body>
+</html>

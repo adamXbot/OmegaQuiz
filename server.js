@@ -728,8 +728,18 @@ function sanitizeQuestionList(arr) {
     lesson: sanitizeQuestionHtml(q.lesson),
     image: sanitizeQuestionImage(q.image),
     // A11Y: alt text for the image. Plain text only (no HTML allowed here).
-    imageAlt: typeof q.imageAlt === 'string' ? q.imageAlt.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>"&]/g, '').slice(0, 200) : ''
+    imageAlt: typeof q.imageAlt === 'string' ? q.imageAlt.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f<>"&]/g, '').slice(0, 200) : '',
+    // Presenter notes: what the facilitator wants to say around this
+    // question. Plain text, rendered with textContent on /present, and
+    // never sent to the board or the phones (see pushHostState /
+    // playerStateMessage / buildReview / lessons.json).
+    notes: sanitizePresenterNotes(q.notes)
   }));
+}
+const PRESENTER_NOTES_MAX_CHARS = 4000;
+function sanitizePresenterNotes(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').slice(0, PRESENTER_NOTES_MAX_CHARS);
 }
 
 function sanitizeAndValidateQuestionList(arr, sectionName) {
@@ -763,6 +773,9 @@ function sanitizeAndValidateQuestionList(arr, sectionName) {
     }
     if (q.imageAlt !== undefined && typeof q.imageAlt !== 'string') {
       throw new Error(`${label} imageAlt must be text`);
+    }
+    if (q.notes !== undefined && q.notes !== null && typeof q.notes !== 'string') {
+      throw new Error(`${label} notes must be text`);
     }
   });
   return sanitizeQuestionList(arr);
@@ -1093,7 +1106,10 @@ function stringifyCsv(rows) {
 // Images intentionally NOT included — they live in the per-question editor as
 // data URIs and would bloat the CSV. The CSV row format matches what Excel
 // shows when you open it.
-const CSV_HEADERS = ['section', 'question', 'optionA', 'optionB', 'optionC', 'optionD', 'correct', 'lesson'];
+// `notes` (presenter notes) is exported but optional on import, so a file
+// written before it existed still loads.
+const CSV_REQUIRED_HEADERS = ['section', 'question', 'optionA', 'optionB', 'optionC', 'optionD', 'correct', 'lesson'];
+const CSV_HEADERS = [...CSV_REQUIRED_HEADERS, 'notes'];
 
 function questionsToCsv(main, bonus) {
   const rows = [CSV_HEADERS];
@@ -1106,7 +1122,8 @@ function questionsToCsv(main, bonus) {
       (q.options && q.options[2]) || '',
       (q.options && q.options[3]) || '',
       'ABCD'[q.correct] || '',
-      q.lesson || ''
+      q.lesson || '',
+      q.notes || ''
     ]);
   };
   (main  || []).forEach(q => push('main',  q));
@@ -1120,11 +1137,11 @@ function questionsFromCsv(text) {
   if (rows.length === 0) throw new Error('CSV is empty');
   // First row must be the header.
   const header = rows[0].map(h => String(h || '').trim().toLowerCase());
-  const expect = CSV_HEADERS.map(h => h.toLowerCase());
+  const expect = CSV_REQUIRED_HEADERS.map(h => h.toLowerCase());
   for (const col of expect) {
     if (!header.includes(col)) throw new Error('Missing required CSV column: ' + col);
   }
-  const idx = Object.fromEntries(expect.map(col => [col, header.indexOf(col)]));
+  const idx = Object.fromEntries(CSV_HEADERS.map(h => h.toLowerCase()).map(col => [col, header.indexOf(col)]));
   const main = [];
   const bonus = [];
   for (let i = 1; i < rows.length; i++) {
@@ -1149,7 +1166,8 @@ function questionsFromCsv(text) {
       ],
       correct,
       lesson: String(r[idx.lesson] || '').trim(),
-      image: ''
+      image: '',
+      notes: idx.notes >= 0 ? String(r[idx.notes] || '').trim() : ''
     };
     if (!q.q) throw new Error(`Row ${i + 1}: question text is required`);
     if (q.options.some(o => !o)) throw new Error(`Row ${i + 1}: all four options are required`);
@@ -2208,7 +2226,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Cache the three HTML pages at boot so we can do a cheap string substitute
+// Cache the HTML pages at boot so we can do a cheap string substitute
 // per request rather than re-reading from disk. Each contains the literal
 // placeholder __CSP_NONCE__ on its inline <script> tags; we replace it with
 // the per-response nonce just before sending.
@@ -2216,7 +2234,7 @@ const HTML_CACHE = {};
 function loadHtml(name) {
   HTML_CACHE[name] = fs.readFileSync(path.join(__dirname, 'public', name), 'utf8');
 }
-['index.html', 'host.html', 'admin.html'].forEach(loadHtml);
+['index.html', 'host.html', 'admin.html', 'present.html'].forEach(loadHtml);
 function serveHtmlWithNonce(name, res) {
   const html = HTML_CACHE[name];
   if (!html) { res.status(500).send('html cache miss: ' + name); return; }
@@ -2267,7 +2285,7 @@ function topSurvivorsByScore(n = 5) {
 // admin laptop, or a phone flooding answers, queued updates until the server
 // ran out of memory (measured: ~8,700 answers a second from one phone took a
 // 256 MB server down in under 20 s).
-const SNAPSHOT_TYPES = new Set(['host:state', 'admin:state', 'player:state']);
+const SNAPSHOT_TYPES = new Set(['host:state', 'admin:state', 'player:state', 'present:state']);
 const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
 function sendSnapshot(ws, type, data) {
   if (ws.readyState !== 1) return;
@@ -2341,6 +2359,75 @@ function pushHostState() {
     // session), plus host-role sockets that never said hello — the latter is
     // the pre-existing behaviour, kept for older harnesses.
   }, c => c.screen === 'host' || c.role === 'host');
+}
+
+// The presenter view (/present): the facilitator's laptop while the board is
+// on the projector. It gets what the board gets plus what the board must
+// never show — the correct answer and lesson before the reveal, the
+// presenter notes, what comes next and who is still to answer.
+function presenterQuestionCard(q, label) {
+  if (!q) return null;
+  return { label, q: q.q, options: q.options, correct: q.correct, lesson: q.lesson || '', notes: q.notes || '', image: q.image || '', imageAlt: q.imageAlt || '' };
+}
+// What Next will bring up, as best we can tell before the reveal: the next
+// main question, the tiebreaker round (only if more than one player is
+// still in), the next tiebreaker, or the end of the game.
+function presenterNextUp() {
+  if (game.phase === 'end') return null;
+  if (game.phase === 'lobby') return questions.length ? presenterQuestionCard(questions[0], 'Question 1') : null;
+  if (!game.inBonus) {
+    const i = game.questionIndex + 1;
+    if (i < questions.length) return presenterQuestionCard(questions[i], `Question ${i + 1}`);
+    if (bonusQuestions.length && survivors().length > 1) {
+      return { ...presenterQuestionCard(bonusQuestions[0], 'Tiebreaker 1'), conditional: 'if more than one player is still in' };
+    }
+    return { label: 'End of game', end: true };
+  }
+  const i = game.bonusIndex + 1;
+  if (i < bonusQuestions.length && survivors().length > 1) return presenterQuestionCard(bonusQuestions[i], `Tiebreaker ${i + 1}`);
+  return { label: 'End of game', end: true };
+}
+function presenterStillToAnswer() {
+  if (game.phase !== 'question') return [];
+  return survivors()
+    .filter(p => !game.currentAnswers.has(p.id))
+    .map(p => ({ name: p.name, online: !!(p.ws && p.ws.readyState === 1) }))
+    .sort((a, b) => (a.online === b.online ? a.name.localeCompare(b.name) : a.online ? -1 : 1));
+}
+function pushPresentState() {
+  // Most rooms never open /present: skip building the snapshot for nobody.
+  let any = false;
+  wss.clients.forEach(c => { if (c.screen === 'present') any = true; });
+  if (!any) return;
+  const q = currentQuestion();
+  const label = game.inBonus ? `Tiebreaker ${game.bonusIndex + 1}` : `Question ${game.questionIndex + 1}`;
+  broadcast({
+    type: 'present:state',
+    state: {
+      phase: game.phase,
+      joinCode: game.joinCode,
+      envPublicBaseUrl: ENV_PUBLIC_BASE_URL,
+      questionIndex: game.questionIndex,
+      bonusIndex: game.bonusIndex,
+      inBonus: game.inBonus,
+      totalQuestions: questions.length,
+      totalBonus: bonusQuestions.length,
+      playerCount: game.players.size,
+      aliveCount: survivors().length,
+      answeredCount: answeredAliveCount(),
+      topSurvivors: topSurvivorsByScore(5),
+      players: publicPlayers(),
+      lifelinesUsed: { ...game.lifelinesUsed },
+      lifelineActive: game.lifelineActive ? { type: game.lifelineActive.type, voteCounts: tallyLifelineVotes() } : null,
+      eliminatedOptions: game.eliminatedOptions,
+      revealedCorrect: game.revealedCorrect,
+      audienceTally: game.audienceTally,
+      liveAnswerTally: buildLiveAnswerTally(),
+      currentQuestion: presenterQuestionCard(q, label),
+      nextUp: presenterNextUp(),
+      stillToAnswer: presenterStillToAnswer()
+    }
+  }, c => c.screen === 'present');
 }
 
 // The post-game review (every question with its answer). Only sent once the
@@ -2483,23 +2570,23 @@ function pushAdminState() {
       audienceTally: game.audienceTally,
       liveAnswerTally: buildLiveAnswerTally(),
       currentQuestionRef: q ? {
-        q: q.q, options: q.options, correct: q.correct, lesson: q.lesson, image: q.image || ''
+        q: q.q, options: q.options, correct: q.correct, lesson: q.lesson, image: q.image || '', notes: q.notes || ''
       } : null,
       players: playersDetailed
     }
   }, c => c.role === 'admin');
 }
 
-function pushAll() { pushHostState(); pushPlayerStates(); pushAdminState(); }
+function pushAll() { pushHostState(); pushPlayerStates(); pushAdminState(); pushPresentState(); }
 // One player's own view changed (their answer, vote, join or return). The
 // board and admin need the new counts and that phone needs its own state; no
 // other phone's screen depends on it. Answering used to re-send every phone
 // its whole state, question image included: 80 phones meant 80 × 80 messages
 // a question, and a 256 MB machine ran out of memory buffering them for
 // phones on weak Wi-Fi once a 150 KB screenshot was in the question.
-function pushPlayerChange(p) { pushHostState(); pushPlayerState(p); pushAdminState(); }
-// Someone left: only the board and admin show it.
-function pushRosterChange() { pushHostState(); pushAdminState(); }
+function pushPlayerChange(p) { pushHostState(); pushPlayerState(p); pushAdminState(); pushPresentState(); }
+// Someone left: only the board, admin and presenter show it.
+function pushRosterChange() { pushHostState(); pushAdminState(); pushPresentState(); }
 
 function currentQuestion() {
   if (game.inBonus) return bonusQuestions[game.bonusIndex] || null;
@@ -3194,6 +3281,17 @@ function handleWsMessage(ws, raw) {
     return;
   }
 
+  if (msg.type === 'present:hello') {
+    if (ws.role !== 'host' && ws.role !== 'admin') {
+      ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as host' }));
+      ws.close();
+      return;
+    }
+    ws.screen = 'present';
+    pushPresentState();
+    return;
+  }
+
   if (msg.type === 'admin:hello') {
     if (ws.role !== 'admin') {
       ws.send(JSON.stringify({ type: 'error', error: 'Not signed in as admin' }));
@@ -3632,6 +3730,10 @@ app.get('/host',  requireRole('host', 'admin'), (req, res) => {
 app.get('/admin', requireRole('admin'), (req, res) => {
   serveHtmlWithNonce('admin.html', res);
 });
+// Presenter view: the facilitator's screen while /host is on the projector.
+app.get('/present', requireRole('host', 'admin'), (req, res) => {
+  serveHtmlWithNonce('present.html', res);
+});
 
 // Health check — PaaS providers (Fly, Render, Railway) poll this to decide
 // whether the instance is ready for traffic. Returns 200 when the server is
@@ -3955,14 +4057,16 @@ app.get('/questions-template.csv', requireRole('admin'), (req, res) => {
       'Sample question — replace this row with your own.',
       'First option', 'Second option', 'Third option', 'Fourth option',
       'B',
-      'Lesson / explanation shown to players after the reveal.'
+      'Lesson / explanation shown to players after the reveal.',
+      'Presenter notes — only the presenter view shows these.'
     ],
     [
       'bonus',
       'Sample tiebreaker — used only if multiple players survive all 10.',
       'Option A', 'Option B', 'Option C', 'Option D',
       'A',
-      'Tiebreaker lesson.'
+      'Tiebreaker lesson.',
+      ''
     ]
   ]);
   res.set('Content-Type', 'text/csv; charset=utf-8');
@@ -3979,7 +4083,7 @@ app.get('/lessons.json', requireRole('host', 'admin'), (req, res) => {
   });
 });
 
-// All three HTML pages are now served through the nonce helper above. The
+// All HTML pages are served through the nonce helper above. The
 // static middleware would otherwise leak the un-templated `__CSP_NONCE__`
 // placeholder via direct paths, so we block it explicitly. There are no
 // other static assets in public/ today; this stays a 404 net.
@@ -4313,7 +4417,7 @@ module.exports = {
   sanitizeAndValidateQuestionList, normalizeQuestionBank,
   csvField, tokensEqual,
   parseCsv, stringifyCsv, questionsToCsv, questionsFromCsv,
-  CSV_HEADERS,
+  CSV_HEADERS, CSV_REQUIRED_HEADERS, sanitizePresenterNotes, PRESENTER_NOTES_MAX_CHARS,
   loadQuestionsFromDisk, saveQuestionsToDisk,
   QUESTIONS_PATH,
   get questions() { return questions; },

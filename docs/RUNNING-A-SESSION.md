@@ -20,6 +20,26 @@ An admin session opens `/host` as well, so one device signed in as admin can dri
 (useful when the projector is mirrored from the facilitator laptop). A separate host magic link is
 only needed for a second machine.
 
+## Presenter view
+
+`/present` (host or admin sign-in; Admin → Overview → **Open Presenter View**) is the facilitator's
+screen while `/host` is on the projector as an extended display. It shows:
+
+- **On the board now** — the current question and options with the correct answer ticked, the
+  lesson before the reveal (labelled *shown at the reveal*), the live answer split, and the audience
+  percentages once revealed. In the lobby: the join code and address, who has joined.
+- **Presenter notes** — the notes for the current question (Admin → Questions → *Presenter notes*, or
+  the `notes` column of the CSV). Notes only ever reach this page.
+- **Controls** — Start, Close & Reveal, Next (named after what comes next), the lifelines and the
+  player vote, Reset at the end (click twice).
+- **Next up** — the next question with its answer and notes, the tiebreaker (marked *if more than one
+  player is still in*), or the end of the game.
+- **Still to answer** — who is still in and has not answered, offline players marked.
+- The **Ask IT** hint appears here as well as on the board, so it can be read aloud.
+
+The top bar shows the phase, the question number, how long the question has been open, the join
+code, players still in, and the connection state.
+
 ## Presentation style and sounds
 
 Admin → **Branding → Presentation** picks how much theatre the game puts on:
