@@ -13,8 +13,13 @@ There are two ways in to `/admin` and `/host`:
   form at `/auth/login`. Long-lived, and only for bootstrapping a new magic link once every link has
   expired. Treat them like password-manager entries, not daily passwords.
 
-Sessions are httpOnly cookies signed with `COOKIE_SECRET`. Set that to a stable random value in
-production, otherwise every restart invalidates everyone's session.
+Sessions are httpOnly cookies signed with `COOKIE_SECRET`. A sign-in lasts `SESSION_TTL_HOURS`
+(default 168, a week) and **slides**: every request or WebSocket message pushes the expiry out
+again, so a facilitator who uses the admin page every few days is never signed out. Sessions are
+kept in `DATA_DIR/auth-sessions.json` (mode 0600) and restored at boot, so a deploy or restart does
+not sign anyone out either — as long as `COOKIE_SECRET` is stable (set it, or let
+`AUTO_PROVISION_SECRETS` keep it in `secrets.json`); a fresh random secret invalidates every cookie.
+Admin → Settings → **Sign-in & keys** shows when the current sign-in would end and has **Sign out**.
 
 An admin session opens `/host` as well, so one device signed in as admin can drive both screens
 (useful when the projector is mirrored from the facilitator laptop). A separate host magic link is

@@ -178,7 +178,7 @@ Two limits, both deliberate:
 - **Tokens set as environment variables win over the file.** If you manage `HOST_TOKEN` / `ADMIN_TOKEN` with `fly secrets set` (or `-e` in Docker), `remint` refuses and prints a ready-to-paste replacement instead — apply it with `fly secrets set ADMIN_TOKEN=…`, which restarts the app. Rotating an env-managed token in memory would silently undo itself on the next boot, so the tool won't.
 - **Rotating does not sign anyone out.** Sessions live in memory; if you need every device out (say the admin laptop was stolen), rotate the token *and* restart (**Settings → Developer options → Restart server**, or `fly machine restart`).
 
-Magic links printed by `links` or the boot banner are single-use and expire after 10 minutes, so their appearance in `fly logs` or your terminal history is harmless once clicked. Anyone with shell access to the machine could mint them anyway — the same people who can read `secrets.json`.
+Sign-ins themselves live in `DATA_DIR/auth-sessions.json` (mode 0600, session ids only, no tokens) so a redeploy keeps hosts and admins signed in; delete the file to sign everyone out at once. Magic links printed by `links` or the boot banner are single-use and expire after 10 minutes, so their appearance in `fly logs` or your terminal history is harmless once clicked. Anyone with shell access to the machine could mint them anyway — the same people who can read `secrets.json`.
 
 ---
 

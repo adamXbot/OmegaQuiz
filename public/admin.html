@@ -822,6 +822,10 @@ body{
            only to this admin socket, and never broadcast. -->
       <div class="panel" style="margin-top:18px">
         <h2>Sign-in &amp; keys</h2>
+        <div class="session-info" id="sessionInfo" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;border:1px solid var(--gray-line);border-radius:8px;background:rgba(0,0,0,.2)">
+          <span id="sessionInfoText" class="muted" style="font-size:13px;flex:1;min-width:240px">Checking your sign-in…</span>
+          <form method="POST" action="/auth/logout" style="margin:0"><button type="submit" class="btn small ghost" id="signOutBtn">Sign out</button></form>
+        </div>
         <p class="muted" style="font-size:13px;line-height:1.55">
           <strong>Magic links</strong> sign a device in with one click — single-use, valid for
           10 minutes. <strong>Recovery tokens</strong> are the long-lived fallback for the
@@ -1123,6 +1127,7 @@ function connect() {
       eventLog = msg.eventLog || [];
       renderLog();
       if (msg.keys) renderKeys(msg.keys);
+      renderSessionInfo(msg.session);
       adminAction('packs:list');
       adminAction('sessions:list');
     } else if (msg.type === 'auth:keys-status') {
@@ -2889,6 +2894,15 @@ function describeKeySource(k) {
     return 'Stored on the server' + when + '. Rotating takes effect immediately.';
   }
   return 'Dev mode: regenerated on every restart and printed on the boot banner.';
+}
+// The sign-in slides: every request extends it, so the date shown is the
+// earliest it could end, if this page were never used again.
+function renderSessionInfo(sess) {
+  const el = document.getElementById('sessionInfoText');
+  if (!sess || !sess.expiresAt) { el.textContent = 'Signed in as admin.'; return; }
+  const days = Math.round((sess.ttlMs || 0) / 36e5 / 24 * 10) / 10;
+  const length = days >= 1 ? `${days} day${days === 1 ? '' : 's'}` : `${Math.round((sess.ttlMs || 0) / 36e5)} hours`;
+  el.innerHTML = `Signed in as <strong style="color:var(--white)">${escapeHtml(sess.role || 'admin')}</strong>. This sign-in lasts ${escapeHtml(length)} and extends every time you use it; left untouched it ends ${escapeHtml(packDate(new Date(sess.expiresAt).toISOString()))}. It survives server restarts.`;
 }
 function renderKeys(keys) {
   for (const role of ['host', 'admin']) {
