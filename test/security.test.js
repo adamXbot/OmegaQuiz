@@ -2856,7 +2856,7 @@ async function a11yMarkupTests() {
   {
     const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
     const host = await loginAs('host', process.env.HOST_TOKEN);
-    const pages = [['/', {}], ['/admin', { Cookie: admin.cookie }], ['/host', { Cookie: host.cookie }]];
+    const pages = [['/', {}], ['/admin', { Cookie: admin.cookie }], ['/host', { Cookie: host.cookie }], ['/present', { Cookie: host.cookie }]];
     for (const [p, headers] of pages) {
       const r = await request('GET', p, { headers });
       const hits = r.body.match(/<[a-z][^>]*\son[a-z]+\s*=/gi) || [];
@@ -4256,6 +4256,197 @@ async function presentationPolishTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Presenter view (/present) and presenter notes
+// ----------------------------------------------------------------------------
+async function presenterViewTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { sanitizePresenterNotes, PRESENTER_NOTES_MAX_CHARS, CSV_REQUIRED_HEADERS, sanitizeAndValidateQuestionList } = srv;
+
+  section('Presenter: notes are plain text, capped, and optional in CSV');
+  {
+    ok(sanitizePresenterNotes('a\r\nb\x00c') === 'a\nbc', 'notes: CRLF normalised, control characters dropped');
+    ok(sanitizePresenterNotes('<b>kept</b> & "quoted"') === '<b>kept</b> & "quoted"', 'notes: stored as plain text, not HTML-escaped (rendered with textContent)');
+    ok(sanitizePresenterNotes('x'.repeat(PRESENTER_NOTES_MAX_CHARS + 50)).length === PRESENTER_NOTES_MAX_CHARS, `notes: capped at ${PRESENTER_NOTES_MAX_CHARS} characters`);
+    ok(sanitizePresenterNotes(undefined) === '' && sanitizePresenterNotes(5) === '', 'notes: missing or non-string becomes empty');
+    let threw = false;
+    try { sanitizeAndValidateQuestionList([{ q: 'Q', options: ['a','b','c','d'], correct: 0, lesson: '', notes: 7 }], 'main'); } catch { threw = true; }
+    ok(threw, 'validation rejects non-text notes');
+    const csv = questionsToCsv([{ q: 'Q1', options: ['a','b','c','d'], correct: 1, lesson: 'L1', notes: 'Say hello, then ask the room.' }], []);
+    ok(csv.split('\n')[0].includes('"notes"'), 'questionsToCsv: notes column exported');
+    ok(csv.includes('"Say hello, then ask the room."'), 'questionsToCsv: notes value exported');
+    const back = questionsFromCsv(csv);
+    ok(back.main[0].notes === 'Say hello, then ask the room.', 'questionsFromCsv: notes round-trip');
+    const legacy = questionsFromCsv(CSV_REQUIRED_HEADERS.join(',') + '\nmain,Q,a,b,c,d,A,L\n');
+    ok(legacy.main.length === 1 && legacy.main[0].notes === '', 'questionsFromCsv: a file without the notes column still imports');
+    ok(JSON.stringify(CSV_REQUIRED_HEADERS) === JSON.stringify(['section','question','optionA','optionB','optionC','optionD','correct','lesson']), 'required CSV columns are unchanged');
+  }
+
+  section('Presenter: /present is for host and admin sessions');
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const host = await loginAs('host', process.env.HOST_TOKEN);
+  {
+    const anon = await request('GET', '/present');
+    ok(anon.status === 302 && /\/auth\/login/.test(anon.headers.location || ''), '/present anonymous → redirect to login');
+    const h = await request('GET', '/present', { headers: { Cookie: host.cookie } });
+    ok(h.status === 200 && h.body.includes('present:hello'), '/present as host → 200 with the presenter page');
+    ok(!h.body.includes('__CSP_NONCE__') && /<script nonce="[A-Za-z0-9+/=]{20,}">/.test(h.body), '/present: script carries the per-response nonce');
+    const a = await request('GET', '/present', { headers: { Cookie: admin.cookie } });
+    ok(a.status === 200, '/present as admin → 200');
+    ok(h.body.includes('id="notes"') && h.body.includes('id="nextBody"') && h.body.includes('id="waitingNames"'), '/present: notes, next-up and still-to-answer panels present');
+    const adminPage = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(adminPage.includes('href="/present"') && adminPage.includes('data-field="notes"'), 'admin: Open Presenter View link and a Presenter notes field per question');
+  }
+
+  section('Presenter: present:hello needs a signed-in host or admin');
+  {
+    const p = await openWs();
+    p.send(JSON.stringify({ type: 'present:hello' }));
+    const err = await waitMessage(p, m => m.type === 'error', 2000).catch(() => null);
+    ok(err && /Not signed in/.test(err.error), 'present:hello from a player socket is refused');
+    await pause(50);
+    ok(p.readyState === WebSocket.CLOSED || p.readyState === WebSocket.CLOSING, 'the refused socket is closed');
+  }
+
+  // Admin socket to drive the game; presenter socket (host role) to observe.
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const hostAction = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action: 'game:host-action', payload: { hostAction: action, hostPayload: payload || {} } }));
+  async function until(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); }
+    return null;
+  }
+  const pws = await openWs({ cookie: host.cookie });
+  let presentState = null, presentCount = 0;
+  pws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'present:state') { presentState = m.state; presentCount++; } } catch {} });
+  pws.send(JSON.stringify({ type: 'present:hello' }));
+  async function untilPresent(pred, timeout = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeout) { if (presentState && pred(presentState)) return presentState; await pause(20); }
+    return null;
+  }
+  const hws = await openWs({ cookie: host.cookie });
+  let hostState = null;
+  hws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'host:state') hostState = m.state; } catch {} });
+  hws.send(JSON.stringify({ type: 'host:hello' }));
+  const sockets = [];
+
+  section('Presenter: notes and the answer reach /present only');
+  {
+    ok(await untilPresent(s => s.phase != null), 'present:hello answers with present:state');
+    const before = adminState && adminState.joinCode;
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby' && s.joinCode !== before);
+    const notes1 = 'Q1 story: the invoice that cost $40k. Ask who checks the From address.';
+    aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:update', payload: {
+      main: [
+        { q: 'Which sender is fake?', options: ['paypal.com', 'paypa1.com', 'Both', 'Neither'], correct: 1, lesson: 'Look-alike domains swap letters for numbers.', notes: notes1 },
+        { q: 'Second question?', options: ['a', 'b', 'c', 'd'], correct: 2, lesson: 'Second lesson.', notes: 'Q2 notes.' }
+      ],
+      bonus: [{ q: 'Tiebreak?', options: ['1', '2', '3', '4'], correct: 0, lesson: 'Bonus lesson.', notes: 'Bonus notes.' }]
+    } }));
+    const saved = await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    ok(saved.questions[0].notes === notes1 && saved.bonusQuestions[0].notes === 'Bonus notes.', 'admin:questions carries the saved notes');
+    const onDisk = JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf8'));
+    ok(onDisk.main[0].notes === notes1, 'notes are persisted in questions.json');
+    const lobby = await untilPresent(s => s.phase === 'lobby' && s.totalQuestions === 2);
+    ok(lobby && lobby.nextUp && lobby.nextUp.label === 'Question 1' && lobby.nextUp.notes === notes1 && lobby.nextUp.correct === 1, 'lobby: next up is question 1 with its notes and answer');
+
+    const joinCode = adminState.joinCode;
+    async function join(name) {
+      const w = await openWs();
+      w.send(JSON.stringify({ type: 'player:join', name, email: name.toLowerCase() + '@test.example', joinCode }));
+      await waitMessage(w, m => m.type === 'player:joined');
+      sockets.push(w);
+      return w;
+    }
+    const p1 = await join('Ada');
+    const p2 = await join('Bob');
+    await until(s => s.playerCount === 2);
+    hostAction('start-game');
+    const q1 = await untilPresent(s => s.phase === 'question' && s.questionIndex === 0 && s.playerCount === 2);
+    ok(q1 && q1.currentQuestion && q1.currentQuestion.correct === 1 && q1.currentQuestion.lesson.startsWith('Look-alike'), 'question phase: the presenter sees the correct answer and the lesson before the reveal');
+    ok(q1.currentQuestion.notes === notes1, 'question phase: the presenter sees the notes');
+    ok(q1.currentQuestion.label === 'Question 1', 'question phase: card carries its label');
+    ok(q1.nextUp && q1.nextUp.label === 'Question 2' && q1.nextUp.notes === 'Q2 notes.', 'question phase: next up is question 2 with its notes');
+    ok(q1.stillToAnswer.length === 2 && q1.stillToAnswer.every(p => p.online), 'question phase: both players still to answer, both online');
+    ok(q1.liveAnswerTally && q1.liveAnswerTally.answeredAlive === 0, 'question phase: live answer split is included');
+
+    await until(s => s.phase === 'question');
+    ok(hostState && hostState.phase === 'question' && hostState.currentQuestion && hostState.currentQuestion.correct === null && hostState.currentQuestion.lesson === null && !('notes' in hostState.currentQuestion), 'board: still no answer, lesson or notes before the reveal');
+    let phone = null;
+    const grab = raw => { try { const m = JSON.parse(raw); if (m.type === 'player:state') phone = m.state; } catch {} };
+    p1.on('message', grab);
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    const afterAnswer = await untilPresent(s => s.stillToAnswer.length === 1);
+    ok(afterAnswer && afterAnswer.stillToAnswer[0].name === 'Bob', 'after Ada answers, only Bob is still to answer');
+    await pause(50);
+    ok(phone && phone.question && !('notes' in phone.question) && phone.question.revealedCorrect === null, 'phone: no notes and no answer in player:state');
+    const lessons = await request('GET', '/lessons.json', { headers: { Cookie: host.cookie } });
+    ok(lessons.status === 200 && !lessons.body.includes('notes') && !lessons.body.includes('Q1 story'), '/lessons.json does not carry notes');
+    const csvOut = await request('GET', '/questions.csv', { headers: { Cookie: admin.cookie } });
+    ok(csvOut.status === 200 && csvOut.body.includes('Q1 story'), '/questions.csv exports the notes column');
+
+    hostAction('close-question');
+    const rev = await untilPresent(s => s.phase === 'reveal');
+    ok(rev && rev.stillToAnswer.length === 0 && rev.audienceTally && rev.currentQuestion.correct === 1, 'reveal: still-to-answer is empty and the tally is present');
+    hostAction('next-question');
+    const q2 = await untilPresent(s => s.phase === 'question' && s.questionIndex === 1);
+    ok(q2 && q2.currentQuestion.notes === 'Q2 notes.' && q2.nextUp && q2.nextUp.end === true, 'question 2: its notes; next up is the end of the game (one survivor)');
+    ok(q2.stillToAnswer.length === 1 && q2.stillToAnswer[0].name === 'Ada', 'question 2: only the survivor is still to answer');
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    await untilPresent(s => s.stillToAnswer.length === 0);
+    hostAction('close-question');
+    await untilPresent(s => s.phase === 'reveal' && s.questionIndex === 1);
+    hostAction('next-question');
+    const end = await untilPresent(s => s.phase === 'end');
+    ok(end && end.nextUp === null && end.currentQuestion === null, 'end: no current question and nothing next');
+  }
+
+  section('Presenter: tiebreaker is announced as next only when more than one player survives');
+  {
+    const before = adminState.joinCode;
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby' && s.joinCode !== before);
+    const joinCode = adminState.joinCode;
+    const ws = [];
+    for (const name of ['Cy', 'Di']) {
+      const w = await openWs();
+      w.send(JSON.stringify({ type: 'player:join', name, email: name.toLowerCase() + '@test.example', joinCode }));
+      await waitMessage(w, m => m.type === 'player:joined');
+      ws.push(w); sockets.push(w);
+    }
+    await until(s => s.playerCount === 2);
+    hostAction('start-game');
+    await untilPresent(s => s.phase === 'question' && s.questionIndex === 0 && s.playerCount === 2);
+    ws.forEach(w => w.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 })));
+    await untilPresent(s => s.stillToAnswer.length === 0);
+    hostAction('close-question');
+    await untilPresent(s => s.phase === 'reveal');
+    hostAction('next-question');
+    const q2 = await untilPresent(s => s.phase === 'question' && s.questionIndex === 1);
+    ok(q2 && q2.nextUp && q2.nextUp.label === 'Tiebreaker 1' && q2.nextUp.conditional && q2.nextUp.notes === 'Bonus notes.', 'last question with two survivors: next up is the tiebreaker, marked conditional');
+    ws.forEach(w => w.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 })));
+    await untilPresent(s => s.stillToAnswer.length === 0);
+    hostAction('close-question');
+    await untilPresent(s => s.phase === 'reveal' && s.questionIndex === 1);
+    hostAction('next-question');
+    const b1 = await untilPresent(s => s.phase === 'question' && s.inBonus);
+    ok(b1 && b1.currentQuestion.label === 'Tiebreaker 1' && b1.currentQuestion.notes === 'Bonus notes.' && b1.nextUp && b1.nextUp.end, 'tiebreaker: its label and notes; the end is next');
+  }
+
+  hostAction('reset-game');
+  await until(s => s.phase === 'lobby');
+  aws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); pws.close(); hws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4295,6 +4486,7 @@ async function presentationPolishTests() {
     await followUpHardeningTests();
     await savedBankRestartTests();
     await presentationPolishTests();
+    await presenterViewTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

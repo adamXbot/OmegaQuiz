@@ -324,6 +324,7 @@ body{
       <div class="panel">
         <h2>Game Control
           <span class="panel-actions">
+            <a href="/present" target="_blank" class="btn ghost" id="openPresenterLink" title="Your screen while the board is on the projector: answer, notes, what's next, controls">Open Presenter View ↗</a>
             <a href="/host" target="_blank" class="btn ghost" id="openHostLink">Open Host Screen ↗</a>
             <a href="/" target="_blank" class="btn ghost">Open Player View ↗</a>
           </span>
@@ -1568,6 +1569,8 @@ function renderQuestionList(targetId, arr, kind) {
       `).join('')}
       <label class="lesson-label">Lesson / Explanation (shown on host screen after reveal)</label>
       <textarea data-field="lesson">${escapeHtmlAttr(q.lesson)}</textarea>
+      <label class="lesson-label">Presenter notes <span class="muted" style="font-weight:normal;letter-spacing:0;text-transform:none;font-size:11px">(only the presenter view shows these — never the board or the phones)</span></label>
+      <textarea data-field="notes" maxlength="4000" placeholder="What to say around this question: the story behind it, who to ask, the segue to the next one…">${escapeHtmlAttr(q.notes || '')}</textarea>
       <label class="lesson-label">Image (optional — PNG / JPG / WEBP / SVG, max 256 KB)</label>
       <div class="q-image-row" style="display:flex;align-items:center;gap:10px">
         <div class="q-image-preview" style="flex:0 0 auto;width:72px;height:54px;background:rgba(0,0,0,.3);border:1px solid var(--gray-line);border-radius:6px;display:flex;align-items:center;justify-content:center;overflow:hidden">
@@ -1584,6 +1587,7 @@ function renderQuestionList(targetId, arr, kind) {
     // Field bindings
     card.querySelector('[data-field="q"]').oninput = e => { q.q = e.target.value; markDirty(); };
     card.querySelector('[data-field="lesson"]').oninput = e => { q.lesson = e.target.value; markDirty(); };
+    card.querySelector('[data-field="notes"]').oninput = e => { q.notes = e.target.value; markDirty(); };
     card.querySelectorAll('[data-field="option"]').forEach(inp => {
       inp.oninput = e => { q.options[parseInt(e.target.dataset.idx)] = e.target.value; markDirty(); };
     });
@@ -1654,11 +1658,11 @@ function markDirty() {
 }
 
 document.getElementById('addMainBtn').onclick = () => {
-  questions.push({ q: 'New question…', options: ['', '', '', ''], correct: 0, lesson: '' });
+  questions.push({ q: 'New question…', options: ['', '', '', ''], correct: 0, lesson: '', notes: '' });
   markDirty(); renderQuestions();
 };
 document.getElementById('addBonusBtn').onclick = () => {
-  bonusQuestions.push({ q: 'New tiebreaker question…', options: ['', '', '', ''], correct: 0, lesson: '' });
+  bonusQuestions.push({ q: 'New tiebreaker question…', options: ['', '', '', ''], correct: 0, lesson: '', notes: '' });
   markDirty(); renderQuestions();
 };
 document.getElementById('saveQuestionsBtn').onclick = () => {

@@ -30,12 +30,13 @@ The columns are:
 | `optionA` … `optionD` | The four answer choices |
 | `correct` | Which answer is right. Accepts either a letter (`A`–`D`) or a zero-based index (`0`–`3`). The downloadable template uses letters. |
 | `lesson` | What players see at the end and on the post-game recap. Usually one or two sentences explaining why the right answer is right. |
+| `notes` | Optional. Presenter notes: what to say around the question. Plain text, shown only on the presenter view (`/present`), never on the board or the phones. Files without this column still import. |
 
 A row looks like:
 
 ```csv
-section,question,optionA,optionB,optionC,optionD,correct,lesson
-main,An email from support@paypa1.com asks you to verify your account. What's the red flag?,Polite tone,Look-alike domain (paypa1 vs paypal),HTTPS link,No attachment,B,"Look-alike domains swap visually similar characters (1 for l). Always check the sender domain character-by-character."
+section,question,optionA,optionB,optionC,optionD,correct,lesson,notes
+main,An email from support@paypa1.com asks you to verify your account. What's the red flag?,Polite tone,Look-alike domain (paypa1 vs paypal),HTTPS link,No attachment,B,"Look-alike domains swap visually similar characters (1 for l). Always check the sender domain character-by-character.","Open with the invoice story. Ask who checks the From address."
 ```
 
 The default round is 10 main questions plus 5 bonus. The bonus questions only come into play if
@@ -54,7 +55,7 @@ in [`../samples/`](../samples) and by Admin → Settings → Developer options �
   "title": "Nature Quiz",
   "category": "nature",
   "tagline": "Wildlife and Ecosystems",
-  "main":  [ { "q": "…", "options": ["…", "…", "…", "…"], "correct": 1, "lesson": "…" } ],
+  "main":  [ { "q": "…", "options": ["…", "…", "…", "…"], "correct": 1, "lesson": "…", "notes": "…" } ],
   "bonus": [ { "q": "…", "options": ["…", "…", "…", "…"], "correct": 0, "lesson": "…" } ]
 }
 ```
