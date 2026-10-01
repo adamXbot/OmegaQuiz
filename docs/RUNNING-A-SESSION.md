@@ -199,7 +199,7 @@ page. The board's results screen spells the same link out for anyone who has put
 | Phones went back to the join form: "The facilitator started a new game" | **Reset game** was pressed | Everyone scans the QR on the board again. The board reloads its QR when the code changes. |
 | Scoring dispute | — | Admin → Players → edit the score field in that player's row directly. |
 | Wrong player eliminated | — | Admin → Players → **Eliminate** / **Revive** toggles their status. |
-| Started the game too early | You need to let late-joiners in | Admin → Game Control → **← Return to Lobby**. Only available on Q1 with no eliminations yet. |
+| Started the game too early | You need to let late-joiners in | Admin → Overview or the presenter view → **Back to lobby, keep players** (two clicks). Works from any question, reveal or the results; see [Stopping or rewinding a game](#stopping-or-rewinding-a-game). |
 | Need to wrap up before everyone finishes | — | Admin → Session control → **Close session**. Rejects new joins and shows a goodbye screen with an optional follow-up call to action. |
 
 ## Dropped phones and restarts
