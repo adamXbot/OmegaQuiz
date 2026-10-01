@@ -5097,6 +5097,90 @@ async function sessionHistoryTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Sliding, persisted sign-in sessions
+// ----------------------------------------------------------------------------
+async function slidingSessionTests() {
+  const { parseSessionTtlHours, SESSION_TTL_HOURS_DEFAULT, SESSION_RENEW_STEP_MS, AUTH_SESSIONS_PATH, flushAuthSessions, loadAuthSessions, deleteSession } = srv;
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+
+  section('Sign-in: a week by default, configurable, sliding');
+  {
+    ok(SESSION_TTL_HOURS_DEFAULT === 168 && SESSION_TTL_MS === 168 * 3600 * 1000, 'sessions last 7 days by default (were 4 hours)');
+    ok(parseSessionTtlHours(undefined) === 168 && parseSessionTtlHours('24') === 24 && parseSessionTtlHours('x') === 168 && parseSessionTtlHours(0) === 168 && parseSessionTtlHours(100000) === 24 * 365 && parseSessionTtlHours('2.6') === 3, 'SESSION_TTL_HOURS parsing: default, number, junk, zero, cap, rounding');
+    ok(SESSION_RENEW_STEP_MS === Math.max(60000, Math.floor(SESSION_TTL_MS / 24)), 'renewal happens at most once per 1/24 of the length');
+    const sid = createSession('host', '10.0.0.9');
+    const s = getSession(sid);
+    ok(s && s.id === sid && s.expiresAt > Date.now() + SESSION_TTL_MS - 2000, 'a new session expires a full TTL from now');
+    const fresh = getSession(sid);
+    ok(!fresh.cookieRefreshDue, 'reading a fresh session does not renew it (nothing to gain yet)');
+    s.expiresAt = Date.now() + 5000; // nearly out
+    const renewed = getSession(sid);
+    ok(renewed.expiresAt > Date.now() + SESSION_TTL_MS - 2000 && renewed.cookieRefreshDue === true, 'reading a session that has aged slides its expiry out again and flags a cookie refresh');
+    const untouched = getSession(sid, { touch: false });
+    untouched.expiresAt = Date.now() + 5000;
+    getSession(sid, { touch: false });
+    ok(getSession(sid, { touch: false }).expiresAt < Date.now() + 6000, 'touch:false reads without sliding');
+    deleteSession(sid);
+  }
+
+  section('Sign-in: the cookie slides with the session; WebSocket activity counts');
+  {
+    const host = await loginAs('host', process.env.HOST_TOKEN);
+    const sid = host.cookie.split('=')[1].split('.')[0];
+    const s = getSession(sid, { touch: false });
+    ok(!!s, 'login created the session');
+    s.expiresAt = Date.now() + 5000; s.cookieRefreshDue = false;
+    const r = await request('GET', '/host', { headers: { Cookie: host.cookie } });
+    const setCookie = (r.setCookie || []).find(c => c.startsWith('omegaquiz_sess='));
+    ok(r.status === 200 && setCookie && new RegExp('Max-Age=' + Math.floor(SESSION_TTL_MS / 1000)).test(setCookie) && setCookie.includes(sid), 'a page load on an aged session re-sends the cookie with a full Max-Age');
+    ok(getSession(sid, { touch: false }).expiresAt > Date.now() + SESSION_TTL_MS - 2000, 'and the server-side expiry slid');
+    const r2 = await request('GET', '/host', { headers: { Cookie: host.cookie } });
+    ok(!(r2.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')), 'the very next load sends no cookie (nothing changed)');
+
+    const ws = await openWs({ cookie: host.cookie });
+    ws.send(JSON.stringify({ type: 'host:hello' }));
+    await waitMessage(ws, m => m.type === 'host:state', 2000);
+    getSession(sid, { touch: false }).expiresAt = Date.now() + 5000;
+    ws.send(JSON.stringify({ type: 'host:action', action: 'cancel-lifeline-vote' }));
+    await pause(100);
+    ok(getSession(sid, { touch: false }).expiresAt > Date.now() + SESSION_TTL_MS - 2000, 'a WebSocket message slides the session too');
+    try { ws.close(); } catch {}
+
+    const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const aws = await openWs({ cookie: admin.cookie });
+    aws.send(JSON.stringify({ type: 'admin:hello' }));
+    const init = await waitMessage(aws, m => m.type === 'admin:init', 2000);
+    ok(init.session && init.session.role === 'admin' && init.session.ttlMs === SESSION_TTL_MS && init.session.expiresAt > Date.now(), 'admin:init carries the session expiry for the Settings tab');
+    try { aws.close(); } catch {}
+    const page = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(page.includes('id="sessionInfo"') && page.includes('action="/auth/logout"') && page.includes('function renderSessionInfo('), 'admin: Sign-in & keys shows the sign-in and has Sign out');
+  }
+
+  section('Sign-in: sessions survive a restart (auth-sessions.json)');
+  {
+    const sid = createSession('admin', '10.0.0.10');
+    flushAuthSessions();
+    ok(fs.existsSync(AUTH_SESSIONS_PATH), 'auth-sessions.json is written');
+    ok((fs.statSync(AUTH_SESSIONS_PATH).mode & 0o777) === 0o600, 'auth-sessions.json is mode 0600');
+    const raw = JSON.parse(fs.readFileSync(AUTH_SESSIONS_PATH, 'utf8'));
+    ok(raw.sessions && raw.sessions[sid] && raw.sessions[sid].role === 'admin' && !('cookieRefreshDue' in raw.sessions[sid]), 'the file holds the session by id with its role and expiry');
+    // Simulate a restart: drop it from memory, then load the file back.
+    srv.deleteSession(sid);
+    ok(getSession(sid, { touch: false }) === null, 'gone from memory');
+    const n = loadAuthSessions();
+    ok(n >= 1 && getSession(sid, { touch: false }) && getSession(sid, { touch: false }).role === 'admin', 'loadAuthSessions restores it from disk');
+    // Expired entries are not restored.
+    raw.sessions[sid].expiresAt = Date.now() - 1000;
+    raw.sessions['zz'] = { role: 'admin', expiresAt: Date.now() + 99999 };
+    fs.writeFileSync(AUTH_SESSIONS_PATH, JSON.stringify(raw));
+    srv.deleteSession(sid);
+    loadAuthSessions();
+    ok(getSession(sid, { touch: false }) === null && getSession('zz', { touch: false }) === null, 'expired or malformed entries are ignored on load');
+    flushAuthSessions();
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -5141,6 +5225,7 @@ async function sessionHistoryTests() {
     await packLibraryTests();
     await questionPreviewTests();
     await sessionHistoryTests();
+    await slidingSessionTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

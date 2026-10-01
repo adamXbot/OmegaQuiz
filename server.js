@@ -1919,20 +1919,76 @@ function getPublicBaseUrl(req) {
 }
 
 // --- Sessions (A01-1 / A07-1) ---
-const SESSION_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
-const sessions = new Map(); // sessionId -> { role, expiresAt, createdAt, ip }
+// Sign-ins last SESSION_TTL_HOURS (default 7 days) and slide: every request
+// or WebSocket message from a session pushes its expiry out again, so a
+// facilitator who uses the admin page every week is never signed out. They
+// used to be a fixed 4 hours. Sessions are also kept in
+// DATA_DIR/auth-sessions.json (0600) so a deploy or restart does not sign
+// everyone out — provided COOKIE_SECRET is stable (env, or secrets.json
+// with AUTO_PROVISION_SECRETS), or the cookies cannot be verified anyway.
+const SESSION_TTL_HOURS_DEFAULT = 24 * 7;
+function parseSessionTtlHours(v) {
+  const n = Number(String(v === undefined || v === null ? '' : v).trim());
+  if (!Number.isFinite(n) || n <= 0) return SESSION_TTL_HOURS_DEFAULT;
+  return Math.min(24 * 365, Math.max(1, Math.round(n)));
+}
+const SESSION_TTL_MS = parseSessionTtlHours(process.env.SESSION_TTL_HOURS) * 60 * 60 * 1000;
+// Renew at most once per step, so a busy admin page does not rewrite the
+// file on every request.
+const SESSION_RENEW_STEP_MS = Math.max(60 * 1000, Math.floor(SESSION_TTL_MS / 24));
+const sessions = new Map(); // sessionId -> { id, role, expiresAt, createdAt, ip }
+const AUTH_SESSIONS_PATH = path.join(DATA_DIR, 'auth-sessions.json');
+let authSessionsSaveTimer = null;
+function flushAuthSessions() {
+  if (authSessionsSaveTimer) { clearTimeout(authSessionsSaveTimer); authSessionsSaveTimer = null; }
+  if (CLI.command) return;
+  const out = {};
+  for (const [id, s] of sessions) out[id] = { role: s.role, expiresAt: s.expiresAt, createdAt: s.createdAt, ip: s.ip };
+  try { writePrivateJson(AUTH_SESSIONS_PATH, { savedAt: new Date().toISOString(), sessions: out }); }
+  catch (e) { logJson('warn', 'auth.sessions.save-failed', { error: e.message }); }
+}
+function scheduleAuthSessionsSave() {
+  if (authSessionsSaveTimer || CLI.command) return;
+  authSessionsSaveTimer = setTimeout(() => { authSessionsSaveTimer = null; flushAuthSessions(); }, 500);
+  if (authSessionsSaveTimer.unref) authSessionsSaveTimer.unref();
+}
+function loadAuthSessions() {
+  let raw;
+  try { raw = JSON.parse(fs.readFileSync(AUTH_SESSIONS_PATH, 'utf8')); } catch { return 0; }
+  const now = Date.now();
+  let n = 0;
+  for (const [id, s] of Object.entries((raw && raw.sessions) || {})) {
+    if (!/^[a-f0-9]{64}$/.test(id) || !s || (s.role !== 'host' && s.role !== 'admin')) continue;
+    if (!Number.isFinite(s.expiresAt) || s.expiresAt < now) continue;
+    sessions.set(id, { id, role: s.role, expiresAt: s.expiresAt, createdAt: s.createdAt || now, ip: s.ip || null });
+    n++;
+  }
+  if (n) logJson('info', 'auth.sessions.restored', { count: n });
+  return n;
+}
+if (!CLI.command) loadAuthSessions();
 
 function createSession(role, ip) {
   const id = crypto.randomBytes(32).toString('hex');
-  sessions.set(id, { role, expiresAt: Date.now() + SESSION_TTL_MS, createdAt: Date.now(), ip });
+  sessions.set(id, { id, role, expiresAt: Date.now() + SESSION_TTL_MS, createdAt: Date.now(), ip });
+  scheduleAuthSessionsSave();
   return id;
 }
-function deleteSession(id) { if (id) sessions.delete(id); }
-function getSession(id) {
+function deleteSession(id) { if (id && sessions.delete(id)) scheduleAuthSessionsSave(); }
+// Reading a session is activity: the expiry slides forward (at most once
+// per SESSION_RENEW_STEP_MS). `cookieRefreshDue` tells the next HTTP
+// response to send a fresh cookie so the browser's copy slides too.
+function getSession(id, { touch = true } = {}) {
   if (!id) return null;
   const s = sessions.get(id);
   if (!s) return null;
-  if (s.expiresAt < Date.now()) { sessions.delete(id); return null; }
+  const now = Date.now();
+  if (s.expiresAt < now) { sessions.delete(id); scheduleAuthSessionsSave(); return null; }
+  if (touch && s.expiresAt < now + SESSION_TTL_MS - SESSION_RENEW_STEP_MS) {
+    s.expiresAt = now + SESSION_TTL_MS;
+    s.cookieRefreshDue = true;
+    scheduleAuthSessionsSave();
+  }
   return s;
 }
 function signValue(value) {
@@ -2276,7 +2332,9 @@ function pruneExpiredState(now = Date.now()) {
   pruneFailureMap(loginFailures, LOGIN_WINDOW_MS, now);
   pruneFailureMap(joinFailures, JOIN_WINDOW_MS, now);
   for (const [ip, e] of newJoins) if (now - e.firstAt > JOINS_PER_ADDRESS_WINDOW_MS) newJoins.delete(ip);
-  for (const [id, s] of sessions) if (s.expiresAt < now) sessions.delete(id);
+  let expired = 0;
+  for (const [id, s] of sessions) if (s.expiresAt < now) { sessions.delete(id); expired++; }
+  if (expired) scheduleAuthSessionsSave();
 }
 setInterval(pruneExpiredState, 60_000).unref?.();
 // Sizes only — never the contents — so the test harness can prove the sweep
@@ -2560,6 +2618,9 @@ function requireRole(...roles) {
       }
       return res.status(401).json({ error: 'auth required' });
     }
+    // The session slid forward: send the cookie again so the browser's
+    // Max-Age slides with it.
+    if (s.cookieRefreshDue && s.id) { s.cookieRefreshDue = false; setSessionCookie(req, res, s.id); }
     req.session = s;
     next();
   };
@@ -3789,6 +3850,7 @@ wss.on('connection', (ws, req) => {
 
   ws.on('message', raw => {
     ws.isAlive = true;
+    if (ws.sessionId && ws.role && ws.role !== 'player') getSession(ws.sessionId); // activity slides the sign-in
     if (!takeMessageToken(ws)) return;
     // One malformed or unexpected message must never end the game. An
     // exception in here used to reach uncaughtException, which shuts the
@@ -3862,7 +3924,8 @@ function handleWsMessage(ws, raw) {
       return;
     }
     ws.screen = 'admin';
-    ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus() }));
+    const own = ws.sessionId ? getSession(ws.sessionId) : null;
+    ws.send(JSON.stringify({ type: 'admin:init', questions, bonusQuestions, eventLog, keys: keysStatus(), session: own ? { role: own.role, expiresAt: own.expiresAt, ttlMs: SESSION_TTL_MS, sliding: true } : null }));
     pushAdminState();
     return;
   }
@@ -4839,6 +4902,7 @@ function gracefulShutdown(signal, opts = {}) {
               : 'Server is restarting — please reconnect in a moment.');
   logJson('info', 'graceful shutdown', { signal, final, reason });
   try { logEvent('shutdown', `received ${signal} (final=${final})`); } catch {}
+  try { flushAuthSessions(); } catch {}
   // Best-effort notify — broadcast() iterates wss.clients and is safe to call
   // even if some sockets are mid-handshake.
   try {
@@ -4968,6 +5032,7 @@ module.exports = {
   SESSIONS_DIR, SESSION_ID_RE, listSessions, readSession, resultsCsvFor, resultsXlsxFor,
   get bonusQuestions() { return bonusQuestions; },
   createSession, deleteSession, getSession, packCookie, unpackCookie,
+  parseSessionTtlHours, SESSION_TTL_HOURS_DEFAULT, SESSION_RENEW_STEP_MS, AUTH_SESSIONS_PATH, flushAuthSessions, loadAuthSessions,
   loadBranding, saveBranding, validateBranding,
   parsePublicBaseUrl, getPublicBaseUrl, printBanner,
   fetchJsonSafe, fetchTextSafe, fetchSampleJson, loadBundledSampleJson, bundledSamplesAvailable,
