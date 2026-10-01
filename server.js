@@ -700,8 +700,113 @@ function newGame({ joinCode } = {}) {
     // Question timer: when answers lock (ms epoch) and whether they have.
     deadlineAt: null,
     timerSeconds: 0,
-    answersLocked: false
+    answersLocked: false,
+    // Session history: when Start was pressed, and whether this game has
+    // already been written to DATA_DIR/sessions.
+    startedAt: null,
+    recorded: false
   };
+}
+
+// ----------------------------------------------------------------------------
+// Session history — one JSON record per game under DATA_DIR/sessions, written
+// when the game ends or is stopped part-way (outcome "abandoned"). Holds the
+// standings, every player's answer per question, a text-only snapshot of the
+// questions asked, and the names as entered. Kept until an admin deletes it.
+// ----------------------------------------------------------------------------
+const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
+const SESSION_ID_RE = /^[0-9]{8}-[0-9]{6}-[a-f0-9]{6}$/;
+function sessionPath(id) {
+  if (!SESSION_ID_RE.test(id)) throw new Error('bad session id');
+  return path.join(SESSIONS_DIR, `${id}.json`);
+}
+function sessionStats(players, main, bonus) {
+  const perQuestion = [];
+  const add = (label, q) => {
+    const counts = [0, 0, 0, 0];
+    let answered = 0, correct = 0, asked = 0;
+    players.forEach(p => {
+      const h = (p.history || []).find(e => e.label === label);
+      if (!h) return;
+      asked++;
+      if (h.answer != null && h.answer >= 0 && h.answer < 4) { counts[h.answer]++; answered++; }
+      if (h.correct) correct++;
+    });
+    if (asked) perQuestion.push({ label, q: q.q, correct: q.correct, asked, answered, correctCount: correct, counts });
+  };
+  main.forEach((q, i) => add(`Q${i + 1}`, q));
+  bonus.forEach((q, i) => add(`B${i + 1}`, q));
+  return perQuestion;
+}
+function recordSession(outcome) {
+  if (game.recorded) return null;
+  if (!branding || !branding.recordSessions) return null;
+  const players = [...game.players.values()];
+  if (!players.length || !players.some(p => (p.history || []).length)) return null; // nothing was played
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-');
+  const id = `${stamp}-${crypto.randomBytes(3).toString('hex')}`;
+  const textOnly = q => ({ q: q.q, options: q.options, correct: q.correct, lesson: q.lesson || '', notes: q.notes || '', seconds: q.seconds || 0 });
+  const main = questions.map(textOnly);
+  const bonus = bonusQuestions.map(textOnly);
+  const playersOut = players
+    .map(p => ({ name: p.name, email: p.email || '', answeredScore: p.answeredScore, alive: p.alive, history: (p.history || []).map(h => ({ label: h.label, answer: h.answer, correct: !!h.correct, wasAlive: !!h.wasAlive })) }))
+    .sort((a, b) => b.answeredScore - a.answeredScore || a.name.localeCompare(b.name));
+  const startedAt = game.startedAt ? new Date(game.startedAt).toISOString() : null;
+  const title = `${sanitizeToText(branding.quizTitle || branding.companyName || 'Omega Quiz')} — ${now.toLocaleString('en-AU', { hour12: false })}`.slice(0, 120);
+  const rec = {
+    id, title, outcome, startedAt, endedAt: now.toISOString(),
+    quizTitle: sanitizeToText(branding.quizTitle || ''), tagline: sanitizeToText(branding.tagline || ''), category: branding.quizCategory || '',
+    joinCode: game.joinCode,
+    questions: { main, bonus },
+    players: playersOut,
+    stats: { playerCount: players.length, aliveAtEnd: players.filter(p => p.alive).length, questionsAsked: sessionStats(players, main, bonus).length, perQuestion: sessionStats(players, main, bonus) },
+    lifelinesUsed: { ...game.lifelinesUsed }
+  };
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    const file = sessionPath(id);
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(rec, null, 2) + '\n', 'utf8');
+    matchDataDirOwner(tmp);
+    fs.renameSync(tmp, file);
+    game.recorded = true;
+    logEvent('admin', `Session recorded (${outcome}): ${rec.title} — ${players.length} player${players.length === 1 ? '' : 's'}, ${rec.stats.questionsAsked} question${rec.stats.questionsAsked === 1 ? '' : 's'}`);
+    broadcast({ type: 'sessions:list', sessions: listSessions() }, c => c.role === 'admin');
+    return rec;
+  } catch (e) {
+    logJson('warn', 'sessions.write-failed', { error: e.message });
+    return null;
+  }
+}
+// Plain text of a sanitised branding string (entities decoded, tags dropped).
+function sanitizeToText(html) {
+  return String(html || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+function readSession(id) {
+  if (!SESSION_ID_RE.test(id)) return null;
+  const file = sessionPath(id);
+  if (!fs.existsSync(file)) return null;
+  try {
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!rec || rec.id !== id || !Array.isArray(rec.players) || !rec.questions) return null;
+    return rec;
+  } catch { return null; }
+}
+function sessionSummary(rec) {
+  const top = rec.players.slice(0, 3).map(p => ({ name: p.name, score: p.answeredScore, alive: p.alive }));
+  return { id: rec.id, title: rec.title, outcome: rec.outcome, startedAt: rec.startedAt, endedAt: rec.endedAt, quizTitle: rec.quizTitle, category: rec.category,
+    playerCount: rec.stats.playerCount, aliveAtEnd: rec.stats.aliveAtEnd, questionsAsked: rec.stats.questionsAsked, totalQuestions: rec.questions.main.length, top };
+}
+function listSessions() {
+  if (!fs.existsSync(SESSIONS_DIR)) return [];
+  const out = [];
+  for (const name of fs.readdirSync(SESSIONS_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const rec = readSession(name.slice(0, -5));
+    if (rec) out.push(sessionSummary(rec));
+  }
+  return out.sort((a, b) => String(b.endedAt || '').localeCompare(String(a.endedAt || '')));
 }
 // The one server-side timer for the open question. Every path that opens a
 // question calls openQuestionTimer(); every path that leaves the question
@@ -1410,6 +1515,9 @@ const DEFAULT_BRANDING = {
   // audio state that browser chose.
   showSoundToggleBoard: true,
   showSoundTogglePhones: true,
+  // Keep a record of every game (standings, every answer, the questions
+  // asked, names as entered) under DATA_DIR/sessions, until deleted.
+  recordSessions: true,
   // Session closed flag — when true the player and host pages show a
   // "session ended" view, new joins are rejected, but the admin can still
   // sign in and reopen. Use case: shut down the storefront between
@@ -1527,6 +1635,7 @@ function brandingFromEnv() {
   if (e.LIFELINE_REFILL === 'never' || e.LIFELINE_REFILL === 'each-question' || e.LIFELINE_REFILL === 'at-bonus') {
     out.lifelineRefill = e.LIFELINE_REFILL;
   }
+  if (e.RECORD_SESSIONS !== undefined) out.recordSessions = truthy(e.RECORD_SESSIONS);
   if (e.SHOW_SOUND_TOGGLE_BOARD !== undefined) out.showSoundToggleBoard = truthy(e.SHOW_SOUND_TOGGLE_BOARD);
   if (e.SHOW_SOUND_TOGGLE_PHONES !== undefined) out.showSoundTogglePhones = truthy(e.SHOW_SOUND_TOGGLE_PHONES);
   if (e.QUESTION_SECONDS !== undefined && /^\d{1,3}$/.test(String(e.QUESTION_SECONDS).trim())) {
@@ -1679,6 +1788,9 @@ function validateBranding(raw, { tolerant = false } = {}) {
       throw new Error('lifelineRefill must be "never", "each-question", or "at-bonus"');
     }
   }
+
+  // recordSessions: boolean (default true).
+  if (raw.recordSessions !== undefined) out.recordSessions = !!raw.recordSessions;
 
   // showSoundToggleBoard / showSoundTogglePhones: booleans (default true).
   if (raw.showSoundToggleBoard !== undefined) out.showSoundToggleBoard = !!raw.showSoundToggleBoard;
@@ -2859,6 +2971,8 @@ function hostAction(action, payload = {}) {
       }
       game.phase = 'question';
       game.questionIndex = 0;
+      game.startedAt = Date.now();
+      game.recorded = false;
       resetCurrentAnswerState();
       game.eliminatedOptions = []; game.audienceTally = null;
       game.revealedCorrect = null;
@@ -3005,11 +3119,13 @@ function hostAction(action, payload = {}) {
         }
       }
       openQuestionTimer(); // no-op unless a question just opened
+      if (game.phase === 'end') recordSession('ended');
       pushAll();
       break;
     }
     case 'reset-game': {
       // A01-6: rotate the join code on reset so old links don't carry over.
+      if (game.phase === 'question' || game.phase === 'reveal') recordSession('abandoned');
       clearQuestionTimer();
       startNewGame();
       pushAll();
@@ -3021,6 +3137,7 @@ function hostAction(action, payload = {}) {
       // start over (or a different pack can be loaded) without 60 phones
       // re-scanning the QR. Used to be limited to Q1 with nobody out.
       if (game.phase === 'lobby') return;
+      if (game.phase === 'question' || game.phase === 'reveal') recordSession('abandoned');
       const from = game.inBonus ? `tiebreaker ${game.bonusIndex + 1}` : game.phase === 'end' ? 'the results' : `question ${game.questionIndex + 1}`;
       game.phase = 'lobby';
       game.questionIndex = 0;
@@ -3033,6 +3150,8 @@ function hostAction(action, payload = {}) {
       game.lifelineActive = null;
       game.lifelinesUsed = { '5050': false, 'askit': false, 'skip': false };
       clearQuestionTimer();
+      game.recorded = false;
+      game.startedAt = null;
       game.players.forEach(p => { p.history = []; p.answeredScore = 0; p.alive = true; });
       broadcast({ type: 'game:lobby-return' }, c => c.role === 'player');
       logEvent('admin', `Back to the lobby from ${from} (players kept, scores cleared)`);
@@ -3273,6 +3392,70 @@ function adminAction(action, payload = {}, adminWs = null) {
       break;
     }
 
+    case 'sessions:list': {
+      if (adminWs) adminWs.send(JSON.stringify({ type: 'sessions:list', sessions: listSessions() }));
+      break;
+    }
+    case 'sessions:get': {
+      const rec = readSession(String(payload.sessionId || ''));
+      if (adminWs) adminWs.send(JSON.stringify(rec ? { type: 'sessions:record', session: rec } : { type: 'error', scope: 'sessions', error: 'No such session.' }));
+      break;
+    }
+    case 'sessions:rename': {
+      try {
+        const rec = readSession(String(payload.sessionId || ''));
+        if (!rec) throw new Error('no such session');
+        const title = packText(payload.title, 120);
+        if (!title) throw new Error('a title is needed');
+        rec.title = title;
+        const file = sessionPath(rec.id);
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(rec, null, 2) + '\n', 'utf8');
+        matchDataDirOwner(tmp);
+        fs.renameSync(tmp, file);
+        broadcast({ type: 'sessions:list', sessions: listSessions() }, c => c.role === 'admin');
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'sessions', error: 'Rename failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'sessions:delete': {
+      try {
+        const id = String(payload.sessionId || '');
+        if (!SESSION_ID_RE.test(id) || !fs.existsSync(sessionPath(id))) throw new Error('no such session');
+        fs.unlinkSync(sessionPath(id));
+        logEvent('admin', `Deleted session record ${id}`);
+        broadcast({ type: 'sessions:list', sessions: listSessions() }, c => c.role === 'admin');
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'sessions', error: 'Delete failed: ' + e.message }));
+      }
+      break;
+    }
+    case 'sessions:load-questions': {
+      // Play again with the questions a session used. The record is text
+      // only, so images are not restored.
+      if (game.phase !== 'lobby' && game.phase !== 'end') {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'sessions', error: 'Questions can only be loaded in the lobby or after the game ends.' }));
+        return;
+      }
+      try {
+        const rec = readSession(String(payload.sessionId || ''));
+        if (!rec) throw new Error('no such session');
+        const bank = normalizeQuestionBank({ main: rec.questions.main, bonus: rec.questions.bonus }, { label: 'session questions', requireMain: true });
+        autoSnapshotBank('before loading a past session');
+        questions = bank.main;
+        bonusQuestions = bank.bonus;
+        saveQuestionsToDisk();
+        logEvent('admin', `Loaded the questions from session "${rec.title}" (${questions.length} main, ${bonusQuestions.length} bonus)`);
+        broadcast({ type: 'admin:questions', questions, bonusQuestions }, c => c.role === 'admin');
+        pushAll();
+        broadcastPacks();
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'sessions:questions-loaded', session: sessionSummary(rec), mainCount: questions.length, bonusCount: bonusQuestions.length }));
+      } catch (e) {
+        if (adminWs) adminWs.send(JSON.stringify({ type: 'error', scope: 'sessions', error: 'Load failed: ' + e.message }));
+      }
+      break;
+    }
     case 'packs:list': {
       if (adminWs) adminWs.send(JSON.stringify({ type: 'packs:list', packs: listPacks() }));
       break;
@@ -4177,82 +4360,45 @@ function formatHistoryResult(h) {
   const tag = h.wasAlive ? '' : ' (eliminated)';
   return (h.correct ? 'correct' : 'wrong') + tag;
 }
-app.get('/results.csv', requireRole('admin'), (req, res) => {
-  const mainCount  = questions.length;
-  const bonusCount = bonusQuestions.length;
-  const header = [
-    'Name', 'Email',
-    'Score (in-race correct)',
-    'Total correct (all answers)',
-    'Total answered',
-    'Survived to End',
-    'Status',
-  ];
+// Results as rows. `players` are { name, email, answeredScore, alive,
+// history } (live player records or a saved session's copies); `ended`
+// decides whether an alive player is a WINNER / FINALIST or still alive.
+function resultsHeaderLabels(mainCount, bonusCount) {
+  const header = ['Name', 'Email', 'Score (in-race correct)', 'Total correct (all answers)', 'Total answered', 'Survived to End', 'Status'];
   for (let i = 1; i <= mainCount;  i++) { header.push('Q' + i + ' answer'); header.push('Q' + i + ' result'); }
   for (let i = 1; i <= bonusCount; i++) { header.push('B' + i + ' answer'); header.push('B' + i + ' result'); }
-  const rows = [header.map(csvField)];
-
-  [...game.players.values()]
+  return header;
+}
+function resultsPlayerRows(players, mainCount, bonusCount, ended) {
+  return [...players]
     .sort((a, b) => b.answeredScore - a.answeredScore)
-    .forEach(p => {
-      const status = p.alive ? (game.phase === 'end' ? 'WINNER / FINALIST' : 'still alive') : 'eliminated';
+    .map(p => {
+      const status = p.alive ? (ended ? 'WINNER / FINALIST' : 'still alive') : 'eliminated';
       const history = p.history || [];
       const totalCorrect  = history.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
       const totalAnswered = history.reduce((n, h) => n + (h.answer != null ? 1 : 0), 0);
-      // Build a label → history-entry index so we can render in question order
-      // even if (hypothetically) entries are out-of-order.
       const byLabel = {};
       history.forEach(h => { byLabel[h.label] = h; });
-
-      const row = [
-        csvField(p.name),
-        csvField(p.email),
-        csvField(p.answeredScore),
-        csvField(totalCorrect),
-        csvField(totalAnswered),
-        csvField(p.alive ? 'Yes' : 'No'),
-        csvField(status),
-      ];
-      for (let i = 1; i <= mainCount; i++) {
-        const h = byLabel['Q' + i];
-        row.push(csvField(h && h.answer != null ? 'ABCD'[h.answer] : '—'));
-        row.push(csvField(formatHistoryResult(h)));
-      }
-      for (let i = 1; i <= bonusCount; i++) {
-        const h = byLabel['B' + i];
-        row.push(csvField(h && h.answer != null ? 'ABCD'[h.answer] : '—'));
-        row.push(csvField(formatHistoryResult(h)));
-      }
-      rows.push(row);
+      const cells = [];
+      for (let i = 1; i <= mainCount;  i++) cells.push(byLabel['Q' + i] || null);
+      for (let i = 1; i <= bonusCount; i++) cells.push(byLabel['B' + i] || null);
+      return { p, status, totalCorrect, totalAnswered, cells };
     });
-  const csv = rows.map(r => r.join(',')).join('\r\n');
-  res.set('Content-Type', 'text/csv; charset=utf-8');
-  res.set('Content-Disposition', `attachment; filename="quiz-results-${new Date().toISOString().slice(0,10)}.csv"`);
-  res.send(csv);
-});
-
-// Excel export — same shape as /results.csv but with cell-level fills:
-//   green   = correct answer
-//   red     = wrong answer
-//   amber   = no answer
-//   muted shades + italic = "(eliminated)" variants
-// File is built inline (no deps); open it in Excel / Numbers / LibreOffice.
-app.get('/results.xlsx', requireRole('admin'), (req, res) => {
-  const mainCount  = questions.length;
-  const bonusCount = bonusQuestions.length;
-
-  const headerLabels = [
-    'Name', 'Email',
-    'Score (in-race correct)',
-    'Total correct (all answers)',
-    'Total answered',
-    'Survived to End',
-    'Status',
-  ];
-  for (let i = 1; i <= mainCount;  i++) { headerLabels.push('Q' + i + ' answer'); headerLabels.push('Q' + i + ' result'); }
-  for (let i = 1; i <= bonusCount; i++) { headerLabels.push('B' + i + ' answer'); headerLabels.push('B' + i + ' result'); }
-  const headers = headerLabels.map(label => ({ v: label, s: 1 }));
-
+}
+function resultsCsvFor(players, mainCount, bonusCount, ended) {
+  const rows = [resultsHeaderLabels(mainCount, bonusCount).map(csvField)];
+  resultsPlayerRows(players, mainCount, bonusCount, ended).forEach(({ p, status, totalCorrect, totalAnswered, cells }) => {
+    const row = [csvField(p.name), csvField(p.email), csvField(p.answeredScore), csvField(totalCorrect), csvField(totalAnswered), csvField(p.alive ? 'Yes' : 'No'), csvField(status)];
+    cells.forEach(h => { row.push(csvField(h && h.answer != null ? 'ABCD'[h.answer] : '—')); row.push(csvField(formatHistoryResult(h))); });
+    rows.push(row);
+  });
+  return rows.map(r => r.join(',')).join('\r\n');
+}
+// Excel — same shape as the CSV but with cell-level fills:
+//   green = correct, red = wrong, amber = no answer, muted + italic =
+//   "(eliminated)" variants. Built inline (no deps).
+function resultsXlsxFor(players, mainCount, bonusCount, ended) {
+  const headers = resultsHeaderLabels(mainCount, bonusCount).map(label => ({ v: label, s: 1 }));
   // Style indexes: 0=plain, 2=correct, 3=wrong, 4=no-answer,
   //                5=correct(elim), 6=wrong(elim), 7=numeric.
   function styleFor(h) {
@@ -4260,51 +4406,53 @@ app.get('/results.xlsx', requireRole('admin'), (req, res) => {
     if (h.correct)              return h.wasAlive ? 2 : 5;
     return h.wasAlive ? 3 : 6;
   }
-  function resultText(h) {
-    if (!h || h.answer == null) return 'no answer';
-    const tag = h.wasAlive ? '' : ' (eliminated)';
-    return (h.correct ? 'correct' : 'wrong') + tag;
-  }
-
-  const rows = [];
-  [...game.players.values()]
-    .sort((a, b) => b.answeredScore - a.answeredScore)
-    .forEach(p => {
-      const status = p.alive ? (game.phase === 'end' ? 'WINNER / FINALIST' : 'still alive') : 'eliminated';
-      const history = p.history || [];
-      const totalCorrect  = history.reduce((n, h) => n + (h.correct ? 1 : 0), 0);
-      const totalAnswered = history.reduce((n, h) => n + (h.answer != null ? 1 : 0), 0);
-      const byLabel = {};
-      history.forEach(h => { byLabel[h.label] = h; });
-
-      const row = [
-        { v: p.name, s: 0 },
-        { v: p.email, s: 0 },
-        { v: p.answeredScore, s: 7, t: 'n' },
-        { v: totalCorrect,    s: 7, t: 'n' },
-        { v: totalAnswered,   s: 7, t: 'n' },
-        { v: p.alive ? 'Yes' : 'No', s: 0 },
-        { v: status, s: 0 },
-      ];
-      for (let i = 1; i <= mainCount; i++) {
-        const h = byLabel['Q' + i];
-        const style = styleFor(h);
-        row.push({ v: h && h.answer != null ? 'ABCD'[h.answer] : '—', s: style });
-        row.push({ v: resultText(h),                                  s: style });
-      }
-      for (let i = 1; i <= bonusCount; i++) {
-        const h = byLabel['B' + i];
-        const style = styleFor(h);
-        row.push({ v: h && h.answer != null ? 'ABCD'[h.answer] : '—', s: style });
-        row.push({ v: resultText(h),                                  s: style });
-      }
-      rows.push(row);
-    });
-
-  const xlsx = buildXlsx(headers, rows, 'Quiz Results');
+  const rows = resultsPlayerRows(players, mainCount, bonusCount, ended).map(({ p, status, totalCorrect, totalAnswered, cells }) => {
+    const row = [
+      { v: p.name, s: 0 }, { v: p.email, s: 0 },
+      { v: p.answeredScore, s: 7, t: 'n' }, { v: totalCorrect, s: 7, t: 'n' }, { v: totalAnswered, s: 7, t: 'n' },
+      { v: p.alive ? 'Yes' : 'No', s: 0 }, { v: status, s: 0 },
+    ];
+    cells.forEach(h => { const style = styleFor(h); row.push({ v: h && h.answer != null ? 'ABCD'[h.answer] : '—', s: style }); row.push({ v: formatHistoryResult(h), s: style }); });
+    return row;
+  });
+  return buildXlsx(headers, rows, 'Quiz Results');
+}
+app.get('/results.csv', requireRole('admin'), (req, res) => {
+  const csv = resultsCsvFor(game.players.values(), questions.length, bonusQuestions.length, game.phase === 'end');
+  res.set('Content-Type', 'text/csv; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="quiz-results-${new Date().toISOString().slice(0,10)}.csv"`);
+  res.send(csv);
+});
+app.get('/results.xlsx', requireRole('admin'), (req, res) => {
+  const xlsx = resultsXlsxFor(game.players.values(), questions.length, bonusQuestions.length, game.phase === 'end');
   res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.set('Content-Disposition', `attachment; filename="quiz-results-${new Date().toISOString().slice(0,10)}.xlsx"`);
   res.send(xlsx);
+});
+
+// Saved sessions: results and record downloads (admin only).
+app.get('/sessions/:id/results.:fmt', requireRole('admin'), (req, res) => {
+  const rec = readSession(String(req.params.id || ''));
+  if (!rec) { res.status(404).type('text/plain').send('No such session'); return; }
+  const stamp = String(rec.startedAt || rec.endedAt || '').slice(0, 10) || 'session';
+  if (req.params.fmt === 'csv') {
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="quiz-results-${stamp}.csv"`);
+    res.send(resultsCsvFor(rec.players, rec.questions.main.length, rec.questions.bonus.length, rec.outcome === 'ended'));
+  } else if (req.params.fmt === 'xlsx') {
+    res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.set('Content-Disposition', `attachment; filename="quiz-results-${stamp}.xlsx"`);
+    res.send(resultsXlsxFor(rec.players, rec.questions.main.length, rec.questions.bonus.length, rec.outcome === 'ended'));
+  } else {
+    res.status(404).type('text/plain').send('Unknown format');
+  }
+});
+app.get('/sessions/:id.json', requireRole('admin'), (req, res) => {
+  const rec = readSession(String(req.params.id || ''));
+  if (!rec) { res.status(404).type('text/plain').send('No such session'); return; }
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="omegaquiz-session-${rec.id}.json"`);
+  res.send(JSON.stringify(rec, null, 2));
 });
 
 // Export & Wipe — one-click "we're done with this event" action. The response
@@ -4817,6 +4965,7 @@ module.exports = {
   QUESTIONS_PATH,
   get questions() { return questions; },
   PACKS_DIR, PACK_ID_RE, PACK_AUTO_KEEP, listPacks, readPack,
+  SESSIONS_DIR, SESSION_ID_RE, listSessions, readSession, resultsCsvFor, resultsXlsxFor,
   get bonusQuestions() { return bonusQuestions; },
   createSession, deleteSession, getSession, packCookie, unpackCookie,
   loadBranding, saveBranding, validateBranding,

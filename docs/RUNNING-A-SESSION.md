@@ -102,6 +102,20 @@ operator can always press **M** to toggle the board's sound.
 - **Finding someone.** Admin → Players has a search box (name or email). During a game anyone offline
   is listed first.
 
+## Past games
+
+Admin → **Sessions** lists every game played on this server: when, how many players, how many
+questions were asked, who won (or who was leading when it was stopped). A record is written when a
+game reaches the results, and when one is stopped part-way with Back to lobby or Reset (marked
+*abandoned*). Each record keeps the standings, every player's answer per question, the questions
+asked (text only, no images) and the names as entered. From the list: **View** the standings and a
+per-question breakdown, download the **Excel** or **CSV** results (the same files the live game
+offers), download the **Record** as JSON, **Load its questions** to play the same set again (the
+current bank is snapshotted to Packs first), **Rename** or **Delete**. Records stay until deleted.
+
+Switch recording off under Branding → **Record sessions** (or `RECORD_SESSIONS=false`) if nothing
+should be kept after a Reset.
+
 ## Switching question sets
 
 Admin → Questions → **Packs** is a library of saved banks on the server. Save the current bank as a

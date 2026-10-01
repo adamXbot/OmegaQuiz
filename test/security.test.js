@@ -2923,10 +2923,10 @@ async function a11yMarkupTests() {
     ok(r.status === 200, 'GET /admin (signed in) returns 200');
     ok(/<div class="tabs" role="tablist" aria-label="[^"]+" id="adminTabs">/.test(body), 'tab strip is a labelled role="tablist"');
     const tabs = body.match(/<button type="button" class="tab[^"]*" role="tab"[^>]*>/g) || [];
-    ok(tabs.length === 6, 'six <button role="tab"> tabs', 'found ' + tabs.length);
+    ok(tabs.length === 7, 'seven <button role="tab"> tabs (Overview, Players, Sessions, Questions, Branding, Settings, Event Log)', 'found ' + tabs.length);
     ok(!/<div class="tab\b/.test(body), 'no <div class="tab"> remains');
     const selected = tabs.filter(t => /aria-selected="true"/.test(t));
-    ok(selected.length === 1 && !/tabindex="-1"/.test(selected[0]) && tabs.filter(t => /tabindex="-1"/.test(t)).length === 5,
+    ok(selected.length === 1 && !/tabindex="-1"/.test(selected[0]) && tabs.filter(t => /tabindex="-1"/.test(t)).length === tabs.length - 1,
        'roving tabindex: exactly one tab is selected and in the Tab order');
     const broken = tabs.filter(t => {
       const id = (t.match(/ id="(tab-[a-z]+)"/) || [])[1];
@@ -4908,6 +4908,195 @@ async function questionPreviewTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Session history
+// ----------------------------------------------------------------------------
+async function sessionHistoryTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { SESSIONS_DIR, SESSION_ID_RE, listSessions, readSession } = srv;
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null, lastSessions = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; if (m.type === 'sessions:list') lastSessions = m.sessions; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const act = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action, payload: payload || {} }));
+  const hostAction = (action, payload) => act('game:host-action', { hostAction: action, hostPayload: payload || {} });
+  async function until(pred, timeout = 3000) { const t0 = Date.now(); while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); } return null; }
+  const reply = types => waitMessage(aws, m => types.includes(m.type), 3000);
+  const brandingNow = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+  async function setRecord(on) {
+    act('branding:update', { branding: { ...brandingNow, recordSessions: on } });
+    await waitMessage(aws, m => m.type === 'branding:saved' || m.type === 'error', 3000).catch(() => null);
+  }
+  const sockets = [];
+  async function join(name, joinCode) {
+    const w = await openWs();
+    w.send(JSON.stringify({ type: 'player:join', name, email: name.toLowerCase().replace(/\s/g, '') + '@test.example', joinCode }));
+    await waitMessage(w, m => m.type === 'player:joined');
+    sockets.push(w);
+    return w;
+  }
+
+  section('Sessions: a game played to the end is recorded');
+  {
+    ok(validateBranding({}).recordSessions === true && validateBranding({ recordSessions: false }).recordSessions === false, 'recordSessions setting, default on');
+    for (const f of (fs.existsSync(SESSIONS_DIR) ? fs.readdirSync(SESSIONS_DIR) : [])) fs.unlinkSync(path.join(SESSIONS_DIR, f));
+    await setRecord(true);
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby');
+    act('questions:update', { main: [
+      { q: 'Q1?', options: ['a', 'b', 'c', 'd'], correct: 1, lesson: 'L1', image: 'data:image/png;base64,iVBORw0KGgo=' },
+      { q: 'Q2?', options: ['a', 'b', 'c', 'd'], correct: 2, lesson: 'L2' }
+    ], bonus: [] });
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    hostAction('cancel-lifeline-vote');
+    await until(s => s.totalQuestions === 2);
+    const joinCode = adminState.joinCode;
+    const p1 = await join('Ann', joinCode);
+    const p2 = await join('Ben', joinCode);
+    await until(s => s.playerCount === 2);
+    hostAction('start-game');
+    await until(s => s.phase === 'question' && s.questionIndex === 0);
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await until(s => s.answeredCount === 1);
+    p2.send(JSON.stringify({ type: 'player:answer', answerIndex: 0 }));
+    await until(s => s.answeredCount === 2);
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal');
+    hostAction('next-question');
+    await until(s => s.phase === 'question' && s.questionIndex === 1);
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    await until(s => s.answeredCount === 1);
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal' && s.questionIndex === 1);
+    lastSessions = null;
+    hostAction('next-question');
+    await until(s => s.phase === 'end');
+    await pause(150);
+    const list = listSessions();
+    ok(list.length === 1 && list[0].outcome === 'ended' && list[0].playerCount === 2 && list[0].questionsAsked === 2 && list[0].aliveAtEnd === 1, `one session recorded at the end (${JSON.stringify(list[0] && { outcome: list[0].outcome, playerCount: list[0].playerCount, questionsAsked: list[0].questionsAsked })})`);
+    ok(SESSION_ID_RE.test(list[0].id) && fs.existsSync(path.join(SESSIONS_DIR, list[0].id + '.json')), 'the record is a file under DATA_DIR/sessions with a timestamped id');
+    ok(lastSessions && lastSessions.length === 1, 'admin pages are sent the new sessions:list');
+    const rec = readSession(list[0].id);
+    ok(rec.players[0].name === 'Ann' && rec.players[0].answeredScore === 2 && rec.players[0].alive === true && rec.players[1].name === 'Ben' && rec.players[1].alive === false, 'standings: Ann first with 2, Ben out');
+    ok(rec.players[0].history.length === 2 && rec.players[0].history[1].answer === 2 && rec.players[1].history[0].answer === 0 && rec.players[1].history[0].correct === false, 'every answer per question is kept');
+    ok(rec.questions.main.length === 2 && rec.questions.main[0].q === 'Q1?' && !('image' in rec.questions.main[0]), 'the questions are kept as text only (no image)');
+    ok(rec.stats.perQuestion.length === 2 && rec.stats.perQuestion[0].answered === 2 && rec.stats.perQuestion[0].correctCount === 1 && rec.stats.perQuestion[1].asked === 2 && rec.stats.perQuestion[1].answered === 1, 'per-question stats');
+    ok(rec.startedAt && rec.endedAt && rec.title.length > 5 && rec.joinCode === joinCode, 'record carries times, a title and the join code');
+
+    // Reset after the end does not record a second time.
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby');
+    await pause(100);
+    ok(listSessions().length === 1, 'reset after the end does not record the same game twice');
+  }
+
+  section('Sessions: stopping part-way records an abandoned game; nothing played means no record');
+  {
+    const joinCode = adminState.joinCode;
+    const p1 = await join('Cy', joinCode);
+    await until(s => s.playerCount === 1);
+    hostAction('start-game');
+    await until(s => s.phase === 'question');
+    hostAction('return-to-lobby');
+    await until(s => s.phase === 'lobby');
+    await pause(100);
+    ok(listSessions().length === 1, 'back to lobby before any answer closed: nothing to record');
+    hostAction('start-game');
+    await until(s => s.phase === 'question');
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await until(s => s.answeredCount === 1);
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal');
+    hostAction('return-to-lobby');
+    await until(s => s.phase === 'lobby');
+    await pause(150);
+    let list = listSessions();
+    ok(list.length === 2 && list[0].outcome === 'abandoned' && list[0].questionsAsked === 1 && list[0].playerCount === 1, 'back to lobby after a reveal records an abandoned game (newest first)');
+    // and again with reset-game mid-question
+    hostAction('start-game');
+    await until(s => s.phase === 'question');
+    p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await until(s => s.answeredCount === 1);
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal');
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby');
+    await pause(150);
+    list = listSessions();
+    ok(list.length === 3 && list[0].outcome === 'abandoned', 'reset mid-game records an abandoned game too');
+  }
+
+  section('Sessions: list, get, rename, downloads, load questions, delete; recording can be switched off');
+  {
+    act('sessions:list');
+    const l = await reply(['sessions:list']);
+    ok(l.sessions.length === 3 && l.sessions[0].top && l.sessions[0].top[0].name === 'Cy', 'sessions:list gives summaries with the top players');
+    const ended = l.sessions.find(x => x.outcome === 'ended');
+    act('sessions:get', { sessionId: ended.id });
+    const got = await reply(['sessions:record', 'error']);
+    ok(got.type === 'sessions:record' && got.session.id === ended.id && got.session.players.length === 2, 'sessions:get returns the full record');
+    act('sessions:rename', { sessionId: ended.id, title: 'October cohort — final' });
+    const renamed = await reply(['sessions:list', 'error']);
+    ok(renamed.type === 'sessions:list' && renamed.sessions.find(x => x.id === ended.id).title === 'October cohort — final', 'rename');
+    const csv = await request('GET', `/sessions/${ended.id}/results.csv`, { headers: { Cookie: admin.cookie } });
+    ok(csv.status === 200 && csv.body.includes('"Ann"') && csv.body.includes('WINNER / FINALIST') && csv.body.includes('"Q2 answer"'), 'results CSV from a saved session');
+    const xlsx = await request('GET', `/sessions/${ended.id}/results.xlsx`, { headers: { Cookie: admin.cookie } });
+    ok(xlsx.status === 200 && xlsx.buffer.slice(0, 2).toString() === 'PK' && /spreadsheetml/.test(xlsx.headers['content-type']), 'results Excel from a saved session');
+    const json = await request('GET', `/sessions/${ended.id}.json`, { headers: { Cookie: admin.cookie } });
+    ok(json.status === 200 && JSON.parse(json.body).id === ended.id, 'the record itself downloads as JSON');
+    ok((await request('GET', `/sessions/${ended.id}/results.csv`)).status === 302 && (await request('GET', '/sessions/20200101-000000-abcdef/results.csv', { headers: { Cookie: admin.cookie } })).status === 404 && (await request('GET', '/sessions/../../x/results.csv', { headers: { Cookie: admin.cookie } })).status !== 200, 'downloads are admin-only, unknown → 404, bad ids refused');
+
+    act('questions:update', { main: [{ q: 'Other?', options: ['a', 'b', 'c', 'd'], correct: 0, lesson: '' }], bonus: [] });
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    act('sessions:load-questions', { sessionId: ended.id });
+    const loaded = await reply(['sessions:questions-loaded', 'error']);
+    ok(loaded.type === 'sessions:questions-loaded' && loaded.mainCount === 2, 'load its questions replaces the bank with the session\'s questions');
+    ok(srv.questions.length === 2 && srv.questions[0].q === 'Q1?' && !srv.questions[0].image, 'the bank now holds the recorded (text-only) questions');
+    ok(srv.listPacks().some(p => p.auto), 'the replaced bank was snapshotted into the pack library');
+
+    act('sessions:delete', { sessionId: ended.id });
+    const afterDelete = await reply(['sessions:list', 'error']);
+    ok(afterDelete.type === 'sessions:list' && !afterDelete.sessions.find(x => x.id === ended.id) && !fs.existsSync(path.join(SESSIONS_DIR, ended.id + '.json')), 'delete removes the record');
+    act('sessions:delete', { sessionId: 'nope' });
+    const bad = await reply(['error', 'sessions:list']);
+    ok(bad.type === 'error', 'deleting an unknown or malformed id is an error');
+
+    await setRecord(false);
+    const joinCode = adminState.joinCode;
+    const p = await join('Di', joinCode);
+    await until(s => s.playerCount === 1);
+    hostAction('start-game');
+    await until(s => s.phase === 'question');
+    p.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await until(s => s.answeredCount === 1);
+    hostAction('close-question');
+    await until(s => s.phase === 'reveal');
+    hostAction('return-to-lobby');
+    await until(s => s.phase === 'lobby');
+    await pause(150);
+    ok(listSessions().length === 2, 'with recording off, a stopped game leaves no record');
+    await setRecord(brandingNow.recordSessions !== false);
+  }
+
+  section('Sessions: admin page markup');
+  {
+    const page = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(page.includes('data-tab="sessions"') && page.includes('id="sessionsList"') && page.includes('id="brandingRecordSessionsInput"'), 'admin: Sessions tab and the Record sessions setting');
+    ok(page.includes("data-act=\"load\"") && page.includes('/results.xlsx" download') && page.includes("adminAction('sessions:get'"), 'admin: per-session downloads, details and load-questions');
+  }
+
+  for (const f of (fs.existsSync(SESSIONS_DIR) ? fs.readdirSync(SESSIONS_DIR) : [])) fs.unlinkSync(path.join(SESSIONS_DIR, f));
+  for (const p of srv.listPacks()) { try { fs.unlinkSync(path.join(srv.PACKS_DIR, p.id + '.json')); } catch {} }
+  hostAction('reset-game');
+  await until(s => s.phase === 'lobby');
+  act('questions:reset-defaults');
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
+  sockets.forEach(w => { try { w.close(); } catch {} });
+  try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4951,6 +5140,7 @@ async function questionPreviewTests() {
     await questionTimerTests();
     await packLibraryTests();
     await questionPreviewTests();
+    await sessionHistoryTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files
