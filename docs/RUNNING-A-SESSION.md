@@ -90,6 +90,21 @@ setting for the animations.
 - **Finding someone.** Admin → Players has a search box (name or email). During a game anyone offline
   is listed first.
 
+## Question timer
+
+Admin → Branding → **Question timer** sets how many seconds each question stays open (default 45;
+0 turns it off; a question's own **Time limit** in the Questions tab, or the `seconds` CSV column,
+overrides it). The countdown starts the moment the question lands and does not pause for lifelines.
+
+- The **board** shows a ring next to the controls, the **phones** a bar under the question counter,
+  Admin → Overview a *Time left* tile and the presenter view a pill. The last five seconds turn red
+  (and tick, in dramatic mode).
+- When time is up, **answers lock**: phones say *Time's up* and the server refuses further answers,
+  but nothing is revealed until you click **Close & Reveal**, so you can talk through the question
+  first. Anyone who did not answer in time is treated exactly like today's "no answer" at the close.
+- The server owns the deadline, so every screen counts down together even when a laptop's clock is
+  wrong. Rewinding restarts the timer; Back to lobby clears it.
+
 ## Stopping or rewinding a game
 
 Admin → Overview and the presenter view both have a **Stop or rewind** row while a game is under

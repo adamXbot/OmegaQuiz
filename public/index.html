@@ -95,6 +95,13 @@ input[aria-invalid="true"]{border-color:var(--red);box-shadow:0 0 12px rgba(196,
 .lobby-state .lobby-sound{width:auto;padding:10px 18px;font-size:13px;letter-spacing:.1em;margin-top:16px}
 
 /* STATUS BANNER */
+/* Question timer: a slim bar that empties while answers are open. */
+.timer-bar{position:relative;height:22px;border-radius:11px;background:rgba(0,0,0,.35);overflow:hidden;margin:0 0 10px;border:1px solid rgba(244,196,48,.3)}
+.timer-bar[hidden]{display:none}
+.timer-fill{position:absolute;inset:0;width:100%;background:linear-gradient(90deg,var(--gold-dim),var(--gold));transition:width .2s linear}
+.timer-bar.urgent .timer-fill{background:var(--red)}
+.timer-bar.locked .timer-fill{width:100%;background:rgba(196,30,58,.55)}
+.timer-text{position:relative;display:block;text-align:center;font-size:12px;line-height:22px;color:#fff;letter-spacing:.08em;text-shadow:0 1px 2px #000;font-variant-numeric:tabular-nums}
 .status-banner{
   text-align:center;padding:10px;border-radius:10px;margin-bottom:14px;
   font-size:13px;letter-spacing:.1em;text-transform:uppercase;
@@ -309,6 +316,7 @@ html.dramatic .answer-btn.enter{animation:aEnter .45s cubic-bezier(.2,.8,.2,1) b
     <button class="audio-toggle" id="audioToggle" type="button" hidden aria-pressed="true" aria-label="Game sounds are on — tap to mute">🔊</button>
     <div class="status-banner" id="statusBanner" aria-live="polite" aria-atomic="true"></div>
     <div class="question-counter" id="qCounter"></div>
+    <div class="timer-bar" id="timerBar" hidden role="timer" aria-live="off"><div class="timer-fill" id="timerFill"></div><span class="timer-text" id="timerText"></span></div>
     <div class="question-card">
       <img id="qImage" alt="" style="display:none;width:100%;max-height:200px;object-fit:contain;border-radius:8px;background:rgba(0,0,0,.2);margin-bottom:10px">
       <div id="qText"></div>
@@ -376,6 +384,26 @@ let reconnectTimer = null;
 let myState = null;
 let pendingAnswer = null;         // confirm-mode local selection (not sent until Lock In)
 let lobbyNotice = '';             // set by game:lobby-return, shown in the lobby until a question starts
+// Question timer: the server owns the deadline (myState.timer); serverNow
+// corrects for this phone's clock.
+let timerOffset = 0;
+function timerLocked(s){ return !!(s && s.timer && (s.timer.locked || s.timer.deadlineAt - (Date.now() + timerOffset) <= 0)); }
+function renderTimer(){
+  const bar = document.getElementById('timerBar');
+  const s = myState;
+  const t = s && s.phase === 'question' && s.question ? s.timer : null;
+  if (!t) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const total = t.seconds * 1000;
+  const remaining = t.locked ? 0 : Math.max(0, t.deadlineAt - (Date.now() + timerOffset));
+  const secs = Math.ceil(remaining / 1000);
+  const locked = t.locked || remaining === 0;
+  document.getElementById('timerFill').style.width = locked ? '100%' : (total ? (remaining / total * 100) : 0) + '%';
+  bar.classList.toggle('locked', locked);
+  bar.classList.toggle('urgent', !locked && secs <= 5);
+  document.getElementById('timerText').textContent = locked ? "Time's up" : `${secs}s`;
+}
+setInterval(renderTimer, 200);
 let lastQuestionIndex = -1;       // resets pendingAnswer between questions
 let answerLockMode = 'quick';     // 'quick' = tap-to-commit, 'confirm' = tap-then-lock
 let eliminatedCanAnswer = false;  // toggle: let eliminated players keep tapping (no scoring)
@@ -1096,6 +1124,8 @@ function render(){
         // In confirm mode, Lock In is final — re-tapping is blocked.
         // In quick mode, re-tapping is allowed (admin sees a "changed" tally).
         if (s.you.answered && answerLockMode === 'confirm') btn.disabled = true;
+        // Time is up: the server refuses answers until the host reveals.
+        if (timerLocked(s)) btn.disabled = true;
       }
       // Audience tally bars (only at reveal)
       if (s.phase === 'reveal' && tally && (tally.aliveTotal + tally.elimTotal) > 0) {
@@ -1136,7 +1166,7 @@ function render(){
     // and only while you can still answer (alive, or eliminated + engagement on).
     const lockBtn = document.getElementById('lockInBtn');
     const canAnswerNow = s.you.alive || eliminatedCanAnswer;
-    if (answerLockMode === 'confirm' && s.phase === 'question' && canAnswerNow && !s.you.answered) {
+    if (answerLockMode === 'confirm' && s.phase === 'question' && canAnswerNow && !s.you.answered && !timerLocked(s)) {
       lockBtn.style.display = 'block';
       lockBtn.disabled = pendingAnswer === null;
       lockBtn.textContent = pendingAnswer === null
@@ -1202,7 +1232,10 @@ function render(){
 
   // Waiting message
   const wm = document.getElementById('waitingMsg');
-  if (s.phase === 'question' && s.you.alive && s.you.answered){
+  if (s.phase === 'question' && timerLocked(s)) {
+    wm.style.display = 'block';
+    wm.textContent = s.you.answered ? "Time's up — your answer is in. Waiting for the host to reveal…" : "Time's up — no more answers. Waiting for the host to reveal…";
+  } else if (s.phase === 'question' && s.you.alive && s.you.answered){
     wm.style.display = 'block';
     wm.textContent = answerLockMode === 'confirm'
       ? 'Locked in! Waiting for the host to reveal…'
