@@ -7,8 +7,14 @@ problems, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 There are two ways in to `/admin` and `/host`:
 
-- **Magic link** — printed on the boot banner in your logs every time the server starts. Single-use,
-  10-minute TTL. This is the intended day-to-day path.
+- **Magic link** — printed on the boot banner in your logs every time the server starts, or minted
+  in Admin → Settings → **Sign-in & keys**. Opening one shows a page with a **Sign in** button; only
+  that button signs the device in, so mail scanners (Safelinks, Sophos) and chat previews that fetch
+  the URL cannot use it up. By default a link is single-use and valid for an hour; when minting from
+  the admin page (or `node server.js links --hours N --reusable`) you can pick 10 minutes to 7 days and
+  make it **reusable until it expires** — the right link to send a co-presenter, who can also scan
+  the QR shown next to it. **Revoke all links** stops every unused link. This is the intended
+  day-to-day path.
 - **Recovery token** — the `HOST_TOKEN` and `ADMIN_TOKEN` environment variables, used through the
   form at `/auth/login`. Long-lived, and only for bootstrapping a new magic link once every link has
   expired. Treat them like password-manager entries, not daily passwords.
@@ -181,7 +187,7 @@ page. The board's results screen spells the same link out for anyone who has put
 |---|---|---|
 | Players' phones cannot connect after scanning the QR | The QR encodes a URL the phones cannot reach | Admin → Branding → **Public server URL**. Set it to whatever the phones can actually reach, or set `PUBLIC_BASE_URL` on the server. The board prints the same address beside the QR. |
 | The boot banner says `Questions: 0 main + 0 bonus` after a restart, though a pack was loaded | Before this release a saved bank with any question image loaded as empty after every restart | Update the server. On an older build, import the pack again after each restart. The boot log now names the file and the reason if a saved bank cannot be loaded. |
-| Magic link redirects to a sign-in error | Token already used, expired, or the server restarted | A restart mints a new one — check the latest boot banner, or use `/auth/login` with your recovery token. |
+| Magic link page says it has expired or been used | Single-use link already pressed, expired, revoked, or the server restarted | Mint another in Settings → Sign-in & keys (a reusable one if it is being shared), check the latest boot banner, or use `/auth/login` with your recovery token. |
 | Host board shows `----` for the join code and **Start Game** never enables, but the QR code renders | The page loaded over HTTP but no game state is arriving over the WebSocket. After a few seconds the board says so. Usually a proxy that does not pass WebSockets (Cloudflare: check **WebSockets** is on under Network), or a sign-in the server no longer recognises after a restart. | Reload the page; if it persists, check the proxy. Before v1.1.2 this also happened whenever `/host` was opened with the *admin* session — fixed, both sessions now drive the board. |
 | "Please use your *example.com* email address" | **Only accept joins from this domain** is ticked in Branding | Either untick it, or have the player join with their company email. The domain itself is the **Company email domain** field. |
 | Someone joined with a typo in their name | — | Admin → Players → **Kick**, then ask them to rejoin. |

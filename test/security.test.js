@@ -2133,39 +2133,82 @@ async function publicBaseUrlTests() {
 // ----------------------------------------------------------------------------
 // Magic-link login tests
 // ----------------------------------------------------------------------------
+// Pressing the Sign in button on the magic-link page.
+function magicPost(token, role) {
+  const body = 't=' + encodeURIComponent(token) + (role ? '&role=' + role : '');
+  return request('POST', '/auth/magic', { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+}
 async function magicLinkTests() {
-  section('Magic link: happy path');
+  const { peekMagicToken, revokeMagicTokens, clampMagicTtl, MAGIC_TTL_MIN_MS, MAGIC_TTL_MAX_MS } = srv;
+  section('Magic link: opening the link shows a page; only Sign in consumes it');
   {
-    // Use the runtime-injected helpers to mint a fresh token for this test.
     const t = mintMagicToken('admin');
-    const r = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
-    ok(r.status === 302 && r.headers.location === '/admin', `valid magic token → 302 → /admin (got ${r.status} ${r.headers.location})`);
+    const g = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
+    ok(g.status === 200 && /<form method="POST" action="\/auth\/magic"/.test(g.body) && g.body.includes('Sign in as admin') && g.body.includes(`name="t" value="${t}"`), 'GET shows a page with a Sign in button for the right role');
+    ok(!(g.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')) && /no-store/.test(g.headers['cache-control'] || '') && /noindex/.test(g.body), 'GET sets no cookie and is not cacheable');
+    const g2 = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
+    ok(g2.status === 200 && g2.body.includes('Sign in as admin') && peekMagicToken(t), 'a second GET (a mail scanner, a preview) changes nothing: the token is still live');
+    const r = await magicPost(t, 'admin');
+    ok(r.status === 302 && r.headers.location === '/admin', `POST signs in → 302 → /admin (got ${r.status} ${r.headers.location})`);
     const cookie = (r.setCookie || []).map(s => s.split(';')[0]).find(s => s.startsWith('omegaquiz_sess='));
-    ok(!!cookie, 'magic-link sets session cookie');
-    // The cookie should let us reach /admin.
+    ok(!!cookie, 'POST sets the session cookie');
     const r2 = await request('GET', '/admin', { headers: { Cookie: cookie } });
-    ok(r2.status === 200, '/admin reachable with magic-issued cookie');
+    ok(r2.status === 200, '/admin reachable with the magic-issued cookie');
+    ok(MAGIC_TTL_MS === 3600000, 'a new link lasts an hour by default (was 10 minutes)');
   }
 
-  section('Magic link: single-use (replay rejected)');
+  section('Magic link: single-use (replay rejected), with the right role on failure');
   {
     const t = mintMagicToken('host');
-    const r1 = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
+    const r1 = await magicPost(t, 'host');
     ok(r1.status === 302 && r1.headers.location === '/host', 'first use succeeds');
-    const r2 = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
+    const r2 = await magicPost(t, 'host');
     ok(r2.status === 302 && (r2.headers.location || '').includes('error=1'), 'replay → redirect to login with error');
     const cookieReplay = (r2.setCookie || []).map(s => s.split(';')[0]).find(s => s.startsWith('omegaquiz_sess='));
     ok(!cookieReplay, 'replay does NOT set a session cookie');
+    const g = await request('GET', '/auth/magic?t=' + encodeURIComponent(t));
+    ok(g.status === 200 && /expired or has already been used/.test(g.body) && !/<form/.test(g.body), 'GET on a used link says so, with no button');
+    const t2 = mintMagicToken('admin');
+    await magicPost(t2, 'admin');
+    const r3 = await magicPost(t2, 'admin');
+    ok(r3.headers.location === '/auth/login?role=admin&error=1', 'a failed admin link goes to the admin recovery form (it always said host before)');
   }
 
   section('Magic link: invalid / missing / malformed token');
   {
+    const before = clearLoginFailures('127.0.0.1');
     const r1 = await request('GET', '/auth/magic?t=');
-    ok(r1.status === 302 && (r1.headers.location || '').includes('error=1'), 'empty token rejected');
+    ok(r1.status === 200 && /expired or has already been used/.test(r1.body), 'empty token: the page says the link is dead');
     const r2 = await request('GET', '/auth/magic?t=garbage-not-a-real-token');
-    ok(r2.status === 302 && (r2.headers.location || '').includes('error=1'), 'unknown token rejected');
-    const r3 = await request('GET', '/auth/magic');
-    ok(r3.status === 302 && (r3.headers.location || '').includes('error=1'), 'missing t param rejected');
+    ok(r2.status === 200 && !/<form/.test(r2.body), 'unknown token: no Sign in button');
+    for (let i = 0; i < 12; i++) await request('GET', '/auth/magic?t=scanner-' + i);
+    ok(!isBlocked('127.0.0.1'), 'a scanner fetching dead links a dozen times is not counted as sign-in failures');
+    const p1 = await magicPost('', 'host');
+    ok(p1.status === 302 && (p1.headers.location || '').includes('error=1'), 'POST with an empty token is rejected');
+    const p2 = await magicPost('garbage-not-a-real-token', 'host');
+    ok(p2.status === 302 && (p2.headers.location || '').includes('error=1'), 'POST with an unknown token is rejected (and counted)');
+    clearLoginFailures('127.0.0.1');
+    void before;
+  }
+
+  section('Magic link: reusable links, lifetimes, revoke, QR');
+  {
+    const t = mintMagicToken('host', { reusable: true, ttlMs: 24 * 3600 * 1000 });
+    const e = peekMagicToken(t);
+    ok(e && e.reusable && e.expiresAt > Date.now() + 23 * 3600 * 1000, 'a reusable 24 h link');
+    const a = await magicPost(t, 'host'); const b = await magicPost(t, 'host');
+    ok(a.status === 302 && a.headers.location === '/host' && b.status === 302 && b.headers.location === '/host', 'a reusable link signs in twice');
+    ok(peekMagicToken(t) && peekMagicToken(t).uses === 2, 'uses are counted and the link is still live');
+    ok(clampMagicTtl(1000) === MAGIC_TTL_MIN_MS && clampMagicTtl(10 * MAGIC_TTL_MAX_MS) === MAGIC_TTL_MAX_MS && clampMagicTtl('x') === MAGIC_TTL_MS && clampMagicTtl(7200000) === 7200000, 'lifetimes are clamped to 5 min – 7 days, default 1 h');
+    const { cookie } = await loginAs('admin', process.env.ADMIN_TOKEN);
+    const qr = await request('GET', '/keys/link-qr?t=' + encodeURIComponent(t), { headers: { Cookie: cookie } });
+    ok(qr.status === 200 && /image\/svg\+xml/.test(qr.headers['content-type']) && qr.body.includes('<svg'), 'admin can fetch a QR of a live link');
+    ok((await request('GET', '/keys/link-qr?t=' + encodeURIComponent(t))).status === 302 && (await request('GET', '/keys/link-qr?t=nope', { headers: { Cookie: cookie } })).status === 404, 'the QR is admin-only and only for live links');
+    const n = revokeMagicTokens();
+    ok(n >= 1 && !peekMagicToken(t), 'revoke drops every outstanding link');
+    const after = await magicPost(t, 'host');
+    ok(after.status === 302 && /error=1/.test(after.headers.location || ''), 'a revoked link no longer signs in');
+    clearLoginFailures('127.0.0.1');
   }
 
   section('Magic link: expiry consumes too');
@@ -2188,10 +2231,20 @@ async function magicLinkTests() {
     await waitMessage(ws, m => m.type === 'admin:init');
     ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:mint-magic-link', payload: { role: 'host' } }));
     const msg = await waitMessage(ws, m => m.type === 'auth:magic-link', 2000);
-    ok(msg.role === 'host' && typeof msg.token === 'string' && msg.token.length > 20, 'admin gets a fresh host magic-link');
-    // Token actually works
-    const r = await request('GET', '/auth/magic?t=' + encodeURIComponent(msg.token));
-    ok(r.status === 302 && r.headers.location === '/host', 're-issued host magic link consumes successfully');
+    ok(msg.role === 'host' && typeof msg.token === 'string' && msg.token.length > 20 && msg.ttlMs === MAGIC_TTL_MS && msg.reusable === false && msg.qrPath.startsWith('/keys/link-qr?t='), 'admin gets a fresh single-use host link with the default lifetime and a QR path');
+    const r = await magicPost(msg.token, 'host');
+    ok(r.status === 302 && r.headers.location === '/host', 're-issued host magic link signs in');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:mint-magic-link', payload: { role: 'admin', ttlMs: 7 * 24 * 3600 * 1000, reusable: true } }));
+    const msg2 = await waitMessage(ws, m => m.type === 'auth:magic-link', 2000);
+    ok(msg2.role === 'admin' && msg2.reusable === true && msg2.ttlMs === 7 * 24 * 3600 * 1000 && msg2.keys && msg2.keys.outstandingLinks >= 1, 'admin can mint a reusable 7-day link; keys status counts outstanding links');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:mint-magic-link', payload: { role: 'admin', ttlMs: 1 } }));
+    const msg3 = await waitMessage(ws, m => m.type === 'auth:magic-link', 2000);
+    ok(msg3.ttlMs === srv.MAGIC_TTL_MIN_MS, 'a too-short lifetime is clamped');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'auth:revoke-magic-links' }));
+    const rv = await waitMessage(ws, m => m.type === 'auth:links-revoked', 2000);
+    ok(rv.count >= 2 && rv.keys.outstandingLinks === 0, 'revoke from the admin page');
+    const page = (await request('GET', '/admin', { headers: { Cookie: cookie } })).body;
+    ok(page.includes('id="linkTtlSelect"') && page.includes('id="linkReusableInput"') && page.includes('id="revokeLinksBtn"') && page.includes("image: msg.qrPath"), 'admin: lifetime, reusable, revoke and QR in Sign-in & keys');
     try { ws.close(); } catch {}
   }
 }
@@ -3386,20 +3439,22 @@ async function keyRemintTests() {
       { role: 'superuser', token: 'nope', expiresAt: Date.now() + 60_000 },
       'junk', null
     ]));
-    const r1 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
-    ok(r1.status === 302 && r1.headers.location === '/admin', 'file-minted admin link signs in (imported on first click)');
+    const r1 = await magicPost(good, 'admin');
+    ok(r1.status === 302 && r1.headers.location === '/admin', 'file-minted admin link signs in (imported on first press of Sign in)');
     ok((r1.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')), 'session cookie issued');
     ok(!fs.existsSync(SIGNIN_LINKS_PATH), 'links file removed after import');
-    const r2 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
+    const r2 = await magicPost(good, 'admin');
     ok(r2.status === 302 && /error=1/.test(r2.headers.location || ''), 'imported link is single-use');
-    const r3 = await request('GET', '/auth/magic?t=' + encodeURIComponent(expired));
+    const r3 = await magicPost(expired, 'admin');
     ok(r3.status === 302 && /error=1/.test(r3.headers.location || ''), 'expired entry was not imported');
-    const r4 = await request('GET', '/auth/magic?t=' + encodeURIComponent(hostLink));
+    const g4 = await request('GET', '/auth/magic?t=' + encodeURIComponent(hostLink));
+    ok(g4.status === 200 && g4.body.includes('Sign in as host'), 'opening a file-minted host link shows the host Sign in page (import on GET, nothing consumed)');
+    const r4 = await magicPost(hostLink, 'host');
     ok(r4.status === 302 && r4.headers.location === '/host', 'host entry imported with the host role');
     // A stale copy of the file must not resurrect a consumed token.
     fs.writeFileSync(SIGNIN_LINKS_PATH, JSON.stringify([{ role: 'admin', token: good, expiresAt: Date.now() + 60_000 }]));
     ok(importPendingSignInLinks() === 0, 're-import of an already-consumed token is ignored');
-    const r5 = await request('GET', '/auth/magic?t=' + encodeURIComponent(good));
+    const r5 = await magicPost(good, 'admin');
     ok(r5.status === 302 && /error=1/.test(r5.headers.location || ''), 'consumed token stays dead after re-import');
     clearLoginFailures('127.0.0.1');
   }
@@ -3462,10 +3517,17 @@ async function keyRemintTests() {
     const li2 = await runCli(['links', 'host'], env);
     const um2 = li2.stdout.match(/\/auth\/magic\?t=([A-Za-z0-9_-]+)/);
     ok(li2.code === 0 && !!um2, 'a second links invocation works (appends, does not clobber)');
-    const g1 = await rawRequest(port, 'GET', '/auth/magic?t=' + (um ? um[1] : 'x'));
+    const magicForm = t => ({ headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 't=' + encodeURIComponent(t) });
+    const g1 = await rawRequest(port, 'POST', '/auth/magic', magicForm(um ? um[1] : 'x'));
     ok(g1.status === 302 && g1.headers.location === '/admin' && (g1.setCookie || []).some(c => c.startsWith('omegaquiz_sess=')), 'file-minted admin link signs in on the running server');
-    const g2 = await rawRequest(port, 'GET', '/auth/magic?t=' + (um2 ? um2[1] : 'x'));
+    const li3 = await runCli(['links', 'host', '--hours', '48', '--reusable'], env);
+    const um3 = li3.stdout.match(/\/auth\/magic\?t=([A-Za-z0-9_-]+)/);
+    ok(li3.code === 0 && !!um3 && /reusable until they expire, valid 2880 min/.test(li3.stdout), 'links --hours 48 --reusable mints a reusable two-day link');
+    const g2 = await rawRequest(port, 'POST', '/auth/magic', magicForm(um2 ? um2[1] : 'x'));
     ok(g2.status === 302 && g2.headers.location === '/host', 'file-minted host link (second invocation) also signs in');
+    const g3a = await rawRequest(port, 'POST', '/auth/magic', magicForm(um3 ? um3[1] : 'x'));
+    const g3b = await rawRequest(port, 'POST', '/auth/magic', magicForm(um3 ? um3[1] : 'x'));
+    ok(g3a.status === 302 && g3a.headers.location === '/host' && g3b.status === 302 && g3b.headers.location === '/host', 'the reusable file-minted link signs in twice');
     ok(!fs.existsSync(path.join(dataDir, 'signin-links.json')), 'signin-links.json consumed');
 
     // --- refusals ---

@@ -124,7 +124,7 @@ When the server starts you'll see a boot banner like this in the logs:
  Questions:   0 main + 0 bonus   (empty — import a CSV or load samples from the admin Questions tab)
 
  ──  Sign in  ─────────────────────────
- Click one of these magic links from your terminal (single-use, 10 min):
+ Open one of these magic links and press Sign in (single-use, 60 min):
     Host  →  https://quiz.example.com/auth/magic?t=mhc_aBcDeF…
     Admin →  https://quiz.example.com/auth/magic?t=mhc_xYz123…
 
@@ -134,8 +134,8 @@ When the server starts you'll see a boot banner like this in the logs:
 ========================================
 ```
 
-1. Click the **Admin** magic link in a fresh browser tab (your facilitator laptop). It signs you in and lands on the admin dashboard.
-2. Click the **Host** magic link on the projector laptop (full-screen, F11).
+1. Open the **Admin** magic link in a fresh browser tab (your facilitator laptop) and press **Sign in**. It lands on the admin dashboard.
+2. Open the **Host** magic link on the projector laptop and press **Sign in** (full-screen, F11).
 3. Both links are single-use and expire after 10 minutes. If they expire before you click, sign in via `/auth/login?role=...` and enter the recovery token from Step 1.
 
 If the boot banner never appeared, see [Common failures](#common-failures) below.
@@ -178,7 +178,7 @@ Two limits, both deliberate:
 - **Tokens set as environment variables win over the file.** If you manage `HOST_TOKEN` / `ADMIN_TOKEN` with `fly secrets set` (or `-e` in Docker), `remint` refuses and prints a ready-to-paste replacement instead — apply it with `fly secrets set ADMIN_TOKEN=…`, which restarts the app. Rotating an env-managed token in memory would silently undo itself on the next boot, so the tool won't.
 - **Rotating does not sign anyone out.** Sessions live in memory; if you need every device out (say the admin laptop was stolen), rotate the token *and* restart (**Settings → Developer options → Restart server**, or `fly machine restart`).
 
-Sign-ins themselves live in `DATA_DIR/auth-sessions.json` (mode 0600, session ids only, no tokens) so a redeploy keeps hosts and admins signed in; delete the file to sign everyone out at once. Magic links printed by `links` or the boot banner are single-use and expire after 10 minutes, so their appearance in `fly logs` or your terminal history is harmless once clicked. Anyone with shell access to the machine could mint them anyway — the same people who can read `secrets.json`.
+Sign-ins themselves live in `DATA_DIR/auth-sessions.json` (mode 0600, session ids only, no tokens) so a redeploy keeps hosts and admins signed in; delete the file to sign everyone out at once. Magic links printed by `links` or the boot banner are single-use and expire after an hour (`links --hours N --reusable` mints longer-lived, reusable ones; opening a link never consumes it, only its Sign in button does), so their appearance in `fly logs` or your terminal history is harmless once clicked. Anyone with shell access to the machine could mint them anyway — the same people who can read `secrets.json`.
 
 ---
 
