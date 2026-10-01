@@ -5096,7 +5096,8 @@ if (require.main === module) {
     console.log('Subcommands (run on the server — they share DATA_DIR with the live process):');
     console.log('  remint <admin|host|all>  Rotate a recovery token in place. No restart: the');
     console.log('                           running server adopts it on the next recovery sign-in.');
-    console.log('  links [admin|host|all]   Mint fresh single-use magic sign-in links (10 min).');
+    console.log('  links [admin|host|all]   Mint fresh magic sign-in links (1 h, single-use;');
+    console.log('                           --hours N and --reusable change that).');
     console.log('');
     console.log('Environment variables:');
     console.log('  QUESTIONS_SEED_URL     Same as --seed-url. CLI flag takes precedence.');
