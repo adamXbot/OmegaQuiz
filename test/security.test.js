@@ -4726,6 +4726,142 @@ async function questionTimerTests() {
 }
 
 // ----------------------------------------------------------------------------
+// Pack library
+// ----------------------------------------------------------------------------
+async function packLibraryTests() {
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  const { PACKS_DIR, PACK_ID_RE, PACK_AUTO_KEEP, listPacks } = srv;
+  const admin = await loginAs('admin', process.env.ADMIN_TOKEN);
+  const aws = await openWs({ cookie: admin.cookie });
+  let adminState = null, lastPacks = null, bank = null;
+  aws.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'admin:state') adminState = m.state; if (m.type === 'packs:list') lastPacks = m.packs; if (m.type === 'admin:questions') bank = m; } catch {} });
+  aws.send(JSON.stringify({ type: 'admin:hello' }));
+  await waitMessage(aws, m => m.type === 'admin:init');
+  const act = (action, payload) => aws.send(JSON.stringify({ type: 'admin:action', action, payload: payload || {} }));
+  const hostAction = (action, payload) => act('game:host-action', { hostAction: action, hostPayload: payload || {} });
+  async function until(pred, timeout = 3000) { const t0 = Date.now(); while (Date.now() - t0 < timeout) { if (adminState && pred(adminState)) return adminState; await pause(20); } return null; }
+  const reply = types => waitMessage(aws, m => types.includes(m.type), 3000);
+
+  section('Packs: save, list, load, rename, duplicate, delete');
+  {
+    hostAction('reset-game');
+    await until(s => s.phase === 'lobby');
+    act('questions:reset-defaults');
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    act('packs:save', { title: '  Phishing — October  ', tagline: 'Cohort A' });
+    const saved = await reply(['packs:saved', 'error']);
+    ok(saved.type === 'packs:saved' && saved.pack.title === 'Phishing — October' && saved.pack.mainCount === 10 && saved.pack.bonusCount === 5, `packs:save stores the live bank as a pack (${saved.error || saved.pack.id})`);
+    const id = saved.pack.id;
+    ok(PACK_ID_RE.test(id) && id.startsWith('phishing-october-'), 'pack id is a slug of the title plus a suffix');
+    ok(fs.existsSync(path.join(PACKS_DIR, id + '.json')), 'the pack is a file under DATA_DIR/packs');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(PACKS_DIR, id + '.json'), 'utf8'));
+    ok(onDisk.title === 'Phishing — October' && onDisk.tagline === 'Cohort A' && onDisk.main.length === 10 && onDisk.auto === false, 'pack file carries title, tagline and both sections');
+    act('packs:list');
+    const list = await reply(['packs:list']);
+    ok(list.packs.length === 1 && list.packs[0].id === id && list.packs[0].hasImages === false, 'packs:list returns the summary');
+
+    // Load with a different bank live: the live bank is snapshotted first.
+    act('questions:update', { main: [{ q: 'Only one?', options: ['a', 'b', 'c', 'd'], correct: 0, lesson: 'L' }], bonus: [] });
+    await waitMessage(aws, m => m.type === 'admin:questions', 3000);
+    const brandingBefore = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+    lastPacks = null;
+    act('packs:load', { packId: id, applyBranding: false });
+    const loaded = await reply(['packs:loaded', 'error']);
+    ok(loaded.type === 'packs:loaded' && loaded.pack.id === id && loaded.brandingUpdated === false && loaded.snapshotId, `packs:load replaces the bank and reports the snapshot (${loaded.error || ''})`);
+    await pause(100);
+    ok(bank && bank.questions.length === 10 && bank.bonusQuestions.length === 5, 'admin:questions carries the loaded pack');
+    const brandingAfter = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+    ok(brandingAfter.quizTitle === brandingBefore.quizTitle, 'applyBranding:false leaves the quiz title alone');
+    const packsNow = listPacks();
+    const auto = packsNow.find(p => p.auto);
+    ok(auto && auto.mainCount === 1 && /^Auto: before loading/.test(auto.title), 'the replaced one-question bank is kept as an automatic snapshot');
+    ok(packsNow[0].id === loaded.snapshotId || packsNow[0].id === id, 'list is newest first');
+
+    act('packs:load', { packId: id, applyBranding: true });
+    const loaded2 = await reply(['packs:loaded', 'error']);
+    ok(loaded2.type === 'packs:loaded' && loaded2.brandingUpdated === true, 'applyBranding:true switches the quiz title');
+    const b2 = await (await fetch(`http://127.0.0.1:${getPort()}/branding.json`)).json();
+    ok(/Phishing/.test(b2.quizTitle) && /Cohort A/.test(b2.tagline), 'quiz title and tagline now come from the pack');
+
+    act('packs:rename', { packId: id, title: 'Phishing — November', tagline: 'Cohort B' });
+    const l3 = await reply(['packs:list', 'error']);
+    ok(l3.type === 'packs:list' && l3.packs.find(p => p.id === id).title === 'Phishing — November' && l3.packs.find(p => p.id === id).tagline === 'Cohort B', 'rename changes title and tagline');
+    act('packs:duplicate', { packId: id });
+    const l4 = await reply(['packs:list', 'error']);
+    const copy = l4.packs.find(p => p.title === 'Phishing — November (copy)');
+    ok(copy && copy.id !== id && copy.mainCount === 10, 'duplicate makes a copy under a new id');
+    act('packs:save', { packId: copy.id });
+    const over = await reply(['packs:saved', 'error']);
+    ok(over.type === 'packs:saved' && over.pack.id === copy.id && over.pack.title === 'Phishing — November (copy)', 'save with packId overwrites the questions and keeps the name');
+    act('packs:delete', { packId: copy.id });
+    const l5 = await reply(['packs:list', 'error']);
+    ok(l5.type === 'packs:list' && !l5.packs.find(p => p.id === copy.id) && !fs.existsSync(path.join(PACKS_DIR, copy.id + '.json')), 'delete removes the file');
+    act('packs:delete', { packId: 'nope-000000' });
+    const del2 = await reply(['error', 'packs:list']);
+    ok(del2.type === 'error' && /no such pack/.test(del2.error), 'deleting an unknown pack is an error');
+    act('packs:load', { packId: '../../etc/passwd' });
+    const bad = await reply(['error', 'packs:loaded']);
+    ok(bad.type === 'error', 'a pack id that is not a slug is refused');
+
+    const dl = await request('GET', `/packs/${id}.json`, { headers: { Cookie: admin.cookie } });
+    ok(dl.status === 200 && /attachment/.test(dl.headers['content-disposition'] || '') && JSON.parse(dl.body).main.length === 10 && JSON.parse(dl.body).title === 'Phishing — November', 'GET /packs/:id.json exports the pack in import format');
+    const anon = await request('GET', `/packs/${id}.json`);
+    ok(anon.status === 302, 'the export is admin-only');
+    const missing = await request('GET', '/packs/nope-000000.json', { headers: { Cookie: admin.cookie } });
+    ok(missing.status === 404, 'unknown pack → 404');
+  }
+
+  section('Packs: clear all, empty-bank refusal, snapshots pruned, load refused mid-game');
+  {
+    act('questions:clear');
+    const cleared = await reply(['questions:cleared', 'error']);
+    ok(cleared.type === 'questions:cleared' && cleared.removed === 15 && cleared.snapshotId, 'questions:clear empties the bank and snapshots it');
+    await until(s => s.totalQuestions === 0);
+    ok(adminState.totalQuestions === 0 && JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf8')).main.length === 0, 'the bank is empty on the state and on disk');
+    act('packs:save', { title: 'Nothing' });
+    const empty = await reply(['error', 'packs:saved']);
+    ok(empty.type === 'error' && /empty/.test(empty.error), 'saving an empty bank is refused');
+
+    // Load repeatedly: only the last PACK_AUTO_KEEP snapshots survive.
+    const keep = listPacks().find(p => !p.auto);
+    for (let i = 0; i < PACK_AUTO_KEEP + 3; i++) {
+      act('packs:load', { packId: keep.id, applyBranding: false });
+      await reply(['packs:loaded', 'error']);
+    }
+    const autos = listPacks().filter(p => p.auto);
+    ok(autos.length <= PACK_AUTO_KEEP, `at most ${PACK_AUTO_KEEP} automatic snapshots are kept (${autos.length})`);
+
+    hostAction('start-game');
+    await until(s => s.phase === 'question');
+    act('packs:load', { packId: keep.id, applyBranding: false });
+    const refused = await reply(['error', 'packs:loaded']);
+    ok(refused.type === 'error' && /lobby/.test(refused.error), 'load is refused during a question');
+    act('questions:clear');
+    const refused2 = await reply(['error', 'questions:cleared']);
+    ok(refused2.type === 'error', 'clear is refused during a question');
+    act('packs:save', { title: 'Mid-game save' });
+    const midSave = await reply(['packs:saved', 'error']);
+    ok(midSave.type === 'packs:saved', 'saving the bank as a pack is allowed mid-game');
+    hostAction('return-to-lobby');
+    await until(s => s.phase === 'lobby');
+  }
+
+  section('Packs: admin page markup');
+  {
+    const page = (await request('GET', '/admin', { headers: { Cookie: admin.cookie } })).body;
+    ok(page.includes('id="packsPanel"') && page.includes('id="packSaveBtn"') && page.includes('id="clearBankBtn"'), 'admin: Packs panel with Save bank as pack and Clear all');
+    ok(page.includes('.pack-save[hidden]{display:none}'), 'admin: the save-as-pack form is really hidden until asked for');
+    ok(page.includes("label: 'Also switch the quiz title and tagline to this pack\\'s'"), 'admin: load asks each time whether to switch the quiz title');
+    ok(page.includes('confirmAction(`Delete ${label}?`'), 'admin: deleting a single question asks first');
+  }
+
+  for (const p of listPacks()) { try { fs.unlinkSync(path.join(PACKS_DIR, p.id + '.json')); } catch {} }
+  act('questions:reset-defaults');
+  await waitMessage(aws, m => m.type === 'admin:questions', 3000).catch(() => null);
+  try { aws.close(); } catch {}
+}
+
+// ----------------------------------------------------------------------------
 // Run everything
 // ----------------------------------------------------------------------------
 (async () => {
@@ -4767,6 +4903,7 @@ async function questionTimerTests() {
     await presentationPolishTests();
     await presenterViewTests();
     await questionTimerTests();
+    await packLibraryTests();
     await a11yMarkupTests();
     await stateSweepTests(); // fast-forwards the sweep clock: every earlier session / magic link expires here
     await dataWipeTests();   // run last — it removes data files

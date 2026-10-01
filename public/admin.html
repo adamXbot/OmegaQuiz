@@ -144,6 +144,21 @@ body{
   font-size:13px;resize:vertical;box-sizing:border-box;
 }
 .q-card textarea{min-height:50px}
+.pack-save[hidden]{display:none}
+.pack-save{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;padding:10px;border:1px dashed var(--gold-dim);border-radius:8px}
+.pack-save input[type=text]{flex:1;min-width:180px;font-family:inherit;font-size:13px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:7px 10px}
+.packs-list{display:flex;flex-direction:column;gap:8px}
+.pack-row{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;background:rgba(2,6,37,.6);border:1px solid var(--gray-line);border-radius:8px;padding:10px 12px}
+.pack-row.auto{border-style:dashed;opacity:.85}
+.pack-row .pack-main{flex:1;min-width:220px}
+.pack-row .pack-title{color:var(--white);font-size:14px;font-weight:600}
+.pack-row .pack-meta{font-size:11px;color:var(--gray-text);margin-top:2px}
+.pack-row .pack-actions{display:flex;gap:6px;flex-wrap:wrap}
+.pack-row .pack-rename{display:flex;gap:6px;flex-wrap:wrap;align-items:center;width:100%}
+.pack-row .pack-rename input{font-family:inherit;font-size:12px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:5px 8px;min-width:160px}
+.pack-chip{display:inline-block;background:rgba(244,196,48,.18);color:var(--gold);font-size:10px;padding:1px 7px;border-radius:10px;letter-spacing:.1em;text-transform:uppercase;margin-left:6px;vertical-align:middle}
+.modal .modal-check{display:flex;align-items:flex-start;gap:8px;margin:12px 0 4px;font-size:13px;color:var(--white);cursor:pointer}
+.modal .modal-check[hidden]{display:none}
 .stop-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed var(--gray-line)}
 .stop-rewind{display:inline-flex;gap:6px;align-items:center}
 .stop-rewind select{font-family:inherit;font-size:12px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:5px 8px;min-height:28px}
@@ -444,6 +459,26 @@ body{
           Import takes the CSV template or a JSON pack — the same format as the packs in the
           <code>samples/</code> folder of the GitHub repo, so a downloaded pack loads as-is.
         </p>
+      </div>
+
+      <!-- Pack library: saved banks on the server, switchable without losing
+           anything (a load or a clear snapshots the live bank first). -->
+      <div class="panel" id="packsPanel">
+        <h2>Packs
+          <span class="panel-actions">
+            <button class="btn small primary" id="packSaveBtn" title="Save the question bank as a new pack">Save bank as pack…</button>
+            <button class="btn small danger" id="clearBankBtn" title="Remove every question (the bank is snapshotted first)">Clear all questions</button>
+          </span>
+        </h2>
+        <form id="packSaveForm" class="pack-save" hidden>
+          <label for="packSaveTitle" class="muted">Pack name</label>
+          <input type="text" id="packSaveTitle" maxlength="80" placeholder="e.g. Phishing — October cohort" autocomplete="off">
+          <input type="text" id="packSaveTagline" maxlength="120" placeholder="Tagline (optional)" autocomplete="off">
+          <button type="submit" class="btn small primary">Save</button>
+          <button type="button" class="btn small ghost" id="packSaveCancel">Cancel</button>
+        </form>
+        <p class="muted" id="packsHint" style="font-size:12px;margin-bottom:10px">Save the current bank to switch between question sets. Loading a pack replaces the bank; the bank is kept as an automatic snapshot first, and the last 5 snapshots are listed here too.</p>
+        <div id="packsList" class="packs-list"><div class="muted" style="font-style:italic">No packs saved yet.</div></div>
       </div>
 
       <div class="panel">
@@ -908,6 +943,7 @@ body{
   <div class="modal">
     <h3 id="confirmTitle">Confirm</h3>
     <p id="confirmMsg"></p>
+    <label class="modal-check" id="confirmCheckWrap" hidden><input type="checkbox" id="confirmCheck" style="accent-color:var(--gold);transform:scale(1.15);margin-top:2px"><span id="confirmCheckLabel"></span></label>
     <div class="modal-actions">
       <button class="btn ghost" id="confirmCancelBtn">Cancel</button>
       <button class="btn danger" id="confirmOk">Confirm</button>
@@ -1015,6 +1051,7 @@ function connect() {
       eventLog = msg.eventLog || [];
       renderLog();
       if (msg.keys) renderKeys(msg.keys);
+      adminAction('packs:list');
     } else if (msg.type === 'auth:keys-status') {
       renderKeys(msg.keys);
     } else if (msg.type === 'auth:magic-link') {
@@ -1052,6 +1089,17 @@ function connect() {
       const fmt = msg.format === 'json' ? 'JSON' : 'CSV';
       const extra = msg.brandingUpdated ? ' Quiz title and category updated from the pack.' : '';
       showBanner('success', `${fmt} imported: ${msg.mainCount} main + ${msg.bonusCount} bonus question${msg.bonusCount === 1 ? '' : 's'} loaded.${extra}`);
+    } else if (msg.type === 'packs:list') {
+      packs = msg.packs || [];
+      renderPacks();
+    } else if (msg.type === 'packs:saved') {
+      showBanner('success', `Saved pack "${msg.pack.title}" (${msg.pack.mainCount} main + ${msg.pack.bonusCount} bonus).`);
+      document.getElementById('packSaveForm').hidden = true;
+    } else if (msg.type === 'packs:loaded') {
+      awaitingBankChange = false;
+      showBanner('success', `Loaded pack "${msg.pack.title}" (${msg.pack.mainCount} main + ${msg.pack.bonusCount} bonus).${msg.brandingUpdated ? ' Quiz title and tagline updated.' : ''}${msg.snapshotId ? ' The previous bank was kept as an automatic snapshot.' : ''}`);
+    } else if (msg.type === 'questions:cleared') {
+      showBanner('success', `Removed ${msg.removed} question${msg.removed === 1 ? '' : 's'}.${msg.snapshotId ? ' The bank was kept as an automatic snapshot in Packs.' : ''}`);
     } else if (msg.type === 'samples:list') {
       renderPacksList(msg.packs, msg.sourceUrl);
     } else if (msg.type === 'samples:loaded') {
@@ -1547,7 +1595,12 @@ function renderPlayers() {
 
 document.getElementById('rosterSearch').addEventListener('input', () => { if (state) renderPlayers(); });
 
+let packsRenderedFor = null;
 function renderQuestionLockState() {
+  // Load is only allowed in the lobby or at the end: re-render the pack list
+  // when that changes, not on every state push (it would eat an open rename).
+  const canLoad = state.phase === 'lobby' || state.phase === 'end';
+  if (canLoad !== packsRenderedFor) { packsRenderedFor = canLoad; renderPacks(); }
   const locked = !(state.phase === 'lobby' || state.phase === 'end');
   document.getElementById('qLockBanner').style.display = locked ? 'flex' : 'none';
   document.getElementById('saveQuestionsBtn').disabled = locked || !dirty;
@@ -1585,6 +1638,87 @@ function logEntryHtml(e) {
 /* =====================
    QUESTION EDITOR
    ===================== */
+/* =====================
+   PACK LIBRARY
+   ===================== */
+let packs = [];
+function packDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+function renderPacks() {
+  const box = document.getElementById('packsList');
+  box.innerHTML = '';
+  if (!packs.length) { box.innerHTML = '<div class="muted" style="font-style:italic">No packs saved yet. Save the current bank to start a library.</div>'; return; }
+  const canLoad = !state || state.phase === 'lobby' || state.phase === 'end';
+  packs.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'pack-row' + (p.auto ? ' auto' : '');
+    row.dataset.pack = p.id;
+    const count = `${p.mainCount} main${p.bonusCount ? ` + ${p.bonusCount} bonus` : ''}`;
+    row.innerHTML = `
+      <div class="pack-main">
+        <div class="pack-title">${escapeHtml(p.title)}${p.auto ? '<span class="pack-chip">auto snapshot</span>' : ''}${p.category ? `<span class="pack-chip">${escapeHtml(p.category)}</span>` : ''}</div>
+        <div class="pack-meta">${escapeHtml(p.tagline || '')}${p.tagline ? ' · ' : ''}${count}${p.hasImages ? ' · images' : ''}${p.hasNotes ? ' · notes' : ''} · saved ${escapeHtml(packDate(p.updatedAt))}</div>
+      </div>
+      <div class="pack-actions">
+        <button class="btn small primary" data-act="load" ${canLoad ? '' : 'disabled title="Only in the lobby or after the game ends"'}>Load</button>
+        <button class="btn small" data-act="overwrite" title="Replace this pack with the current bank">Save current here</button>
+        <button class="btn small ghost" data-act="rename">Rename</button>
+        <button class="btn small ghost" data-act="duplicate">Duplicate</button>
+        <a class="btn small ghost" href="/packs/${escapeHtmlAttr(p.id)}.json" download style="text-decoration:none">Export</a>
+        <button class="btn small danger" data-act="delete">Delete</button>
+      </div>`;
+    row.querySelector('[data-act="load"]').onclick = () => confirmAction(
+      `Load "${p.title}"?`,
+      `The current bank (${questions.length} main + ${bonusQuestions.length} bonus) is replaced by this pack's ${count}. The current bank is kept as an automatic snapshot in this list first.` + (dirty ? ' Unsaved edits in the editor are discarded.' : ''),
+      also => { awaitingBankChange = true; adminAction('packs:load', { packId: p.id, applyBranding: !!also }); },
+      { checkbox: { label: 'Also switch the quiz title and tagline to this pack\'s', checked: false }, okLabel: 'Load pack' }
+    );
+    row.querySelector('[data-act="overwrite"]').onclick = () => confirmAction(
+      `Replace "${p.title}" with the current bank?`, `The pack's questions are replaced by the ${questions.length} main + ${bonusQuestions.length} bonus questions saved on the server. Its name stays.`,
+      () => adminAction('packs:save', { packId: p.id }), { okLabel: 'Replace' }
+    );
+    row.querySelector('[data-act="rename"]').onclick = () => {
+      if (row.querySelector('.pack-rename')) return;
+      const f = document.createElement('form');
+      f.className = 'pack-rename';
+      f.innerHTML = `<input type="text" maxlength="80" value="${escapeHtmlAttr(p.title)}" aria-label="Pack name"><input type="text" maxlength="120" value="${escapeHtmlAttr(p.tagline || '')}" placeholder="Tagline" aria-label="Tagline"><button type="submit" class="btn small primary">Save name</button><button type="button" class="btn small ghost" data-act="cancel-rename">Cancel</button>`;
+      f.onsubmit = e => { e.preventDefault(); const [t, g] = f.querySelectorAll('input'); if (!t.value.trim()) return; adminAction('packs:rename', { packId: p.id, title: t.value.trim(), tagline: g.value.trim() }); };
+      f.querySelector('[data-act="cancel-rename"]').onclick = () => f.remove();
+      row.appendChild(f);
+      f.querySelector('input').focus();
+    };
+    row.querySelector('[data-act="duplicate"]').onclick = () => adminAction('packs:duplicate', { packId: p.id });
+    row.querySelector('[data-act="delete"]').onclick = () => confirmAction(`Delete "${p.title}"?`, 'The pack file is removed from the server. The live question bank is not affected.', () => adminAction('packs:delete', { packId: p.id }), { okLabel: 'Delete pack' });
+    box.appendChild(row);
+  });
+}
+document.getElementById('packSaveBtn').onclick = () => {
+  const f = document.getElementById('packSaveForm');
+  f.hidden = !f.hidden;
+  if (!f.hidden) {
+    const t = document.getElementById('packSaveTitle');
+    if (!t.value) t.value = brandText(brandingDraft && brandingDraft.quizTitle) || '';
+    document.getElementById('packSaveTagline').value = brandText(brandingDraft && brandingDraft.tagline) || '';
+    t.focus(); t.select();
+  }
+};
+document.getElementById('packSaveCancel').onclick = () => { document.getElementById('packSaveForm').hidden = true; };
+document.getElementById('packSaveForm').onsubmit = e => {
+  e.preventDefault();
+  const title = document.getElementById('packSaveTitle').value.trim();
+  if (!title) return;
+  if (dirty) { showBanner('warn', 'Save Changes first: a pack holds the bank as saved on the server, not the edits in the editor.'); return; }
+  adminAction('packs:save', { title, tagline: document.getElementById('packSaveTagline').value.trim() });
+};
+document.getElementById('clearBankBtn').onclick = () => confirmAction(
+  'Clear all questions?',
+  `Removes all ${questions.length} main and ${bonusQuestions.length} bonus questions from the bank. The bank is kept as an automatic snapshot in Packs first, so this can be undone by loading it.`,
+  () => { awaitingBankChange = true; adminAction('questions:clear'); }, { okLabel: 'Clear all' }
+);
+
 function renderQuestions() {
   document.getElementById('mainCount').textContent = questions.length;
   document.getElementById('bonusCount').textContent = bonusQuestions.length;
@@ -1746,7 +1880,10 @@ function renderQuestionList(targetId, arr, kind) {
       renderQuestions();
     };
     card.querySelector('[data-action="delete"]').onclick = () => {
-      arr.splice(idx, 1); markDirty(); renderQuestions();
+      const label = kind === 'main' ? `question ${idx + 1}` : `bonus ${idx + 1}`;
+      confirmAction(`Delete ${label}?`, 'It is removed from the editor now and from the saved bank when you click Save Changes.', () => {
+        arr.splice(idx, 1); markDirty(); renderQuestions();
+      }, { okLabel: 'Delete' });
     };
     card.querySelector('[data-action="up"]').onclick = () => {
       if (idx === 0) return;
@@ -2006,12 +2143,19 @@ function trapModal(modalEl, opts) {
 }
 
 let _confirmDetach = null;
-function confirmAction(title, msg, onOk) {
+// Optional { checkbox: { label, checked } } adds a tick box whose value is
+// passed to onOk; { okLabel } renames the confirm button.
+function confirmAction(title, msg, onOk, opts = {}) {
   document.getElementById('confirmTitle').textContent = title;
   document.getElementById('confirmMsg').textContent = msg;
+  const wrap = document.getElementById('confirmCheckWrap');
+  const check = document.getElementById('confirmCheck');
+  if (opts.checkbox) { wrap.hidden = false; document.getElementById('confirmCheckLabel').textContent = opts.checkbox.label; check.checked = !!opts.checkbox.checked; }
+  else { wrap.hidden = true; check.checked = false; }
+  document.getElementById('confirmOk').textContent = opts.okLabel || 'Confirm';
   const modal = document.getElementById('confirmModal');
   modal.classList.add('active');
-  document.getElementById('confirmOk').onclick = () => { closeModal(); onOk(); };
+  document.getElementById('confirmOk').onclick = () => { closeModal(); onOk(opts.checkbox ? check.checked : undefined); };
   if (_confirmDetach) _confirmDetach();
   _confirmDetach = trapModal(modal, {
     initialFocus: document.getElementById('confirmOk'),
