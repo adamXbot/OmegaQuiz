@@ -923,6 +923,9 @@ let questions = [];
 let bonusQuestions = [];
 let eventLog = [];
 let dirty = false;
+// Set when this page asked the server to change the bank (Save, import,
+// sample load), so the confirming admin:questions is known to be ours.
+let awaitingBankChange = false;
 
 // U1: WS auto-reconnect with exponential backoff. After the cap is reached we
 // surface a manual "Reconnect" button + a recovery-token link so the operator
@@ -990,10 +993,16 @@ function connect() {
   ws.onmessage = e => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'admin:init') {
-      questions = msg.questions;
-      bonusQuestions = msg.bonusQuestions;
+      // A reconnect (server restart, Wi-Fi blip) must not throw away edits
+      // in the Questions tab: keep the drafts and say so.
+      if (dirty && (questions.length || bonusQuestions.length)) {
+        showBanner('warn', 'Reconnected. Your unsaved question edits are still here — Save to keep them, or reload the page to discard them.');
+      } else {
+        questions = msg.questions;
+        bonusQuestions = msg.bonusQuestions;
+        renderQuestions();
+      }
       eventLog = msg.eventLog || [];
-      renderQuestions();
       renderLog();
       if (msg.keys) renderKeys(msg.keys);
     } else if (msg.type === 'auth:keys-status') {
@@ -1013,12 +1022,20 @@ function connect() {
       renderLog();
       renderOverviewLog();
     } else if (msg.type === 'admin:questions') {
-      // Server confirmed new questions saved
-      questions = msg.questions;
-      bonusQuestions = msg.bonusQuestions;
-      dirty = false;
-      renderQuestions();
-      showBanner('success', 'Questions saved successfully.');
+      // The bank changed on the server: our own Save, an import or sample
+      // load from this page, or another admin's save. Only the first two
+      // may replace edits in progress here.
+      if (dirty && !awaitingBankChange) {
+        showBanner('warn', 'The question bank was changed from another admin page. Your unsaved edits are kept here — Save to overwrite theirs, or reload to take their version.');
+      } else {
+        questions = msg.questions;
+        bonusQuestions = msg.bonusQuestions;
+        dirty = false;
+        document.getElementById('dirtyDot').style.display = 'none';
+        renderQuestions();
+        showBanner('success', 'Questions saved successfully.');
+      }
+      awaitingBankChange = false;
     } else if (msg.type === 'questions:imported') {
       // CSV / JSON import succeeded — admin:questions has already fired and
       // re-rendered. Replace the success banner with a more specific one.
@@ -1085,7 +1102,23 @@ document.querySelectorAll('[data-switch-tab]').forEach(el => {
   // that is about to be hidden, so focus would otherwise fall to <body>.
   el.addEventListener('click', () => switchTab(el.dataset.switchTab, { focus: true }));
 });
-function switchTab(name, { focus = false } = {}) {
+// The active tab lives in the URL hash (#players) and in localStorage, so
+// a reload lands where you were and a fresh visit opens the tab you used
+// last. Before this, every reload went back to Overview.
+const TAB_NAMES = TAB_BUTTONS.map(t => t.dataset.tab);
+const TAB_STORAGE_KEY = 'omegaquiz_admin_tab';
+function rememberedTab() {
+  const fromHash = location.hash.replace(/^#/, '');
+  if (TAB_NAMES.includes(fromHash)) return fromHash;
+  try { const saved = localStorage.getItem(TAB_STORAGE_KEY); if (TAB_NAMES.includes(saved)) return saved; } catch {}
+  return 'overview';
+}
+function switchTab(name, { focus = false, remember = true } = {}) {
+  if (!TAB_NAMES.includes(name)) name = 'overview';
+  if (remember) {
+    try { history.replaceState(null, '', '#' + name); } catch {}
+    try { localStorage.setItem(TAB_STORAGE_KEY, name); } catch {}
+  }
   TAB_BUTTONS.forEach(t => {
     const on = t.dataset.tab === name;
     t.classList.toggle('active', on);
@@ -1099,6 +1132,13 @@ function switchTab(name, { focus = false } = {}) {
     if (on) c.dispatchEvent(new CustomEvent('tab:shown', { detail: name }));
   });
 }
+window.addEventListener('hashchange', () => {
+  const name = location.hash.replace(/^#/, '');
+  if (TAB_NAMES.includes(name)) switchTab(name);
+});
+// After the rest of the script has registered its tab:shown listeners
+// (the Branding form loads on first show), open the remembered tab.
+setTimeout(() => { const initial = rememberedTab(); if (initial !== 'overview') switchTab(initial); }, 0);
 
 /* =====================
    BANNERS
@@ -1744,6 +1784,7 @@ document.getElementById('addBonusBtn').onclick = () => {
   markDirty(); renderQuestions();
 };
 document.getElementById('saveQuestionsBtn').onclick = () => {
+  awaitingBankChange = true;
   adminAction('questions:update', { main: questions, bonus: bonusQuestions });
 };
 document.getElementById('resetDefaultsBtn').onclick = () => {
