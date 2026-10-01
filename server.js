@@ -591,7 +591,9 @@ function newGame({ joinCode } = {}) {
     lifelineActive: null,
     eliminatedOptions: [],
     revealedCorrect: null,
-    audienceTally: null
+    audienceTally: null,
+    // Bumped by rewind-to so every screen treats a re-asked question as new.
+    rewinds: 0
   };
 }
 let game = newGame({ joinCode: CLI.command ? null : loadPersistedJoinCode() });
@@ -2328,6 +2330,7 @@ function pushHostState() {
       questionIndex: game.questionIndex,
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
+      rewinds: game.rewinds,
       totalQuestions: questions.length,
       playerCount: game.players.size,
       aliveCount: survivors().length,
@@ -2436,6 +2439,7 @@ function pushPresentState() {
       questionIndex: game.questionIndex,
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
+      rewinds: game.rewinds,
       totalQuestions: questions.length,
       totalBonus: bonusQuestions.length,
       playerCount: game.players.size,
@@ -2492,6 +2496,7 @@ function playerStateMessage(p, review) {
       joinCode: game.joinCode,
       questionIndex: game.questionIndex,
       inBonus: game.inBonus,
+      rewinds: game.rewinds,
       totalQuestions: questions.length,
       question: q ? {
         q: q.q,
@@ -2583,6 +2588,7 @@ function pushAdminState() {
       questionIndex: game.questionIndex,
       bonusIndex: game.bonusIndex,
       inBonus: game.inBonus,
+      rewinds: game.rewinds,
       totalQuestions: questions.length,
       totalBonus: bonusQuestions.length,
       reconnectWindowMs: PLAYER_RECONNECT_WINDOW_MS,
@@ -2810,28 +2816,64 @@ function hostAction(action, payload = {}) {
       break;
     }
     case 'return-to-lobby': {
-      // Soft reset for the "I clicked Start Game too early" scenario.
-      // Only valid while we're still in Q1 with everyone alive — once anyone
-      // has been eliminated, the host should use Reset (New Game) instead.
-      if (game.phase !== 'question' || game.questionIndex !== 0) {
-        logEvent('warn', 'return-to-lobby refused — not at Q1 question phase');
-        return;
-      }
-      const allAlive = [...game.players.values()].every(p => p.alive);
-      if (!allAlive) {
-        logEvent('warn', 'return-to-lobby refused — at least one player already eliminated');
-        return;
-      }
+      // Stop the game but keep the room: everyone goes back to the lobby
+      // with the same join code, alive again and on zero, so the quiz can
+      // start over (or a different pack can be loaded) without 60 phones
+      // re-scanning the QR. Used to be limited to Q1 with nobody out.
+      if (game.phase === 'lobby') return;
+      const from = game.inBonus ? `tiebreaker ${game.bonusIndex + 1}` : game.phase === 'end' ? 'the results' : `question ${game.questionIndex + 1}`;
       game.phase = 'lobby';
       game.questionIndex = 0;
+      game.bonusIndex = 0;
+      game.inBonus = false;
       resetCurrentAnswerState();
       game.eliminatedOptions = [];
       game.audienceTally = null;
       game.revealedCorrect = null;
-      // Wipe any history entries from the aborted Q1 (there shouldn't be any
-      // because history only writes on close-question, but be defensive).
-      game.players.forEach(p => { p.history = []; p.answeredScore = 0; });
-      logEvent('admin', 'Returned to lobby (game restarted, players retained)');
+      game.lifelineActive = null;
+      game.lifelinesUsed = { '5050': false, 'askit': false, 'skip': false };
+      game.players.forEach(p => { p.history = []; p.answeredScore = 0; p.alive = true; });
+      broadcast({ type: 'game:lobby-return' }, c => c.role === 'player');
+      logEvent('admin', `Back to the lobby from ${from} (players kept, scores cleared)`);
+      pushAll();
+      break;
+    }
+    case 'rewind-to': {
+      // Re-ask main question N (0-based `index`): scores and eliminations
+      // from that question on are undone by replaying each player's kept
+      // history, exactly as close-question scored it. Lifelines already
+      // spent stay spent — nobody can say which question they were for.
+      if (game.phase === 'lobby') return;
+      const index = payload.index;
+      if (!Number.isInteger(index) || index < 0 || index >= questions.length) {
+        logEvent('warn', `rewind refused — no main question ${Number.isInteger(index) ? index + 1 : String(index)}`);
+        return;
+      }
+      const highest = game.inBonus || game.phase === 'end' ? questions.length - 1 : game.questionIndex;
+      if (index > highest) {
+        logEvent('warn', `rewind refused — question ${index + 1} has not been asked yet`);
+        return;
+      }
+      game.players.forEach(p => {
+        p.history = (p.history || []).filter(h => /^Q\d+$/.test(h.label) && parseInt(h.label.slice(1), 10) <= index);
+        p.alive = true;
+        p.answeredScore = 0;
+        for (const h of p.history) {
+          if (!p.alive) break;
+          if (h.correct) p.answeredScore += 1; else p.alive = false;
+        }
+      });
+      game.phase = 'question';
+      game.questionIndex = index;
+      game.bonusIndex = 0;
+      game.inBonus = false;
+      game.rewinds += 1;
+      resetCurrentAnswerState();
+      game.eliminatedOptions = [];
+      game.audienceTally = null;
+      game.revealedCorrect = null;
+      game.lifelineActive = null;
+      logEvent('admin', `Rewound to question ${index + 1} — ${survivors().length} back in the running`);
       pushAll();
       break;
     }

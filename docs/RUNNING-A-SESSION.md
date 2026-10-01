@@ -90,6 +90,23 @@ setting for the animations.
 - **Finding someone.** Admin → Players has a search box (name or email). During a game anyone offline
   is listed first.
 
+## Stopping or rewinding a game
+
+Admin → Overview and the presenter view both have a **Stop or rewind** row while a game is under
+way (question, reveal or results). The buttons take two clicks: the first arms the button (it turns
+red and says what the second click does), the second within five seconds acts.
+
+- **Back to lobby, keep players** — everyone returns to the lobby with the same join code, alive and
+  on zero, and the lifelines are fresh. Phones say why they are back. Use it to start over, to swap
+  the question pack, or to stop a game that has gone wrong without sixty people re-scanning the QR.
+  It works from any question, any reveal, and the results screen.
+- **Rewind to question N** — re-asks a main question that has already been asked (from the tiebreaker
+  or the results, any of them). Scores and knock-outs from that question onwards are undone by
+  replaying each player's earlier answers, so a player who was knocked out on question 4 is back in
+  when you rewind to question 4. Lifelines already used stay used. The board and phones treat the
+  question as new.
+- **Reset (New Game)** is unchanged: it clears every player and issues a new join code.
+
 ## End of the game
 
 The board's ceremony names the top five places from fifth up. Players on the same score share a

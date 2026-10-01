@@ -1733,7 +1733,7 @@ async function returnToLobbyTests() {
     try { ws.close(); playerWs.close(); } catch {}
   }
 
-  section('return-to-lobby: refused outside Q1');
+  section('return-to-lobby: allowed from any question — players kept, alive, on zero');
   {
     const ws = await adminWs();
     fireHost(ws, 'reset-game');
@@ -1747,29 +1747,29 @@ async function returnToLobbyTests() {
 
     fireHost(ws, 'start-game');
     await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 0);
-
-    // Player answers Q1 correctly (correct=1), host closes → reveal, then next → Q2.
     playerWs.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
     await new Promise(r => setTimeout(r, 100));
+    fireHost(ws, 'apply-lifeline', { type: '5050' });
+    await awaitState(ws, s => s.lifelinesUsed && s.lifelinesUsed['5050']);
     fireHost(ws, 'close-question');
     await awaitState(ws, s => s.phase === 'reveal');
     fireHost(ws, 'next-question');
     const sQ2 = await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 1);
-    ok(sQ2.state.questionIndex === 1, 'now in Q2');
+    ok(sQ2.state.questionIndex === 1 && sQ2.state.players[0].score === 1, 'now in Q2 with a point on the board');
 
-    // Try return-to-lobby — server should ignore. Wait a short while and assert state didn't flip.
+    const notice = waitMessage(playerWs, m => m.type === 'game:lobby-return', 2000).then(() => true).catch(() => false);
     fireHost(ws, 'return-to-lobby');
-    await new Promise(r => setTimeout(r, 400));
-    // Snapshot whatever state arrives next (or just last known): re-trigger by firing a no-op
-    // host action that DOES push state (cancel-lifeline-vote is safe — clears null).
-    fireHost(ws, 'cancel-lifeline-vote');
-    const sStill = await awaitState(ws, s => s.questionIndex === 1, 1500);
-    ok(sStill.state.phase === 'question' && sStill.state.questionIndex === 1, 'return-to-lobby refused outside Q1 (still in Q2)');
+    const sL = await awaitState(ws, s => s.phase === 'lobby');
+    ok(sL.state.playerCount === 1 && sL.state.players[0].alive, 'from Q2: back in the lobby, player kept and alive');
+    ok(sL.state.players[0].score === 0 && sL.state.players[0].history.length === 0, 'from Q2: score and history cleared');
+    ok(sL.state.joinCode === joinCode, 'from Q2: the join code is unchanged (nobody re-scans)');
+    ok(sL.state.lifelinesUsed && !sL.state.lifelinesUsed['5050'], 'from Q2: lifelines are fresh again');
+    ok(await notice, 'phones are told (game:lobby-return) so they can say why they are back in the lobby');
 
     try { ws.close(); playerWs.close(); } catch {}
   }
 
-  section('return-to-lobby: refused when a player has been eliminated');
+  section('return-to-lobby: allowed at a reveal with knock-outs, and from the results');
   {
     const ws = await adminWs();
     fireHost(ws, 'reset-game');
@@ -1785,22 +1785,125 @@ async function returnToLobbyTests() {
 
     fireHost(ws, 'start-game');
     await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 0);
-
-    // p1 answers correctly; p2 doesn't answer → eliminated on close.
     p1.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
     await new Promise(r => setTimeout(r, 100));
     fireHost(ws, 'close-question');
     const sRev = await awaitState(ws, s => s.phase === 'reveal');
     ok(sRev.state.aliveCount < sRev.state.playerCount, 'an elimination happened');
 
-    // Already not in 'question' phase — server check fails on phase first.
     fireHost(ws, 'return-to-lobby');
-    await new Promise(r => setTimeout(r, 400));
-    fireHost(ws, 'cancel-lifeline-vote');  // no-op state pump
-    const after = await awaitState(ws, s => true, 1500);
-    ok(after.state.phase !== 'lobby', 'return-to-lobby refused after an elimination (phase did not become lobby)');
+    const back = await awaitState(ws, s => s.phase === 'lobby');
+    ok(back.state.aliveCount === 2 && back.state.players.every(p => p.alive && p.score === 0), 'after the reveal: everyone is alive again on zero');
+
+    // From the results screen too (play a single-question game to the end).
+    fireHost(ws, 'start-game');
+    await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 0);
+    fireHost(ws, 'close-question');
+    await awaitState(ws, s => s.phase === 'reveal');
+    fireHost(ws, 'return-to-lobby');
+    const again = await awaitState(ws, s => s.phase === 'lobby');
+    ok(again.state.playerCount === 2 && again.state.questionIndex === 0, 'back to the lobby keeps the room every time');
+    fireHost(ws, 'return-to-lobby');
+    await new Promise(r => setTimeout(r, 200));
+    fireHost(ws, 'cancel-lifeline-vote');
+    const still = await awaitState(ws, s => true, 1500);
+    ok(still.state.phase === 'lobby' && still.state.joinCode === joinCode, 'in the lobby it is a no-op (same join code)');
 
     try { ws.close(); p1.close(); p2.close(); } catch {}
+  }
+
+  section('rewind-to: re-asks a question and replays scores and knock-outs up to it');
+  {
+    const ws = await adminWs();
+    fireHost(ws, 'reset-game');
+    const s0 = await nextStateAfter(ws);
+    const joinCode = s0.state.joinCode;
+    // A two-question bank so the game can reach the results quickly.
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:update', payload: { main: [
+      { q: 'Q1?', options: ['a', 'b', 'c', 'd'], correct: 1, lesson: 'L1' },
+      { q: 'Q2?', options: ['a', 'b', 'c', 'd'], correct: 2, lesson: 'L2' }
+    ], bonus: [] } }));
+    await waitMessage(ws, m => m.type === 'admin:questions', 3000);
+    fireHost(ws, 'cancel-lifeline-vote'); // state pump: the update's own push may already have gone by
+    await awaitState(ws, s => s.totalQuestions === 2);
+    const players = {};
+    for (const name of ['Ann', 'Ben', 'Cal']) {
+      const w = await openWs();
+      w.send(JSON.stringify({ type: 'player:join', name, email: name.toLowerCase() + '@test.example', joinCode }));
+      await waitMessage(w, m => m.type === 'player:joined');
+      players[name] = w;
+    }
+    await awaitState(ws, s => s.playerCount === 3);
+    const byName = s => Object.fromEntries(s.players.map(p => [p.name, p]));
+
+    // Q1: Ann right, Ben wrong, Cal silent.
+    fireHost(ws, 'start-game');
+    await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 0);
+    players.Ann.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await awaitState(ws, s => s.answeredCount === 1);
+    players.Ben.send(JSON.stringify({ type: 'player:answer', answerIndex: 0 }));
+    await awaitState(ws, s => s.answeredCount === 2);
+    fireHost(ws, 'close-question');
+    const r1 = await awaitState(ws, s => s.phase === 'reveal');
+    ok(r1.state.aliveCount === 1, 'Q1: Ann alone survives');
+    fireHost(ws, 'next-question');
+    await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 1);
+    players.Ann.send(JSON.stringify({ type: 'player:answer', answerIndex: 2 }));
+    await awaitState(ws, s => s.answeredCount === 1);
+    fireHost(ws, 'close-question');
+    const r2 = await awaitState(ws, s => s.phase === 'reveal' && s.questionIndex === 1);
+    ok(byName(r2.state).Ann.score === 2, 'Q2: Ann on 2 points');
+
+    // A phone sees rewinds so a re-asked question counts as new.
+    let phone = null;
+    players.Ann.on('message', raw => { try { const m = JSON.parse(raw); if (m.type === 'player:state') phone = m.state; } catch {} });
+
+    // Not asked yet → refused, nothing changes.
+    fireHost(ws, 'rewind-to', { index: 5 });
+    await new Promise(r => setTimeout(r, 200));
+    fireHost(ws, 'cancel-lifeline-vote');
+    const same = await awaitState(ws, s => true, 1500);
+    ok(same.state.phase === 'reveal' && same.state.questionIndex === 1 && same.state.rewinds === 0, 'rewind to a question not yet asked is refused');
+    fireHost(ws, 'rewind-to', { index: 'x' });
+    await new Promise(r => setTimeout(r, 200));
+
+    // Rewind to Q2: Ann keeps Q1's point, Ben and Cal stay out, Q2 is open again.
+    fireHost(ws, 'rewind-to', { index: 1 });
+    const w2 = await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 1 && s.rewinds === 1);
+    const n2 = byName(w2.state);
+    ok(n2.Ann.alive && n2.Ann.score === 1 && n2.Ann.history.length === 1, 'rewind to Q2: Ann back to 1 point with only Q1 in her history');
+    ok(!n2.Ben.alive && !n2.Cal.alive, 'rewind to Q2: the Q1 knock-outs stand');
+    ok(w2.state.answeredCount === 0 && w2.state.revealedCorrect === null && w2.state.audienceTally === null, 'rewind to Q2: the question is open with no answers');
+    await new Promise(r => setTimeout(r, 100));
+    ok(phone && phone.rewinds === 1 && phone.you.answered === false && phone.you.score === 1, 'phone: sees rewinds=1, no answer recorded, score 1');
+
+    // Rewind to Q1: everyone is back in on zero.
+    fireHost(ws, 'rewind-to', { index: 0 });
+    const w1 = await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 0 && s.rewinds === 2);
+    ok(w1.state.aliveCount === 3 && w1.state.players.every(p => p.score === 0 && p.history.length === 0), 'rewind to Q1: all three alive on zero with empty histories');
+
+    // Play to the end (Ann alone through Q1; the rest are out), then rewind from the results.
+    players.Ann.send(JSON.stringify({ type: 'player:answer', answerIndex: 1 }));
+    await awaitState(ws, s => s.answeredCount === 1);
+    fireHost(ws, 'close-question');
+    await awaitState(ws, s => s.phase === 'reveal' && s.questionIndex === 0);
+    // Q2 unanswered → nobody left → end.
+    fireHost(ws, 'next-question');
+    await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 1);
+    fireHost(ws, 'close-question');
+    await awaitState(ws, s => s.phase === 'reveal' && s.questionIndex === 1);
+    fireHost(ws, 'next-question');
+    const end = await awaitState(ws, s => s.phase === 'end');
+    ok(end.state.aliveCount === 0, 'game over with nobody left');
+    fireHost(ws, 'rewind-to', { index: 1 });
+    const fromEnd = await awaitState(ws, s => s.phase === 'question' && s.questionIndex === 1 && s.rewinds === 3);
+    ok(byName(fromEnd.state).Ann.alive && byName(fromEnd.state).Ann.score === 1, 'from the results: rewind to Q2 brings Ann back in with her Q1 point');
+
+    fireHost(ws, 'return-to-lobby');
+    await awaitState(ws, s => s.phase === 'lobby');
+    ws.send(JSON.stringify({ type: 'admin:action', action: 'questions:reset-defaults' }));
+    await waitMessage(ws, m => m.type === 'admin:questions', 3000).catch(() => null);
+    try { ws.close(); Object.values(players).forEach(w => w.close()); } catch {}
   }
 }
 

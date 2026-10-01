@@ -144,6 +144,10 @@ body{
   font-size:13px;resize:vertical;box-sizing:border-box;
 }
 .q-card textarea{min-height:50px}
+.stop-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:10px;border-top:1px dashed var(--gray-line)}
+.stop-rewind{display:inline-flex;gap:6px;align-items:center}
+.stop-rewind select{font-family:inherit;font-size:12px;background:rgba(0,0,0,.3);color:var(--white);border:1px solid var(--gray-line);border-radius:6px;padding:5px 8px;min-height:28px}
+.btn.armed{background:rgba(196,30,58,.25);border-color:var(--red);color:#fecaca}
 .q-card textarea:focus, .q-card input:focus{border-color:var(--gold);box-shadow:0 0 8px rgba(244,196,48,.2)}
 .q-card .opt-row{display:flex;gap:10px;align-items:center;margin:6px 0}
 .q-card .opt-row input[type="radio"]{flex:0 0 auto;width:18px;height:18px;accent-color:var(--gold);transform:scale(1.2);margin:0}
@@ -331,6 +335,17 @@ body{
         </h2>
         <div id="gameControl" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
           <!-- buttons injected dynamically based on phase -->
+        </div>
+        <!-- Stop or rewind a game that is under way. Two-step buttons: the
+             first click arms them, the second within 5 s acts. -->
+        <div id="stopControls" class="stop-controls" hidden>
+          <span class="muted">Stop or rewind</span>
+          <button type="button" class="btn small ghost" id="stopLobbyBtn" title="Everyone goes back to the lobby with the same join code, alive and on zero. Questions and settings can then be changed.">← Back to lobby, keep players</button>
+          <span class="stop-rewind">
+            <label for="rewindSelect" class="muted">Rewind to</label>
+            <select id="rewindSelect" aria-label="Question to rewind to"></select>
+            <button type="button" class="btn small ghost" id="rewindBtn" title="Re-ask that question. Scores and knock-outs from it onwards are undone; lifelines already used stay used.">Rewind</button>
+          </span>
         </div>
         <div id="currentQDisplay" class="muted" style="margin-top:12px;font-size:13px"></div>
       </div>
@@ -1263,18 +1278,6 @@ function renderGameControl() {
       });
       buttons.push({ label: 'Cancel Vote', ghost: true, action: () => hostActionFromAdmin('cancel-lifeline-vote') });
     }
-    // "Oops, started too early" escape hatch. Only valid at Q1 before anyone's
-    // been eliminated; the server enforces this too.
-    if (state.questionIndex === 0 && state.aliveCount === state.playerCount && !state.lifelineActive) {
-      buttons.push({
-        label: '← Return to Lobby', ghost: true,
-        action: () => confirmAction(
-          'Return to lobby?',
-          'Send everyone back to the lobby so more players can join. The current question is cleared and scores reset. Players stay in the game.',
-          () => hostActionFromAdmin('return-to-lobby')
-        )
-      });
-    }
   } else if (state.phase === 'reveal') {
     buttons.push({ label: 'Next Question →', primary: true, action: () => hostActionFromAdmin('next-question') });
   } else if (state.phase === 'end') {
@@ -1284,6 +1287,7 @@ function renderGameControl() {
     buttons.push({ label: 'Reset (New Game)', danger: true, action: () => confirmAction('Reset for a new game?', 'This clears every player and score and opens a new lobby with a new join code. Download the results first if you need them: they cannot be recovered afterwards.', () => hostActionFromAdmin('reset-game')) });
   }
 
+  renderStopControls();
   c.innerHTML = '';
   buttons.forEach(b => {
     const btn = document.createElement(b.href ? 'a' : 'button');
@@ -1308,6 +1312,62 @@ function renderGameControl() {
     qd.innerHTML = '';
   }
 }
+
+// Two-step buttons for the actions that stop a live game: the first click
+// arms the button (it turns red and says what the second click does), the
+// second click within 5 s acts, and anything else disarms it. A stray click
+// never ends a game.
+const armedTimers = new Map();
+function armedClick(btn, armedLabel, action) {
+  const id = btn.id;
+  if (armedTimers.has(id)) {
+    clearTimeout(armedTimers.get(id).timer);
+    disarmButton(btn);
+    action();
+    return;
+  }
+  const original = btn.textContent;
+  btn.classList.add('armed');
+  btn.textContent = armedLabel;
+  btn.setAttribute('aria-live', 'polite');
+  armedTimers.set(id, { original, timer: setTimeout(() => disarmButton(btn), 5000) });
+}
+function disarmButton(btn) {
+  const rec = armedTimers.get(btn.id);
+  if (!rec) return;
+  clearTimeout(rec.timer);
+  armedTimers.delete(btn.id);
+  btn.classList.remove('armed');
+  btn.textContent = rec.original;
+}
+function renderStopControls() {
+  const box = document.getElementById('stopControls');
+  const active = state.phase === 'question' || state.phase === 'reveal' || state.phase === 'end';
+  box.hidden = !active;
+  if (!active) { armedTimers.forEach((rec, id) => { const b = document.getElementById(id); if (b) disarmButton(b); }); return; }
+  // Rewind targets: every main question asked so far (all of them once the
+  // tiebreaker or the results are on screen).
+  const sel = document.getElementById('rewindSelect');
+  const highest = (state.inBonus || state.phase === 'end') ? state.totalQuestions - 1 : state.questionIndex;
+  const current = sel.value;
+  sel.innerHTML = '';
+  for (let i = 0; i <= highest; i++) {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = `Question ${i + 1}` + (i === state.questionIndex && !state.inBonus && state.phase !== 'end' ? ' (current)' : '');
+    sel.appendChild(o);
+  }
+  sel.value = current !== '' && Number(current) <= highest ? current : String(highest);
+}
+document.getElementById('stopLobbyBtn').addEventListener('click', e => {
+  armedClick(e.currentTarget, 'Click again: back to lobby', () => hostActionFromAdmin('return-to-lobby'));
+});
+document.getElementById('rewindBtn').addEventListener('click', e => {
+  const index = parseInt(document.getElementById('rewindSelect').value, 10);
+  if (!Number.isInteger(index)) return;
+  armedClick(e.currentTarget, `Click again: rewind to Q${index + 1}`, () => hostActionFromAdmin('rewind-to', { index }));
+});
+document.getElementById('rewindSelect').addEventListener('change', () => disarmButton(document.getElementById('rewindBtn')));
 
 function renderSnapshot() {
   const total = state.playerCount;
