@@ -2394,7 +2394,11 @@ app.use((req, res, next) => {
   // res.locals so the HTML-serving helper can read it.
   res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
+  // The admin's question preview frames the board and the presenter view
+  // (same origin only, and only their ?preview=1 mode, which never opens a
+  // WebSocket). Everything else refuses to be framed.
+  const framable = (req.path === '/host' || req.path === '/present') && req.query && req.query.preview === '1';
+  res.setHeader('X-Frame-Options', framable ? 'SAMEORIGIN' : 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   if (process.env.NODE_ENV === 'production') {
@@ -2409,7 +2413,7 @@ app.use((req, res, next) => {
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
-    "frame-ancestors 'none'",
+    framable ? "frame-ancestors 'self'" : "frame-ancestors 'none'",
     "form-action 'self'"
   ].join('; '));
   next();

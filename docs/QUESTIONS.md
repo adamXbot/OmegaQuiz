@@ -46,6 +46,18 @@ multiple players are tied at the end.
 To export what is currently loaded, use Admin → Questions → **Export CSV**, which downloads
 `omegaquiz-questions.csv` in the same format.
 
+### Previewing questions
+
+Every question card has a **Preview** button, and the bank toolbar a **Preview all** walkthrough.
+The preview shows the real board page and the real presenter page (framed, at 1280×720, no live
+connection) with the question as the editor currently has it, in the *question open* or
+*revealed* state, with Prev / Next to walk through. Under the board it says whether the question
+fits at full size, had to shrink (the board scales long questions, options, images and lessons
+down to 60% rather than cutting them off), or does not fit even then.
+
+The editor also warns under a card when a question, option or lesson is long, an image is large or
+has no alt text.
+
 ### Pack library
 
 Admin → Questions → **Packs** keeps saved banks on the server (`DATA_DIR/packs/<id>.json`) so a

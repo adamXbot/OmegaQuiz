@@ -199,6 +199,9 @@ a{color:var(--gold)}
 <script nonce="__CSP_NONCE__">
 let state = null;
 let ws = null;
+// ?preview=1: framed by the admin's question preview; no WebSocket, the
+// parent posts the state to draw.
+const PREVIEW = new URLSearchParams(location.search).get('preview') === '1';
 let brandTitle = 'Omega Quiz';
 let brandPublicBaseUrl = '';
 let askitFor = '';
@@ -267,10 +270,19 @@ function showBanner(message, withActions){
   }
 }
 function clearBanner(){ const b = document.getElementById('banner'); if (b) b.remove(); }
-connect();
+if (!PREVIEW) connect();
+else {
+  window.addEventListener('message', e => {
+    if (e.origin !== location.origin || !e.data || e.data.type !== 'preview:state') return;
+    state = e.data.state;
+    setConn('live', 'Preview');
+    render();
+  });
+  try { window.parent.postMessage({ type: 'preview:ready', page: 'present' }, location.origin); } catch {}
+}
 
 function hostAction(action, payload){
-  if (!ws || ws.readyState !== 1) return;
+  if (PREVIEW || !ws || ws.readyState !== 1) return;
   ws.send(JSON.stringify({ type: 'host:action', action, payload: payload || {} }));
 }
 
