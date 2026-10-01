@@ -1308,6 +1308,11 @@ const DEFAULT_BRANDING = {
   // Seconds each question stays open before answers lock (0 = no timer).
   // A question's own `seconds` overrides it. The host still reveals by hand.
   questionSeconds: 45,
+  // Speaker (mute) buttons. The board's is always there otherwise; the
+  // phones' only exists in dramatic mode. Hidden buttons keep the last
+  // audio state that browser chose.
+  showSoundToggleBoard: true,
+  showSoundTogglePhones: true,
   // Session closed flag — when true the player and host pages show a
   // "session ended" view, new joins are rejected, but the admin can still
   // sign in and reopen. Use case: shut down the storefront between
@@ -1425,6 +1430,8 @@ function brandingFromEnv() {
   if (e.LIFELINE_REFILL === 'never' || e.LIFELINE_REFILL === 'each-question' || e.LIFELINE_REFILL === 'at-bonus') {
     out.lifelineRefill = e.LIFELINE_REFILL;
   }
+  if (e.SHOW_SOUND_TOGGLE_BOARD !== undefined) out.showSoundToggleBoard = truthy(e.SHOW_SOUND_TOGGLE_BOARD);
+  if (e.SHOW_SOUND_TOGGLE_PHONES !== undefined) out.showSoundTogglePhones = truthy(e.SHOW_SOUND_TOGGLE_PHONES);
   if (e.QUESTION_SECONDS !== undefined && /^\d{1,3}$/.test(String(e.QUESTION_SECONDS).trim())) {
     const n = parseInt(e.QUESTION_SECONDS, 10);
     if (n === 0 || (n >= QUESTION_SECONDS_MIN && n <= QUESTION_SECONDS_MAX)) out.questionSeconds = n;
@@ -1575,6 +1582,10 @@ function validateBranding(raw, { tolerant = false } = {}) {
       throw new Error('lifelineRefill must be "never", "each-question", or "at-bonus"');
     }
   }
+
+  // showSoundToggleBoard / showSoundTogglePhones: booleans (default true).
+  if (raw.showSoundToggleBoard !== undefined) out.showSoundToggleBoard = !!raw.showSoundToggleBoard;
+  if (raw.showSoundTogglePhones !== undefined) out.showSoundTogglePhones = !!raw.showSoundTogglePhones;
 
   // questionSeconds: 0 (no timer) or QUESTION_SECONDS_MIN..MAX whole seconds.
   if (raw.questionSeconds !== undefined) {

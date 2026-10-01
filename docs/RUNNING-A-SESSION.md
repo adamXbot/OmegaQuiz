@@ -81,6 +81,11 @@ sound is on (the speaker icon in the corner does the same, and starts muted). **
 speaker button in the corner mutes it for that phone. Both pages honour the device's reduced-motion
 setting for the animations.
 
+Admin → Branding → Presentation has two switches, **Speaker button on the board** and **Speaker
+button on phones**, to hide those corner buttons (for example when the board is on a venue PA and
+nobody should mute it). Hidden or not, each browser remembers its last sound setting, and the board
+operator can always press **M** to toggle the board's sound.
+
 ## Running the questions
 
 - **Joining.** The board prints the join address beside the QR code in large type: the same address

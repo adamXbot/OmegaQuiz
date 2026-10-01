@@ -651,6 +651,16 @@ body{
               <span><strong>Dramatic</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">A suspense sting and staged option reveal when a question lands, a drum-roll before the answer is shown, and tap / lock-in / result sounds with sweeping transitions on the phones (each phone gets a mute button).</span></span>
             </label>
           </div>
+          <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="checkbox" id="brandingSoundToggleBoardInput" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Speaker button on the board</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">The mute button in the board's corner. Hidden, the board keeps the last sound setting that browser chose; the operator can still press <strong>M</strong>.</span></span>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:8px;color:var(--white);cursor:pointer;max-width:340px">
+              <input type="checkbox" id="brandingSoundTogglePhonesInput" style="accent-color:var(--gold);transform:scale(1.2);margin-top:2px">
+              <span><strong>Speaker button on phones</strong> <span class="muted" style="font-size:12px;display:block;font-weight:normal;letter-spacing:0;text-transform:none">Dramatic mode only. Hidden, each phone keeps its last sound setting; the lobby's <em>Tap to turn on sound</em> stays.</span></span>
+            </label>
+          </div>
         </div>
 
         <!-- Level style: money ($100 → $1M) vs plain "Level N" -->
@@ -2147,6 +2157,8 @@ function populateBrandingForm(){
   if (endCtaUrlEl) endCtaUrlEl.value = brandingDraft.endGameCtaUrl || '';
   const presMode = brandingDraft.presentationStyle === 'dramatic' ? 'dramatic' : 'standard';
   document.getElementsByName('brandingPresentation').forEach(r => { r.checked = (r.value === presMode); });
+  document.getElementById('brandingSoundToggleBoardInput').checked = brandingDraft.showSoundToggleBoard !== false;
+  document.getElementById('brandingSoundTogglePhonesInput').checked = brandingDraft.showSoundTogglePhones !== false;
   // Session Control badge + button visibility.
   const closed = !!brandingDraft.sessionClosed;
   const badge = document.getElementById('sessionStatusBadge');
@@ -2264,6 +2276,8 @@ document.getElementById('saveBrandingBtn').addEventListener('click', () => {
     endGameCtaLabel: document.getElementById('brandingEndCtaLabel').value,
     endGameCtaUrl: document.getElementById('brandingEndCtaUrl').value,
     presentationStyle: presEl ? presEl.value : 'standard',
+    showSoundToggleBoard: document.getElementById('brandingSoundToggleBoardInput').checked,
+    showSoundTogglePhones: document.getElementById('brandingSoundTogglePhonesInput').checked,
     theme: brandingDraft.theme
   };
   adminAction('branding:update', { branding: next });
