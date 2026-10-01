@@ -94,6 +94,14 @@ a{color:var(--gold)}
 .banner button{background:#fff;color:#991b1b;border:none;padding:5px 12px;border-radius:12px;font-weight:bold;cursor:pointer;font-family:inherit}
 .banner a{color:#fff}
 .muted{color:var(--gray-text);font-size:13px}
+.pill.clicker{cursor:default}
+.pill.clicker.armed{border-color:#4ade80;color:#86efac}
+.pill.clicker.armed .dot{background:#4ade80;box-shadow:0 0 6px #4ade80}
+.review-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--gold);background:rgba(244,196,48,.1);border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:12px}
+.review-banner b{color:var(--gold)}
+.review-banner .btn{margin-left:auto;padding:5px 10px;min-height:0;font-size:12px}
+.btn.pressed{box-shadow:0 0 0 3px var(--gold-bright);transition:box-shadow .05s}
+.kbd{font-size:11px;opacity:.7;border:1px solid currentColor;border-radius:4px;padding:0 5px;margin-left:8px;font-family:ui-monospace,Menlo,monospace;vertical-align:middle}
 [hidden]{display:none !important}
 </style>
 </head>
@@ -108,6 +116,7 @@ a{color:var(--gold)}
   <span class="pill">In <b id="alivePill">0</b> / <b id="playersPill">0</b></span>
   <span class="pill" id="answeredPill" hidden>Answered <b id="answeredText">0 / 0</b></span>
   <span class="spacer"></span>
+  <span class="pill clicker" id="clickerPill" title="Page Down / → / Space: forward. Page Up / ←: back through past reveals (read-only)."><span class="dot"></span><span id="clickerText">Click the page to arm the clicker</span></span>
   <span class="pill" id="connPill"><span class="dot"></span><span id="connText">Connecting…</span></span>
   <a class="link" href="/host" target="_blank" rel="noopener">Board ↗</a>
 </header>
@@ -115,7 +124,8 @@ a{color:var(--gold)}
 <main class="layout">
   <div class="col">
     <section class="card now" id="nowCard">
-      <h2>On the board now <span class="right muted" id="nowMeta"></span></h2>
+      <h2 id="nowTitle">On the board now <span class="right muted" id="nowMeta"></span></h2>
+      <div class="review-banner" id="reviewBanner" hidden><span>Looking back at <b id="reviewLabel"></b> · not on the board</span><span class="muted" id="reviewPos"></span><button class="btn ghost" id="reviewBackToLive" type="button">Back to live <span class="kbd">PgDn</span></button></div>
       <div id="lobbyView" hidden>
         <div class="big-code" id="joinCodeBig">----</div>
         <div class="join-url" id="joinUrl"></div>
@@ -183,6 +193,9 @@ let brandPublicBaseUrl = '';
 let askitFor = '';
 let questionShownAt = null;
 let questionKey = '';
+// Back on the clicker steps through past reveals (state.history) without
+// touching the board; null means the live view.
+let reviewIndex = null;
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function text(html){ const d = document.createElement('div'); d.innerHTML = html || ''; return d.textContent || ''; }
@@ -276,17 +289,24 @@ function render(){
   document.getElementById('answeredPill').hidden = s.phase !== 'question';
   document.getElementById('answeredText').textContent = `${s.answeredCount} / ${s.aliveCount}`;
 
-  document.getElementById('lobbyView').hidden = s.phase !== 'lobby';
-  document.getElementById('questionView').hidden = !inPlay;
-  document.getElementById('endView').hidden = s.phase !== 'end';
-  document.getElementById('nowMeta').textContent = s.phase === 'lobby' ? 'Lobby' : s.phase === 'end' ? 'Results' : (s.phase === 'reveal' ? 'Answer revealed' : `${s.answeredCount} of ${s.aliveCount} answered`);
+  const history = s.history || [];
+  if (reviewIndex !== null && (reviewIndex >= history.length || reviewIndex < 0)) reviewIndex = null;
+  const reviewing = reviewIndex !== null;
+  document.getElementById('reviewBanner').hidden = !reviewing;
+  document.getElementById('lobbyView').hidden = reviewing || s.phase !== 'lobby';
+  document.getElementById('questionView').hidden = !reviewing && !inPlay;
+  document.getElementById('endView').hidden = reviewing || s.phase !== 'end';
+  document.getElementById('nowMeta').textContent = reviewing ? '' : s.phase === 'lobby' ? 'Lobby' : s.phase === 'end' ? 'Results' : (s.phase === 'reveal' ? 'Answer revealed' : `${s.answeredCount} of ${s.aliveCount} answered`);
 
-  if (s.phase === 'lobby') renderLobby(s);
-  if (inPlay) renderQuestion(s);
-  if (s.phase === 'end') renderEnd(s);
+  if (reviewing) renderReview(s, history[reviewIndex]);
+  else {
+    if (s.phase === 'lobby') renderLobby(s);
+    if (inPlay) renderQuestion(s);
+    if (s.phase === 'end') renderEnd(s);
+  }
 
   const notesEl = document.getElementById('notes');
-  const notes = s.currentQuestion && inPlay ? s.currentQuestion.notes : (s.phase === 'lobby' && s.nextUp && !s.nextUp.end ? s.nextUp.notes : '');
+  const notes = reviewing ? history[reviewIndex].notes : s.currentQuestion && inPlay ? s.currentQuestion.notes : (s.phase === 'lobby' && s.nextUp && !s.nextUp.end ? s.nextUp.notes : '');
   if (notes) { notesEl.textContent = notes; notesEl.classList.remove('empty'); }
   else {
     notesEl.classList.add('empty');
@@ -339,6 +359,28 @@ function renderQuestion(s){
   } else lesson.hidden = true;
 }
 
+// A past reveal, exactly as the room saw it: answer, room split, lesson.
+function renderReview(s, h){
+  document.getElementById('reviewLabel').textContent = h.label;
+  document.getElementById('reviewPos').textContent = `${reviewIndex + 1} of ${s.history.length} past reveals`;
+  document.getElementById('qLabel').textContent = h.label + ' · past reveal';
+  document.getElementById('qText').innerHTML = h.q;
+  const img = document.getElementById('qImage'); img.removeAttribute('src'); img.hidden = true;
+  const opts = document.getElementById('opts');
+  opts.innerHTML = '';
+  const t = h.tally || { counts: [0, 0, 0, 0], answered: 0 };
+  h.options.forEach((o, i) => {
+    const d = document.createElement('div');
+    d.className = 'opt' + (i === h.correct ? ' correct' : '');
+    const pct = t.answered ? Math.round(t.counts[i] / t.answered * 100) : 0;
+    d.innerHTML = `<span class="letter">${'ABCD'[i]}</span><span style="min-width:0">${o}</span><span class="pct">${t.counts[i]} · ${pct}%${i === h.correct ? ' ✓' : ''}</span>`;
+    opts.appendChild(d);
+  });
+  const lesson = document.getElementById('lesson');
+  if (h.lesson) { lesson.hidden = false; document.getElementById('lessonText').innerHTML = h.lesson; document.getElementById('lessonTag').textContent = `Why · ${t.correct} of ${t.wasAlive} still in got it right`; }
+  else lesson.hidden = true;
+}
+
 function renderEnd(s){
   const p = document.getElementById('podium');
   p.innerHTML = '';
@@ -352,6 +394,7 @@ function button(label, opts){
   b.type = 'button';
   b.className = 'btn' + (opts.primary ? ' primary' : '') + (opts.danger ? ' danger' : '') + (opts.ghost ? ' ghost' : '');
   b.textContent = label;
+  if (opts.kbd) { const k = document.createElement('span'); k.className = 'kbd'; k.textContent = opts.kbd; b.appendChild(k); }
   if (opts.disabled) b.disabled = true;
   if (opts.title) b.title = opts.title;
   if (opts.id) b.id = opts.id;
@@ -359,18 +402,23 @@ function button(label, opts){
   return b;
 }
 let resetArmed = null;
+let startArmed = null;
 function renderControls(s){
   const c = document.getElementById('controls');
   c.innerHTML = '';
   const status = document.createElement('div'); status.className = 'status';
   if (s.phase === 'lobby') {
     const empty = s.totalQuestions === 0;
-    c.appendChild(button(empty ? 'No questions loaded' : 'Start Game →', { primary: !empty, disabled: empty, id: 'startBtn',
+    c.appendChild(button(empty ? 'No questions loaded' : startArmed ? 'Nobody has joined · press again to start' : 'Start Game →', { primary: !empty, disabled: empty, id: 'startBtn', kbd: empty ? '' : 'PgDn',
       title: empty ? 'Import a question file or load a sample pack in Admin → Questions first.' : '',
-      action: () => { if (s.playerCount === 0 && !confirm('No players have joined. Start anyway?')) return; hostAction('start-game'); } }));
+      action: () => {
+        if (s.playerCount === 0 && !startArmed) { startArmed = setTimeout(() => { startArmed = null; renderControls(state); }, 5000); renderControls(state); return; }
+        if (startArmed) { clearTimeout(startArmed); startArmed = null; }
+        hostAction('start-game');
+      } }));
     status.textContent = `${s.playerCount} joined · ${s.totalQuestions} question${s.totalQuestions === 1 ? '' : 's'}${s.totalBonus ? ` + ${s.totalBonus} tiebreaker${s.totalBonus === 1 ? '' : 's'}` : ''}`;
   } else if (s.phase === 'question') {
-    c.appendChild(button('Close & Reveal', { primary: true, id: 'closeBtn', action: () => hostAction('close-question') }));
+    c.appendChild(button('Close & Reveal', { primary: true, id: 'closeBtn', kbd: 'PgDn', action: () => hostAction('close-question') }));
     const used = s.lifelinesUsed || {};
     const voting = !!s.lifelineActive;
     const row = document.createElement('div'); row.className = 'row';
@@ -398,7 +446,7 @@ function renderControls(s){
     status.textContent = `${s.answeredCount} of ${s.aliveCount} answered`;
   } else if (s.phase === 'reveal') {
     const n = s.nextUp;
-    c.appendChild(button(n && n.end ? 'Finish → results' : `Next → ${n ? n.label : ''}`, { primary: true, id: 'nextBtn', action: () => hostAction('next-question') }));
+    c.appendChild(button(n && n.end ? 'Finish → results' : `Next → ${n ? n.label : ''}`, { primary: true, id: 'nextBtn', kbd: 'PgDn', action: () => hostAction('next-question') }));
     const t = s.audienceTally;
     const out = t ? Math.max(0, t.wasAliveCount - s.aliveCount) : 0;
     status.textContent = t ? (out ? `${out} knocked out · ${s.aliveCount} still in` : `Nobody knocked out · ${s.aliveCount} still in`) : 'Question skipped';
@@ -472,6 +520,60 @@ function showAskIt(hint, letter){
 }
 function hideAskIt(){ document.getElementById('askitCard').hidden = true; }
 document.getElementById('askitClose').addEventListener('click', hideAskIt);
+
+/* ---------- clicker / keyboard ----------
+   Presentation clickers (Logitech, Verbatim, …) send Page Down / Page Up,
+   some send the arrow keys, a few send Space. Forward follows the game:
+   lobby → start, question → close & reveal, reveal → next. Back steps
+   through past reveals on this screen only; forward from there returns to
+   the live view without advancing anything. */
+const FORWARD_KEYS = ['PageDown', 'ArrowRight', 'ArrowDown', ' ', 'Spacebar'];
+const BACK_KEYS = ['PageUp', 'ArrowLeft', 'ArrowUp'];
+const CLICKER_GUARD_MS = 700;
+let lastForwardAt = 0;
+function flash(id){ const el = document.getElementById(id); if (!el) return; el.classList.add('pressed'); setTimeout(() => el.classList.remove('pressed'), 250); }
+function clickerForward(){
+  if (!state) return;
+  if (reviewIndex !== null) { reviewIndex = null; render(); flash('reviewBackToLive'); return; }
+  const now = Date.now();
+  if (now - lastForwardAt < CLICKER_GUARD_MS) return; // a double-press on the clicker must not skip a step
+  lastForwardAt = now;
+  const id = { lobby: 'startBtn', question: 'closeBtn', reveal: 'nextBtn' }[state.phase];
+  const btn = id && document.getElementById(id);
+  if (!btn || btn.disabled) return;
+  flash(id);
+  btn.click();
+}
+function clickerBack(){
+  if (!state) return;
+  const history = state.history || [];
+  if (!history.length) return;
+  reviewIndex = reviewIndex === null ? history.length - 1 : Math.max(0, reviewIndex - 1);
+  render();
+}
+document.addEventListener('keydown', e => {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  const t = e.target;
+  const tag = t && t.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+  // A focused button keeps Space and Enter for itself (that is how keyboards
+  // press buttons); the clicker's own keys still act.
+  if ((tag === 'BUTTON' || tag === 'A') && (e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter')) return;
+  if (FORWARD_KEYS.includes(e.key)) { e.preventDefault(); clickerForward(); }
+  else if (BACK_KEYS.includes(e.key)) { e.preventDefault(); clickerBack(); }
+  else if (e.key === 'Escape' && reviewIndex !== null) { reviewIndex = null; render(); }
+});
+document.getElementById('reviewBackToLive').addEventListener('click', () => { reviewIndex = null; render(); });
+function renderClickerPill(){
+  const armed = document.hasFocus() && !document.hidden;
+  const p = document.getElementById('clickerPill');
+  p.classList.toggle('armed', armed);
+  document.getElementById('clickerText').textContent = armed ? 'Clicker armed' : 'Click the page to arm the clicker';
+}
+window.addEventListener('focus', renderClickerPill);
+window.addEventListener('blur', renderClickerPill);
+document.addEventListener('visibilitychange', renderClickerPill);
+renderClickerPill();
 
 setInterval(() => {
   if (!questionShownAt) return;
